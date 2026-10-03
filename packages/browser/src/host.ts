@@ -2,15 +2,20 @@ import {
   DevServer,
   ERROR_MESSAGE_TYPE,
   VirtualFileSystem,
-  type DevServerOptions,
+  buildProject,
+  type BuildResult,
+  type Bundler,
+  type ComponentCompilers,
   type FileSystemTree,
   type FlatFiles,
+  type PackageCdnFactory,
   type ProjectProfile,
   type Transformer,
 } from '@seanhogg/builderforce-webcontainers-core';
 import { PREVIEW_ID, isWireRequest, previewBase, type WireResponse } from './protocol.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
-import { createEsbuildWasmTransformer } from './esbuildWasm.js';
+import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
+import { createCdnComponentCompilers } from './componentCompilers.js';
 
 /** Serve previews on THIS page's origin. Only for code the page's own user trusts. */
 export interface SameOriginOptions {
@@ -38,8 +43,12 @@ export type BootOptions = (SameOriginOptions | RelayOptions) & CommonBootOptions
 export interface CommonBootOptions {
   /** Compiler. Defaults to esbuild-wasm. */
   transformer?: Transformer;
-  /** Package CDN factory. Defaults to esm.sh. */
-  cdn?: DevServerOptions['cdn'];
+  /** Package CDN factory, for previews (`dev: true`) and builds (`dev: false`). Defaults to esm.sh. */
+  cdn?: PackageCdnFactory;
+  /** `.vue` / `.svelte` compilers. Default: the official ones, fetched from a CDN on first use. */
+  components?: ComponentCompilers;
+  /** Bundler for `build()`. Default: esbuild-wasm (the same instance as the compiler). */
+  bundler?: Bundler;
   /** Stable id (e.g. the project id; `[A-Za-z0-9_-]`) — keeps the preview URL stable across reloads. */
   id?: string;
   /** The "Built with Builderforce.ai" badge in the preview. Default true — please keep it. */
@@ -57,6 +66,13 @@ export interface PreviewError {
   href: string;
 }
 
+export interface RuntimeBuildOptions {
+  /** Where the site will be served from. Default `./` (works from any directory). */
+  base?: string;
+  /** Default true. */
+  minify?: boolean;
+}
+
 export interface PreviewRuntime {
   readonly id: string;
   /** Absolute URL to load in the preview iframe. */
@@ -66,6 +82,12 @@ export interface PreviewRuntime {
   mount(files: FileSystemTree | FlatFiles): void;
   /** Whether this runtime can serve the mounted project, and why not. */
   profile(): ProjectProfile;
+  /**
+   * `npm run build` for the mounted files: a deployable static site (index.html,
+   * hashed `assets/`, `public/` copied). Rejects with the reason when the project
+   * is not one this runtime supports, or with the bundler's errors.
+   */
+  build(options?: RuntimeBuildOptions): Promise<BuildResult>;
   /** Uncaught errors and rejections raised inside the preview. */
   onError(listener: (error: PreviewError) => void): () => void;
   dispose(): void;
@@ -101,10 +123,11 @@ export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewR
 
   const base = previewBase(transport.scope, id);
   const fs = new VirtualFileSystem();
+  const components = options.components ?? createCdnComponentCompilers();
   let server: DevServer;
   try {
     const transformer = options.transformer ?? (await createEsbuildWasmTransformer());
-    server = new DevServer({ fs, transformer, base, cdn: options.cdn, attribution: options.attribution });
+    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, attribution: options.attribution });
   } catch (error) {
     transport.dispose();
     throw error;
@@ -150,6 +173,10 @@ export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewR
     server,
     mount: (files) => fs.mount(files),
     profile: () => server.profile(),
+    async build(buildOptions = {}) {
+      const bundler = options.bundler ?? (await createEsbuildWasmBundler());
+      return buildProject({ files: fs, bundler, cdn: options.cdn, components, base: buildOptions.base, minify: buildOptions.minify });
+    },
     onError(listener) {
       errorListeners.add(listener);
       return () => errorListeners.delete(listener);

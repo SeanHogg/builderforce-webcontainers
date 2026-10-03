@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./check": {
+      "types": "./dist/check/index.d.ts",
+      "import": "./dist/check/index.js"
     }
   },
   "type": "module",
@@ -60,8 +64,19 @@
   "dependencies": {
     "es-module-lexer": "^1.5.4"
   },
+  "peerDependencies": {
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@types/node": "^20",
+    "@vue/compiler-sfc": "^3.5.0",
     "esbuild": "^0.24.0",
+    "svelte": "^5.0.0",
     "typescript": "^5.5.0",
     "vitest": "^2.1.0"
   }

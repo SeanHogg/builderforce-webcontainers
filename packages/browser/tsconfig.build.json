@@ -12,6 +12,7 @@
     "dist",
     "tests",
     "src/sw.ts",
-    "src/relay.ts"
+    "src/relay.ts",
+    "src/check/worker.ts"
   ]
 }

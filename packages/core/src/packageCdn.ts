@@ -8,6 +8,16 @@ export interface PackageCdn {
   urlFor(name: string, subpath: string): string;
 }
 
+/**
+ * Makes the CDN for one project, from its dependency ranges. `dev` is true for the
+ * dev server and false for a production build, so a factory can pick development
+ * or production package builds (React's readable errors vs its small bundle).
+ */
+export type PackageCdnFactory = (dependencies: Record<string, string>, options: { dev: boolean }) => PackageCdn;
+
+/** esm.sh, pinned to the project's ranges. */
+export const esmShCdnFactory: PackageCdnFactory = (dependencies, { dev }) => createEsmShCdn({ dependencies, dev });
+
 export interface EsmShOptions {
   /** Defaults to https://esm.sh. Any esm.sh-compatible server works. */
   origin?: string;
@@ -18,7 +28,7 @@ export interface EsmShOptions {
 }
 
 /** A range the CDN can't fetch (`workspace:*`, `file:../x`, `link:`, git URLs). */
-function isRegistryRange(range: string): boolean {
+export function isRegistryRange(range: string): boolean {
   return !/^(workspace|file|link|portal|git\+|git:|github:|https?:)/.test(range) && !range.includes('/');
 }
 

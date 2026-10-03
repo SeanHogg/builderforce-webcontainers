@@ -24,18 +24,29 @@ export function rewriteCssUrls(fs: VirtualFileSystem, cssPath: string, css: stri
 }
 
 /**
+ * A statement that puts `cssExpression` (JS source evaluating to a string) in a
+ * <style> tag keyed by `path`: re-evaluating the module replaces the tag's text
+ * instead of adding a second tag. Shared by stylesheets and component styles.
+ */
+export function injectStyleStatement(path: string, cssExpression: string): string {
+  const id = JSON.stringify(path);
+  return [
+    `{ let el = document.querySelector('style[data-bfwc=' + JSON.stringify(${id}) + ']');`,
+    `if (!el) { el = document.createElement('style'); el.setAttribute('data-bfwc', ${id}); document.head.appendChild(el); }`,
+    `el.textContent = ${cssExpression}; }`,
+  ].join('\n');
+}
+
+/**
  * The JS module for an imported stylesheet. `.module.css` exports an identity map
  * (class name → itself): real scoping needs the build API, so for now CSS Modules
  * render correctly as long as class names don't collide.
  */
 export function cssToModule(path: string, css: string): string {
-  const id = JSON.stringify(path);
   const exportsCssModule = /\.module\.css$/i.test(path);
   return [
     `const css = ${JSON.stringify(css)};`,
-    `let el = document.querySelector('style[data-bfwc=' + JSON.stringify(${id}) + ']');`,
-    `if (!el) { el = document.createElement('style'); el.setAttribute('data-bfwc', ${id}); document.head.appendChild(el); }`,
-    `el.textContent = css;`,
+    injectStyleStatement(path, 'css'),
     exportsCssModule
       ? `export default new Proxy({}, { get: (_, key) => typeof key === 'string' ? key : undefined });`
       : `export default css;`,

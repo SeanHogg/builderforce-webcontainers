@@ -21,12 +21,15 @@ previews, built to be forked.
 | Cross-origin isolation (COOP/COEP) | **Not required**: embeds and third-party scripts keep working | Required |
 | Compiler / package source | Pluggable ports: swap esbuild for SWC, esm.sh for your own mirror | Fixed |
 | Errors | Uncaught errors in the preview are posted to the host page | — |
+| Production build, type-check | In the browser: `runtime.build()`, `createChecker()` | Via `npm run build` / `tsc` in the container |
 | Node.js servers, `npm install`, shell | Not yet (see [ROADMAP](ROADMAP.md)) | Yes |
 
-Today it runs **frontend apps**: Vite and Create React App projects, and static
-sites. Frameworks that need a Node server or a component compiler are detected
-and declined with a reason, so a host can fall back to another runtime instead of
-showing a broken preview. The roadmap is how it closes the rest of the gap.
+Today it runs **frontend apps**: Vite (React, Vue, Svelte) and Create React App
+projects, and static sites. It previews them, builds them for deployment, and
+type-checks them. Frameworks that need a Node server (Next.js, Nuxt, SvelteKit,
+Remix, Astro) are detected and declined with a reason, so a host can fall back to
+another runtime instead of showing a broken preview. The roadmap is how it closes
+the rest of the gap.
 
 ## Quick start
 
@@ -52,6 +55,59 @@ runtime.fs.writeFile('/src/main.tsx', '...');
 
 Requirements: a secure context (https or localhost) for the service worker. That
 is all.
+
+### Vue and Svelte
+
+`.vue` and `.svelte` files work with no setup. The first time a project needs one,
+the runtime loads the official compiler from a CDN (`@vue/compiler-sfc`'s browser
+build from jsDelivr, `svelte/compiler` from esm.sh), pinned to the project's own
+`vue` / `svelte` range so compiler and runtime agree. Vue `<style scoped>` and
+Svelte's component CSS are scoped as usual. Pass `components` to
+`bootPreviewRuntime` to supply compilers yourself. Not yet: `<style lang="scss">`
+and other preprocessors, and TypeScript in Svelte 4 (Svelte 5 handles it).
+
+### Building for deployment
+
+`runtime.build()` is `npm run build` in the page: it bundles and minifies the app
+with esbuild-wasm and returns a static site you can upload anywhere.
+
+```ts
+const { files } = await runtime.build({ base: './' }); // or '/app/', 'https://cdn.example.com/site/'
+for (const { path, data } of files) upload(path, data); // index.html, assets/main-3F2A9C.js, …
+```
+
+* `index.html` loads hashed bundles; CSS is extracted (CSS Modules are scoped); assets
+  imported from code or CSS get content-hashed names; `public/` is copied as-is.
+* Packages are **not** bundled: they stay on esm.sh at the same pinned, deduped URLs
+  the preview uses (production builds), so the site needs no `node_modules`.
+* `import.meta.env` (`MODE: 'production'`, `.env.production`) and CRA's
+  `process.env.REACT_APP_*` / `PUBLIC_URL` are inlined.
+
+Outside a booted runtime, call `buildProject({ files, bundler })` from the core
+with any `Bundler` (`createEsbuildBundler(esbuild)` in Node, `createEsbuildWasmBundler()`
+in the browser).
+
+### Type-checking
+
+```ts
+import { createChecker, formatDiagnostic } from '@seanhogg/builderforce-webcontainers/check';
+
+const checker = createChecker(); // one Web Worker; keep it for the session
+const { diagnostics } = await checker.check(runtime.fs);
+// [{ file: 'src/App.tsx', line: 3, column: 7, code: 2322, category: 'error', message: '…' }]
+diagnostics.forEach((d) => console.log(formatDiagnostic(d)));
+```
+
+The worker runs TypeScript (pinned, loaded from jsDelivr) over the project's
+tsconfig, following `references` and `extends` (`@vue/tsconfig`, `@tsconfig/svelte`
+are fetched). With no tsconfig it uses Vite's strict defaults with `jsx: react-jsx`.
+Dependency types come from esm.sh's `X-TypeScript-Types` and are cached in Cache
+Storage. `vite/client`, asset imports and `.vue` / `.svelte` imports are typed by
+built-in declarations; component internals are not checked yet. A package with no
+types is treated as `any` and listed in `untypedPackages` rather than reported.
+Bundlers pick up the worker (`new URL('./worker.js', import.meta.url)`); otherwise
+serve `dist/check/worker.js` and pass `workerUrl`. In Node, use
+`typecheckProject(ts, files, { fetch })` from `@seanhogg/builderforce-webcontainers-core/check`.
 
 ### Isolating the preview (relay mode)
 

@@ -1,10 +1,12 @@
 import type { FsChange, VirtualFileSystem } from './vfs.js';
 import type { Transformer } from './transformer.js';
-import type { PackageCdn } from './packageCdn.js';
-import { createEsmShCdn } from './packageCdn.js';
+import type { PackageCdn, PackageCdnFactory } from './packageCdn.js';
+import { esmShCdnFactory } from './packageCdn.js';
+import { noComponentCompilers, type ComponentCompilers } from './components.js';
 import { isConfigFile, readProjectConfig, type ProjectConfig } from './projectConfig.js';
 import { detectProject, type ProjectProfile } from './detectProject.js';
-import { compileScript, type CompileContext, type ImportQuery } from './compileScript.js';
+import { compileScript, isScriptPath, type CompileContext, type ImportQuery } from './compileScript.js';
+import { compileComponent } from './compileComponent.js';
 import { transformHtml } from './html.js';
 import { cssToModule, jsonToModule, rawToModule, rewriteCssUrls, urlToModule } from './styleModules.js';
 import { loaderFor } from './transformer.js';
@@ -23,7 +25,9 @@ export interface DevServerOptions {
   /** The URL the preview is served under, ending in `/` (`/__bfwc/<id>/`). */
   base: string;
   /** Package CDN factory, given the project's dependency ranges. Default: esm.sh. */
-  cdn?: (dependencies: Record<string, string>) => PackageCdn;
+  cdn?: PackageCdnFactory;
+  /** `.vue` / `.svelte` compilers. Without them, requesting a component is an error. */
+  components?: ComponentCompilers;
   /** The "Built with Builderforce.ai" badge in served pages. Default true. */
   attribution?: boolean;
 }
@@ -105,7 +109,7 @@ export class DevServer {
     if (!file) {
       // An extension-less path is a client-side route: serve the app (SPA fallback).
       if (!extname(path) && !query) return this.serveDocument(profile);
-      return query || loaderFor(extname(path)) ? errorModule(`Cannot find module ${path}`) : reply(404, 'text/plain; charset=utf-8', `Not found: ${path}`);
+      return query || isScriptPath(path) ? errorModule(`Cannot find module ${path}`) : reply(404, 'text/plain; charset=utf-8', `Not found: ${path}`);
     }
 
     const key = `${file}?${query ?? ''}`;
@@ -130,13 +134,14 @@ export class DevServer {
       }
       if (ext === '.json' && query === 'import') return reply(200, JS_MIME, jsonToModule(fs.readText(file) ?? ''));
       if (loaderFor(ext)) return reply(200, JS_MIME, await compileScript(this.context(), file));
+      if (isScriptPath(file)) return reply(200, JS_MIME, await compileComponent(this.context(), file));
       if (ext === '.html' || ext === '.htm') {
         return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: this.options.attribution }));
       }
       return reply(200, mimeFor(ext), fs.readFile(file) ?? '');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return query || loaderFor(ext) ? errorModule(`${file}: ${message}`) : reply(500, 'text/plain; charset=utf-8', message);
+      return query || isScriptPath(file) ? errorModule(`${file}: ${message}`) : reply(500, 'text/plain; charset=utf-8', message);
     }
   }
 
@@ -152,8 +157,8 @@ export class DevServer {
   private context(): CompileContext {
     const { fs, transformer, base } = this.options;
     this.config ??= readProjectConfig(fs);
-    this.cdn ??= (this.options.cdn ?? ((dependencies) => createEsmShCdn({ dependencies })))(this.config.dependencies);
-    return { fs, config: this.config, cdn: this.cdn, transformer, base };
+    this.cdn ??= (this.options.cdn ?? esmShCdnFactory)(this.config.dependencies, { dev: true });
+    return { fs, config: this.config, cdn: this.cdn, transformer, base, components: this.options.components ?? noComponentCompilers };
   }
 
   private onChange(change: FsChange): void {

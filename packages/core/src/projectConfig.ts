@@ -17,7 +17,17 @@ export const CONFIG_FILES = [
   '/.env.local',
   '/.env.development',
   '/.env.development.local',
+  '/.env.production',
+  '/.env.production.local',
 ] as const;
+
+/** Which `.env.<mode>` files apply: the dev server reads development, a build production. */
+export type BuildMode = 'development' | 'production';
+
+/** Vite's load order — later files win. */
+export function envFiles(mode: BuildMode): string[] {
+  return ['/.env', '/.env.local', `/.env.${mode}`, `/.env.${mode}.local`];
+}
 
 export interface PathAlias {
   /** The specifier prefix, without the trailing `*` (`@/`). Exact when `wildcard` is false. */
@@ -83,9 +93,25 @@ function readDependencies(fs: VirtualFileSystem): Record<string, string> {
   return out;
 }
 
+/**
+ * The root tsconfig's compiler options. Current Vite templates (React, Vue,
+ * Svelte) keep a root `tsconfig.json` with only `references`, and the app's real
+ * options — `paths` included — in `tsconfig.app.json`; options missing from the
+ * root are taken from the referenced configs, in order.
+ */
 function readCompilerOptions(fs: VirtualFileSystem): Record<string, unknown> {
   const tsconfig = readJson(fs, '/tsconfig.json') ?? readJson(fs, '/jsconfig.json') ?? {};
-  return asRecord(tsconfig.compilerOptions);
+  const options = { ...asRecord(tsconfig.compilerOptions) };
+  const references = Array.isArray(tsconfig.references) ? tsconfig.references : [];
+  for (const reference of references) {
+    const target = asRecord(reference).path;
+    if (typeof target !== 'string') continue;
+    const file = target.endsWith('.json') ? join('/', target) : join('/', target, 'tsconfig.json');
+    for (const [key, value] of Object.entries(asRecord(readJson(fs, file)?.compilerOptions))) {
+      if (!(key in options)) options[key] = value;
+    }
+  }
+  return options;
 }
 
 function readAliases(options: Record<string, unknown>): PathAlias[] {
@@ -131,27 +157,28 @@ export function parseDotenv(text: string): Record<string, string> {
   return out;
 }
 
-function readEnv(fs: VirtualFileSystem): Record<string, string> {
+function readEnv(fs: VirtualFileSystem, mode: BuildMode): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const file of CONFIG_FILES) {
-    if (!file.startsWith('/.env')) continue;
+  for (const file of envFiles(mode)) {
     const text = fs.readText(file);
     if (text !== undefined) Object.assign(env, parseDotenv(text));
   }
   return env;
 }
 
-export function readProjectConfig(fs: VirtualFileSystem): ProjectConfig {
+export function readProjectConfig(fs: VirtualFileSystem, mode: BuildMode = 'development'): ProjectConfig {
   const options = readCompilerOptions(fs);
   return {
     dependencies: readDependencies(fs),
     aliases: readAliases(options),
     jsx: readJsx(options),
-    env: readEnv(fs),
+    env: readEnv(fs, mode),
   };
 }
 
 /** True when a change to `path` invalidates the derived {@link ProjectConfig}. */
 export function isConfigFile(path: string): boolean {
-  return (CONFIG_FILES as readonly string[]).includes(normalizePath(path));
+  const normalized = normalizePath(path);
+  // Any root tsconfig: the root one may reference `tsconfig.app.json` and friends.
+  return (CONFIG_FILES as readonly string[]).includes(normalized) || /^\/tsconfig[^/]*\.json$/.test(normalized);
 }

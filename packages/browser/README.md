@@ -26,5 +26,10 @@ own origin with `bootPreviewRuntime({ relayUrl })`. That origin serves
 with `Content-Security-Policy: frame-ancestors` limited to your app. See the
 [root README](../../README.md#isolating-the-preview-relay-mode).
 
+`runtime.build({ base })` returns a deployable static site (`{ files: [{ path, data }] }`),
+and `createChecker()` from `@seanhogg/builderforce-webcontainers/check` type-checks
+the project in a Web Worker. `.vue` and `.svelte` files need no setup. See the
+[root README](../../README.md#building-for-deployment).
+
 The package re-exports everything from
 [`@seanhogg/builderforce-webcontainers-core`](../core).
