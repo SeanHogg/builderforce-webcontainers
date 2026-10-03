@@ -57,6 +57,12 @@ describe('DevServer on a Vite + React app', () => {
     expect(text(res.body)).toContain('bfwc:error');
   });
 
+  it('opts documents (and only documents) into COEP, so an isolated host can frame them', async () => {
+    const s = server();
+    expect((await s.handle('/')).headers['cross-origin-embedder-policy']).toBe('credentialless');
+    expect((await s.handle('/src/main.tsx')).headers['cross-origin-embedder-policy']).toBeUndefined();
+  });
+
   it('compiles TSX and maps packages to the CDN, local files to preview URLs', async () => {
     const res = await server().handle('/src/main.tsx');
     const js = text(res.body);

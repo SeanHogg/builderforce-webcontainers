@@ -30,8 +30,18 @@ export interface DevServerOptions {
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
+/**
+ * Documents opt into COEP so the preview can be framed by a cross-origin-isolated
+ * host (one running WebGPU, WASM threads or WebContainers): an isolated page
+ * refuses any nested document that does not. `credentialless` is harmless when the
+ * host is not isolated — package modules are CORS fetches anyway, and cross-origin
+ * images still load, just without cookies.
+ */
+const DOCUMENT_HEADERS = { 'cross-origin-embedder-policy': 'credentialless' };
+
 function reply(status: number, contentType: string, body: string | Uint8Array): ServedFile {
-  return { status, headers: { 'content-type': contentType, ...NO_STORE }, body };
+  const document = contentType.startsWith('text/html') ? DOCUMENT_HEADERS : undefined;
+  return { status, headers: { 'content-type': contentType, ...NO_STORE, ...document }, body };
 }
 
 /** A module that throws — evaluated in the preview, it reaches the error bridge. */

@@ -16,6 +16,7 @@ ships on its own.
 - Vite, Create React App and static projects; unsupported frameworks declined with a reason.
 - Service-worker transport with re-attach after worker restarts.
 - Preview errors forwarded to the host page.
+- 2026.10.1: documents opt into COEP (`credentialless`), so a cross-origin-isolated host can frame the preview.
 
 ## Next
 
