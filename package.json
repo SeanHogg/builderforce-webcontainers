@@ -1,0 +1,33 @@
+{
+  "name": "builderforce-webcontainers",
+  "version": "2026.10.0",
+  "private": true,
+  "description": "BuilderForce WebContainers — an open, forkable in-browser dev runtime. Core (@seanhogg/builderforce-webcontainers-core) + browser runtime (@seanhogg/builderforce-webcontainers) in one workspace.",
+  "type": "module",
+  "author": {
+    "name": "Sean Hogg",
+    "email": "seanhogg@gmail.com",
+    "url": "https://builderforce.ai"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SeanHogg/builderforce-webcontainers.git"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@9.1.0",
+  "scripts": {
+    "build": "pnpm --filter @seanhogg/builderforce-webcontainers-core build && pnpm --filter @seanhogg/builderforce-webcontainers build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r exec rimraf dist",
+    "release:check": "pnpm build && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^5.5.0"
+  }
+}
