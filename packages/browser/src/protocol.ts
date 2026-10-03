@@ -6,10 +6,30 @@
 
 export const PREVIEW_SEGMENT = '__bfwc';
 
+/**
+ * What a preview id may contain. No dots, so a file served beside the worker
+ * (`sw.js`, `relay.html`) can never be mistaken for a preview.
+ */
+export const PREVIEW_ID = /^[A-Za-z0-9_-]+$/;
+
 /** page → worker, with a MessagePort in `ports[0]`: "serve preview `id` over this port". */
 export const ATTACH = 'bfwc:attach';
 /** worker → pages: "I lost the port for `id` (I was restarted) — attach again". */
 export const REATTACH = 'bfwc:reattach';
+
+/**
+ * The cross-origin relay (`relay.html`, served on the preview origin and framed,
+ * hidden, by the host). The host cannot talk to a worker on another origin, so the
+ * relay registers it and passes messages both ways.
+ */
+/** relay → host: the worker is active; send ports. */
+export const RELAY_READY = 'bfwc:relay-ready';
+/** host → relay, with a MessagePort: forward as ATTACH for `id`. */
+export const RELAY_ATTACH = 'bfwc:relay-attach';
+/** relay → host: the worker asked for `id` again. */
+export const RELAY_REATTACH = 'bfwc:relay-reattach';
+/** host → relay: reload every frame showing the preview at `base`. */
+export const RELAY_RELOAD = 'bfwc:relay-reload';
 
 export interface AttachMessage {
   type: typeof ATTACH;

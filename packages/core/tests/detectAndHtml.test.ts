@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { VirtualFileSystem } from '../src/vfs.js';
 import { detectProject } from '../src/detectProject.js';
-import { transformHtml, ERROR_MESSAGE_TYPE } from '../src/html.js';
+import { transformHtml, reloadChannelName, ERROR_MESSAGE_TYPE } from '../src/html.js';
 
 function project(files: Record<string, string>): VirtualFileSystem {
   const fs = new VirtualFileSystem();
@@ -34,6 +34,12 @@ describe('detectProject', () => {
 });
 
 describe('transformHtml', () => {
+  it('listens for live reload on a channel keyed by its own preview base', () => {
+    const out = transformHtml('<html><head></head><body></body></html>', { base: '/__bfwc/p/a/' });
+    expect(out).toContain(JSON.stringify(reloadChannelName('/__bfwc/p/a/')));
+    expect(reloadChannelName('/__bfwc/p/a/')).not.toBe(reloadChannelName('/__bfwc/p/b/'));
+  });
+
   const base = '/__bfwc/p1/';
 
   it('re-roots absolute paths and injects the error bridge first', () => {

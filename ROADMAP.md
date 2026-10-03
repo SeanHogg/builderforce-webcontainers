@@ -17,6 +17,7 @@ ships on its own.
 - Service-worker transport with re-attach after worker restarts.
 - Preview errors forwarded to the host page.
 - 2026.10.1: documents opt into COEP (`credentialless`), so a cross-origin-isolated host can frame the preview.
+- 2026.10.2: live reload — editing any file reloads every frame showing the preview (`liveReload: false` turns it off); relay mode serves the preview from its own origin, isolated from the host's session (`relayUrl`).
 
 ## Next
 

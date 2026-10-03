@@ -46,12 +46,31 @@ createRoot(document.getElementById('root')!).render(<h1>Hello</h1>);`,
 if (runtime.profile().supported) iframe.src = runtime.url;
 runtime.onError((e) => console.warn('preview crashed:', e.message));
 
-// Edits show on the next load of the iframe; nothing to restart.
+// Edits reload every open preview of this project; nothing to restart.
 runtime.fs.writeFile('/src/main.tsx', '...');
 ```
 
 Requirements: a secure context (https or localhost) for the service worker. That
 is all.
+
+### Isolating the preview (relay mode)
+
+Served as above, the preview runs on your app's origin, so its code can read
+your app's cookies and storage. That is fine for a page previewing code its own
+user wrote. If the code is AI-written, or pulls in arbitrary npm packages, serve
+previews from a separate origin instead:
+
+```ts
+// On https://preview.example.com, serve side by side (both exported as strings
+// from '@seanhogg/builderforce-webcontainers/assets'):
+//   /__bfwc/relay.html  with  Content-Security-Policy: frame-ancestors https://app.example.com
+//   /__bfwc/sw.js
+const runtime = await bootPreviewRuntime({ relayUrl: 'https://preview.example.com/__bfwc/relay.html' });
+```
+
+The host frames `relay.html` hidden; it registers the worker on the preview
+origin and relays ports and reloads. `frame-ancestors` is what stops other sites
+from driving your relay, so always set it.
 
 ## How it works
 

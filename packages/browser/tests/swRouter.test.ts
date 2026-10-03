@@ -40,6 +40,13 @@ describe('createSwRouter', () => {
     expect(router.match(new URL('https://x.dev/__bfwc/'))).toBeNull();
   });
 
+  it('leaves files beside the worker (dotted names) to the network', () => {
+    const router = createSwRouter({ scopePath: '/__bfwc/', requestReattach() {} });
+    expect(router.match(new URL('https://p.example/__bfwc/relay.html'))).toBeNull();
+    expect(router.match(new URL('https://p.example/__bfwc/sw.js'))).toBeNull();
+    expect(router.match(new URL('https://p.example/__bfwc/abc123/index.html'))?.id).toBe('abc123');
+  });
+
   it('forwards a request to the attached page and returns its answer', async () => {
     const router = createSwRouter({ scopePath: '/', requestReattach() {} });
     router.attach('p1', answeringPort());

@@ -1,4 +1,4 @@
-import { isWireResponse, previewPrefix, type WireResponse } from './protocol.js';
+import { PREVIEW_ID, isWireResponse, previewPrefix, type WireResponse } from './protocol.js';
 
 /** The part of MessagePort the router uses — a fake in tests, a real port in the worker. */
 export interface PortLike {
@@ -65,7 +65,9 @@ export function createSwRouter(options: SwRouterOptions) {
     const rest = url.pathname.slice(prefix.length);
     const slash = rest.indexOf('/');
     const id = slash < 0 ? rest : rest.slice(0, slash);
-    if (!id) return null;
+    // Ids are `[A-Za-z0-9_-]`; a dotted segment is a real file beside the worker
+    // (`sw.js`, `relay.html`), which must load from the network.
+    if (!id || !PREVIEW_ID.test(id)) return null;
     return { id, path: slash < 0 ? '/' : rest.slice(slash), search: url.search };
   }
 

@@ -14,7 +14,7 @@ export type { Transformer, TransformRequest, Loader, EsbuildLike } from './trans
 export { rewriteImports } from './rewriteImports.js';
 export { resolveLocal, resolveAlias, isBareSpecifier, splitPackageSpecifier, RESOLVE_EXTENSIONS } from './resolve.js';
 export { compileScript, mapSpecifier, moduleUrl, buildDefine } from './compileScript.js';
-export { transformHtml, errorBridgeScript, ERROR_MESSAGE_TYPE } from './html.js';
+export { transformHtml, errorBridgeScript, liveReloadScript, reloadChannelName, ERROR_MESSAGE_TYPE } from './html.js';
 export { mimeFor } from './mime.js';
 export { attributionScript, injectAttribution, ATTRIBUTION_URL, ATTRIBUTION_LABEL } from './attribution.js';
 export type { AttributionOptions } from './attribution.js';

@@ -35,9 +35,13 @@ const NO_STORE = { 'cache-control': 'no-store' };
  * host (one running WebGPU, WASM threads or WebContainers): an isolated page
  * refuses any nested document that does not. `credentialless` is harmless when the
  * host is not isolated — package modules are CORS fetches anyway, and cross-origin
- * images still load, just without cookies.
+ * images still load, just without cookies. CORP `cross-origin` lets such a host
+ * frame the preview when it is served from a separate origin (relay mode).
  */
-const DOCUMENT_HEADERS = { 'cross-origin-embedder-policy': 'credentialless' };
+const DOCUMENT_HEADERS = {
+  'cross-origin-embedder-policy': 'credentialless',
+  'cross-origin-resource-policy': 'cross-origin',
+};
 
 function reply(status: number, contentType: string, body: string | Uint8Array): ServedFile {
   const document = contentType.startsWith('text/html') ? DOCUMENT_HEADERS : undefined;

@@ -5,6 +5,7 @@
  *   • CRA's `%PUBLIC_URL%` placeholder is filled;
  *   • a page with no module script (CRA) gets its entry injected;
  *   • the error bridge is prepended, so runtime errors reach the host;
+ *   • the live-reload listener is prepended, so an edit re-renders the preview;
  *   • the attribution badge is appended unless the host turned it off.
  */
 import { injectAttribution } from './attribution.js';
@@ -24,6 +25,23 @@ export function errorBridgeScript(): string {
   addEventListener('error', function (e) { send(e.message, e.error && e.error.stack); });
   addEventListener('unhandledrejection', function (e) { var r = e.reason; send(r && r.message ? r.message : r, r && r.stack); });
   window.process = window.process || { env: { NODE_ENV: 'development' } };
+})();</script>`;
+}
+
+/**
+ * The channel a preview listens on for "files changed, reload". Keyed by the
+ * preview base, so two runtimes on one origin never reload each other's frames.
+ * A BroadcastChannel rather than `postMessage` because the host does not hold a
+ * reference to the frame — any number of frames (or tabs) may show one preview.
+ */
+export function reloadChannelName(base: string): string {
+  return `bfwc:reload:${base}`;
+}
+
+export function liveReloadScript(base: string): string {
+  return `<script>(function(){
+  if (typeof BroadcastChannel === 'undefined') return;
+  new BroadcastChannel(${JSON.stringify(reloadChannelName(base))}).onmessage = function () { location.reload(); };
 })();</script>`;
 }
 
@@ -52,7 +70,7 @@ export function transformHtml(html: string, options: HtmlOptions): string {
   }
   if (options.attribution !== false) out = injectAttribution(out);
 
-  const bridge = errorBridgeScript();
+  const bridge = `${errorBridgeScript()}\n${liveReloadScript(base)}`;
   if (/<head[^>]*>/i.test(out)) return out.replace(/<head[^>]*>/i, (head) => `${head}\n${bridge}`);
   return bridge + out;
 }
