@@ -151,7 +151,9 @@ export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewR
   }
 
   const previewUrl = new URL(base, transport.origin).href;
-  const processes = createProcessHost({ fs, base, origin: transport.origin, previewUrl, options: options.node });
+  // In relay mode processes run on the preview origin (the relay starts them), never the host's.
+  const node = { ...options.node, createWorker: options.node?.createWorker ?? transport.createWorker?.bind(transport) };
+  const processes = createProcessHost({ fs, base, origin: transport.origin, previewUrl, options: node });
 
   const answer = async (request: WireRequest) =>
     isPortPath(request.path) ? servePortRequest(processes, request) : toWire(request.reqId, await server.handle(request.path, request.search));

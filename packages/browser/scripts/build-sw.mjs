@@ -35,7 +35,12 @@ await writeFile('dist/check/worker.js', await bundle('src/check/worker.ts'));
 // The process worker: one per spawned process (node, npm, jsh), with the whole
 // core runtime inlined. The host finds it beside dist/node/index.js.
 await mkdir('dist/node', { recursive: true });
-await writeFile('dist/node/worker.js', await bundle('src/node/worker.ts'));
+const processWorker = await bundle('src/node/worker.ts');
+await writeFile('dist/node/worker.js', processWorker);
+// The same script, named for the preview origin: in relay mode the relay starts
+// process workers from `<scope>/process-worker.js`, so the server hosting
+// relay.html serves this beside it.
+await writeFile('dist/process-worker.js', processWorker);
 
 await writeFile('dist/sw.js', serviceWorker);
 await writeFile('dist/relay.html', relayHtml);
@@ -44,12 +49,16 @@ await writeFile(
   `/** The preview service worker's source — serve as \`<scope>/sw.js\`, text/javascript. */\n` +
     `export const serviceWorkerSource = ${JSON.stringify(serviceWorker)};\n` +
     `/** The cross-origin relay page — serve as \`<scope>/relay.html\`, text/html, with frame-ancestors set. */\n` +
-    `export const relayHtml = ${JSON.stringify(relayHtml)};\n`,
+    `export const relayHtml = ${JSON.stringify(relayHtml)};\n` +
+    `/** The process worker — serve as \`<scope>/process-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export const processWorkerSource = ${JSON.stringify(processWorker)};\n`,
 );
 await writeFile(
   'dist/assets.d.ts',
   `/** The preview service worker's source — serve as \`<scope>/sw.js\`, text/javascript. */\n` +
     `export declare const serviceWorkerSource: string;\n` +
     `/** The cross-origin relay page — serve as \`<scope>/relay.html\`, text/html, with frame-ancestors set. */\n` +
-    `export declare const relayHtml: string;\n`,
+    `export declare const relayHtml: string;\n` +
+    `/** The process worker — serve as \`<scope>/process-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export declare const processWorkerSource: string;\n`,
 );

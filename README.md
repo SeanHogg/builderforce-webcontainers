@@ -179,12 +179,16 @@ previews from a separate origin instead:
 // from '@seanhogg/builderforce-webcontainers/assets'):
 //   /__bfwc/relay.html  with  Content-Security-Policy: frame-ancestors https://app.example.com
 //   /__bfwc/sw.js
+//   /__bfwc/process-worker.js   (only if you use spawn: node, npm, the shell)
 const runtime = await bootPreviewRuntime({ relayUrl: 'https://preview.example.com/__bfwc/relay.html' });
 ```
 
 The host frames `relay.html` hidden; it registers the worker on the preview
-origin and relays ports and reloads. `frame-ancestors` is what stops other sites
-from driving your relay, so always set it.
+origin and relays ports and reloads. Processes started with `spawn` run there
+too: the relay starts each process worker from `process-worker.js` on the preview
+origin, so npm packages and the user's own server never share your app's
+storage or session. `frame-ancestors` is what stops other sites from driving
+your relay, so always set it.
 
 ## How it works
 

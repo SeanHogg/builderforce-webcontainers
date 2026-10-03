@@ -30,6 +30,8 @@ export const RELAY_ATTACH = 'bfwc:relay-attach';
 export const RELAY_REATTACH = 'bfwc:relay-reattach';
 /** host → relay: reload every frame showing the preview at `base`. */
 export const RELAY_RELOAD = 'bfwc:relay-reload';
+/** host → relay, with a MessagePort: start a process worker on the preview origin, bridged over the port. */
+export const RELAY_SPAWN = 'bfwc:relay-spawn';
 
 export interface AttachMessage {
   type: typeof ATTACH;

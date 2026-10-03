@@ -19,8 +19,9 @@ ships on its own.
 - 2026.10.1: documents opt into COEP (`credentialless`), so a cross-origin-isolated host can frame the preview.
 - 2026.10.2: live reload — editing any file reloads every frame showing the preview (`liveReload: false` turns it off); relay mode serves the preview from its own origin, isolated from the host's session (`relayUrl`).
 
-## Shipped (unreleased)
+## Shipped in 2026.10.3
 
+- **Process isolation in relay mode.** Process workers (node, npm, the shell) start inside the relay frame, on the preview origin, from `process-worker.js`, so the code a project runs never shares the host's storage or session.
 - **Vue and Svelte.** `.vue` (`@vue/compiler-sfc`, `<script setup>`, scoped styles)
   and `.svelte` (Svelte 5, and Svelte 4 without TS) compiled by the official
   compilers, loaded from a CDN on first use and pinned to the project's range.

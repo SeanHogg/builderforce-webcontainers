@@ -17,7 +17,10 @@ import {
   RELAY_READY,
   RELAY_REATTACH,
   RELAY_RELOAD,
+  RELAY_SPAWN,
 } from './protocol.js';
+import type { WorkerLike } from './node/processHost.js';
+import { workerOverPort } from './relayWorker.js';
 import { broadcastReload, waitForActive } from './worker.js';
 
 export interface PreviewTransport {
@@ -31,6 +34,12 @@ export interface PreviewTransport {
   onReattach(listener: (id: string) => void): () => void;
   /** Reload every frame showing the preview at `base`. */
   reload(base: string): void;
+  /**
+   * Start a process worker on the preview origin. Only the relay has one to
+   * offer; same-origin mode runs processes on the host's origin, which is the
+   * trust it already chose.
+   */
+  createWorker?(): WorkerLike;
   dispose(): void;
 }
 
@@ -118,6 +127,11 @@ export async function relayTransport(relayUrl: string): Promise<PreviewTransport
       return () => listeners.delete(listener);
     },
     reload: (base) => post({ type: RELAY_RELOAD, base }),
+    createWorker() {
+      const channel = new MessageChannel();
+      post({ type: RELAY_SPAWN }, [channel.port2]);
+      return workerOverPort(channel.port1);
+    },
     dispose() {
       window.removeEventListener('message', onRelayMessage);
       listeners.clear();

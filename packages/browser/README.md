@@ -22,7 +22,7 @@ else showFallback(runtime.profile().reason);
 
 To run untrusted code (AI-written, arbitrary packages), isolate the preview on its
 own origin with `bootPreviewRuntime({ relayUrl })`. That origin serves
-`relay.html` and `sw.js` (strings in `@seanhogg/builderforce-webcontainers/assets`)
+`relay.html`, `sw.js` and `process-worker.js` (strings in `@seanhogg/builderforce-webcontainers/assets`)
 with `Content-Security-Policy: frame-ancestors` limited to your app. See the
 [root README](../../README.md#isolating-the-preview-relay-mode).
 

@@ -1,6 +1,6 @@
 {
   "name": "builderforce-webcontainers",
-  "version": "2026.10.2",
+  "version": "2026.10.3",
   "private": true,
   "description": "BuilderForce WebContainers — an open, forkable in-browser dev runtime. Core (@seanhogg/builderforce-webcontainers-core) + browser runtime (@seanhogg/builderforce-webcontainers) in one workspace.",
   "type": "module",
