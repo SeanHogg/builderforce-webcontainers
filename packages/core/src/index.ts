@@ -45,3 +45,5 @@ export { transformHtml, errorBridgeScript, liveReloadScript, reloadChannelName, 
 export { mimeFor } from './mime.js';
 export { attributionScript, injectAttribution, ATTRIBUTION_URL, ATTRIBUTION_LABEL } from './attribution.js';
 export type { AttributionOptions } from './attribution.js';
+export * from './installer/index.js';
+export * from './system/index.js';

@@ -1,0 +1,13 @@
+export { installPackages, chooseVersion } from './install.js';
+export type { InstallOptions, InstallResult, InstallProgress } from './install.js';
+export { RegistryClient, createMemoryCache, verifyIntegrity, DEFAULT_REGISTRY } from './registry.js';
+export type { FetchLike, PackageCache, PackageManifest, Packument, RegistryOptions, BinField } from './registry.js';
+export { resolveTree, childLocation, parentLocation, PLATFORM } from './tree.js';
+export type { ResolvedPackage, ResolveTreeOptions } from './tree.js';
+export { parseLockfile, buildLockfile, lockMatchesPackage } from './lockfile.js';
+export type { Lockfile, LockEntry } from './lockfile.js';
+export { parseInstallSpec, parseDependency } from './spec.js';
+export type { ParsedSpec, PackageJson } from './spec.js';
+export { normalizeBin, readBinLink, binShim, linkBins } from './bins.js';
+export { untar, tar } from './tar.js';
+export * as semver from './semver.js';

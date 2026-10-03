@@ -90,3 +90,23 @@ describe('createSwRouter', () => {
     expect(reattached).toBe(1);
   });
 });
+
+describe('virtual server routing', () => {
+  it('forwards method, headers and body for /__port/ requests', async () => {
+    const router = createSwRouter({ scopePath: '/', requestReattach() {} });
+    const port = answeringPort();
+    router.attach('p1', port);
+    const body = new TextEncoder().encode('x').buffer as ArrayBuffer;
+    await router.respond({ id: 'p1', path: '/__port/3000/api', search: '' }, { method: 'POST', headers: { a: 'b' }, body });
+    expect(port.requests[0]).toMatchObject({ path: '/__port/3000/api', method: 'POST', headers: { a: 'b' } });
+  });
+
+  it('maps absolute URLs from a page served by a virtual server back under its port', () => {
+    const router = createSwRouter({ scopePath: '/__bfwc/', requestReattach() {} });
+    const page = router.match(new URL('https://h.test/__bfwc/p1/__port/3000/'))!;
+    router.rememberClient('client-1', page);
+    expect(router.matchForClient(new URL('https://h.test/style.css?v=1'), 'client-1', 'https://h.test')).toEqual({ id: 'p1', path: '/__port/3000/style.css', search: '?v=1' });
+    expect(router.matchForClient(new URL('https://cdn.test/x.js'), 'client-1', 'https://h.test')).toBeNull();
+    expect(router.matchForClient(new URL('https://h.test/style.css'), 'other', 'https://h.test')).toBeNull();
+  });
+});

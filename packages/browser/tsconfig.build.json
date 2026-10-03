@@ -13,6 +13,7 @@
     "tests",
     "src/sw.ts",
     "src/relay.ts",
-    "src/check/worker.ts"
+    "src/check/worker.ts",
+    "src/node/worker.ts"
   ]
 }

@@ -6,8 +6,8 @@
  * Worker globals are typed locally rather than through `lib.webworker`, which
  * cannot share a compilation with the DOM lib the rest of the package needs.
  */
-import { createSwRouter, type PortLike } from './swRouter.js';
-import { ATTACH, REATTACH, type AttachMessage } from './protocol.js';
+import { createSwRouter, type PortLike, type RequestDetails } from './swRouter.js';
+import { ATTACH, REATTACH, isPortPath, type AttachMessage } from './protocol.js';
 
 interface WindowClientLike {
   postMessage(message: unknown): void;
@@ -25,7 +25,7 @@ interface ServiceWorkerGlobalLike {
   addEventListener(type: 'message', listener: (event: { data: unknown; ports: readonly unknown[] }) => void): void;
   addEventListener(
     type: 'fetch',
-    listener: (event: { request: Request; respondWith(response: Promise<Response>): void }) => void,
+    listener: (event: { request: Request; clientId?: string; resultingClientId?: string; respondWith(response: Promise<Response>): void }) => void,
   ): void;
 }
 
@@ -53,9 +53,28 @@ worker.addEventListener('message', (event) => {
   if (message?.type === ATTACH && typeof message.id === 'string' && port) router.attach(message.id, port as PortLike);
 });
 
+/** Statuses whose responses must not carry a body. */
+const NULL_BODY = new Set([101, 204, 205, 304]);
+
 worker.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  const target = router.match(new URL(event.request.url));
+  const { request } = event;
+  const target = router.matchForClient(new URL(request.url), event.clientId, new URL(worker.registration.scope).origin);
   if (!target) return;
-  event.respondWith(router.respond(target).then((r) => new Response(r.body, { status: r.status, headers: r.headers })));
+  const toServer = isPortPath(target.path);
+  // Only virtual Node servers take non-GET requests; the dev server serves files.
+  if (request.method !== 'GET' && !toServer) return;
+  if (toServer) router.rememberClient(event.resultingClientId, target);
+  event.respondWith(
+    (async () => {
+      let details: RequestDetails | undefined;
+      if (toServer) {
+        const headers: Record<string, string> = {};
+        request.headers.forEach((value, key) => (headers[key] = value));
+        const body = request.method === 'GET' || request.method === 'HEAD' ? null : await request.arrayBuffer();
+        details = { method: request.method, headers, body };
+      }
+      const r = await router.respond(target, details);
+      return new Response(NULL_BODY.has(r.status) ? null : r.body, { status: r.status, headers: r.headers });
+    })(),
+  );
 });

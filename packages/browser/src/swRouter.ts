@@ -1,4 +1,4 @@
-import { PREVIEW_ID, isWireResponse, previewPrefix, type WireResponse } from './protocol.js';
+import { PREVIEW_ID, isPortPath, isWireResponse, previewPrefix, type WireResponse } from './protocol.js';
 
 /** The part of MessagePort the router uses — a fake in tests, a real port in the worker. */
 export interface PortLike {
@@ -10,6 +10,13 @@ export interface PreviewTarget {
   id: string;
   path: string;
   search: string;
+}
+
+/** The parts of a request a virtual server needs (method, headers, body). */
+export interface RequestDetails {
+  method: string;
+  headers: Record<string, string>;
+  body: ArrayBuffer | null;
 }
 
 export interface RoutedResponse {
@@ -84,7 +91,29 @@ export function createSwRouter(options: SwRouterOptions) {
     return arrived;
   }
 
-  async function respond(target: PreviewTarget): Promise<RoutedResponse> {
+  /**
+   * Pages served by a virtual server (`/__bfwc/<id>/__port/3000/`) write absolute
+   * URLs (`/style.css`, `fetch('/api')`). A service worker sees every request its
+   * clients make, so a same-origin request from such a page that falls outside
+   * the preview prefix is mapped back under that server's path.
+   */
+  const clientServers = new Map<string, { id: string; prefix: string }>();
+
+  function rememberClient(clientId: string | undefined, target: PreviewTarget): void {
+    if (!clientId || !isPortPath(target.path)) return;
+    const prefix = /^\/__port\/\d+/.exec(target.path)![0];
+    clientServers.set(clientId, { id: target.id, prefix });
+    if (clientServers.size > 200) clientServers.delete(clientServers.keys().next().value!);
+  }
+
+  function matchForClient(url: URL, clientId: string | undefined, origin: string): PreviewTarget | null {
+    const direct = match(url);
+    if (direct || !clientId || url.origin !== origin) return direct;
+    const server = clientServers.get(clientId);
+    return server ? { id: server.id, path: server.prefix + url.pathname, search: url.search } : null;
+  }
+
+  async function respond(target: PreviewTarget, details?: RequestDetails): Promise<RoutedResponse> {
     const port = await portFor(target.id);
     if (!port) return { status: 503, headers: TEXT, body: 'This preview is not running in any open tab.' };
     const reqId = ++nextId;
@@ -98,11 +127,11 @@ export function createSwRouter(options: SwRouterOptions) {
         clearTimeout(timer);
         resolve({ status: response.status, headers: response.headers, body: response.body });
       });
-      port.postMessage({ type: 'request', reqId, path: target.path, search: target.search });
+      port.postMessage({ type: 'request', reqId, path: target.path, search: target.search, ...details });
     });
   }
 
-  return { attach, match, respond, detach: (id: string) => ports.delete(id) };
+  return { attach, match, matchForClient, rememberClient, respond, detach: (id: string) => ports.delete(id) };
 }
 
 export type SwRouter = ReturnType<typeof createSwRouter>;

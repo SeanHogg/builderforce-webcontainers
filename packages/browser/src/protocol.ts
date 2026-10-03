@@ -46,6 +46,17 @@ export interface WireRequest {
   reqId: number;
   path: string;
   search: string;
+  /** Present for requests to a virtual Node server (`/__port/<n>/…`), which see the full request. */
+  method?: string;
+  headers?: Record<string, string>;
+  body?: ArrayBuffer | null;
+}
+
+/** The path segment that routes a preview request to a virtual server: `/__port/3000/…`. */
+export const PORT_SEGMENT = '__port';
+
+export function isPortPath(path: string): boolean {
+  return path.startsWith(`/${PORT_SEGMENT}/`);
 }
 
 export interface WireResponse {

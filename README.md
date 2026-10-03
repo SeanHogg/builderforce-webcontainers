@@ -22,12 +22,14 @@ previews, built to be forked.
 | Compiler / package source | Pluggable ports: swap esbuild for SWC, esm.sh for your own mirror | Fixed |
 | Errors | Uncaught errors in the preview are posted to the host page | — |
 | Production build, type-check | In the browser: `runtime.build()`, `createChecker()` | Via `npm run build` / `tsc` in the container |
-| Node.js servers, `npm install`, shell | Not yet (see [ROADMAP](ROADMAP.md)) | Yes |
+| Node.js programs and servers, `npm install`, shell | Yes: one Web Worker per process, still no COOP/COEP (limits in [ROADMAP](ROADMAP.md)) | Yes |
 
-Today it runs **frontend apps**: Vite (React, Vue, Svelte) and Create React App
-projects, and static sites. It previews them, builds them for deployment, and
-type-checks them. Frameworks that need a Node server (Next.js, Nuxt, SvelteKit,
-Remix, Astro) are detected and declined with a reason, so a host can fall back to
+It runs **frontend apps** (Vite with React, Vue or Svelte, Create React App,
+static sites), which it previews, builds for deployment and type-checks; and
+**Node programs**: `npm install` from the real registry, Node scripts and
+Express-style servers, and an interactive shell for a terminal. Frameworks whose
+dev servers need native binaries (Next.js, Nuxt, SvelteKit, Remix, Astro) are
+detected and declined with a reason, so a host can fall back to
 another runtime instead of showing a broken preview. The roadmap is how it closes
 the rest of the gap.
 
@@ -108,6 +110,62 @@ types is treated as `any` and listed in `untypedPackages` rather than reported.
 Bundlers pick up the worker (`new URL('./worker.js', import.meta.url)`); otherwise
 serve `dist/check/worker.js` and pass `workerUrl`. In Node, use
 `typecheckProject(ts, files, { fetch })` from `@seanhogg/builderforce-webcontainers-core/check`.
+
+### Node.js, npm and a terminal
+
+`runtime.spawn()` has the same shape as `@webcontainer/api`'s, so code written
+against WebContainers ports over with little change:
+
+```ts
+const install = runtime.spawn('npm', ['install']);
+install.output.pipeTo(new WritableStream({ write: (chunk) => console.log(chunk) }));
+if ((await install.exit) !== 0) throw new Error('install failed');
+
+runtime.on('server-ready', (port, url) => (iframe.src = url)); // …/__bfwc/<id>/__port/3000/
+runtime.spawn('node', ['server.js']);
+
+// An interactive shell for xterm.js:
+const shell = runtime.spawn('jsh', { terminal: { cols: term.cols, rows: term.rows } });
+shell.output.pipeTo(new WritableStream({ write: (data) => term.write(data) }));
+const input = shell.input.getWriter();
+term.onData((data) => input.write(data));
+term.onResize(({ cols, rows }) => shell.resize({ cols, rows }));
+```
+
+* **Processes.** Each process runs in its own Web Worker (`dist/node/worker.js`,
+  found beside the module like the check worker; or pass `node: { workerUrl }`),
+  so a busy loop never freezes the page and `kill()` always works (the worker is
+  terminated after a 2s grace). A worker starts from a snapshot of the files;
+  its writes sync back to `runtime.fs` and on to every other process.
+* **Node.** CommonJS and ES modules with Node's resolution (`exports`/`imports`
+  conditions, `type: module`), and shims for `fs`, `path`, `events`, `buffer`,
+  `util`, `process`, `os`, `url`, `stream`, `crypto`, `zlib`, `http`/`https`,
+  `child_process`, `readline` and the rest. It reports itself as Node 20 on Linux.
+* **Servers.** `http.createServer().listen(port)` registers a virtual port; the
+  preview service worker routes `/__bfwc/<id>/__port/<port>/…` to it (any method,
+  with its body) and `server-ready` fires. Absolute URLs (`/style.css`,
+  `fetch('/api')`) from such a page are mapped back to its server. `localhost`
+  requests between processes stay inside the runtime; anything else goes through
+  the browser's `fetch`, so CORS applies.
+* **npm.** `npm install|i|ci|uninstall|run|start|test|ls|init` and `npx`, against
+  registry.npmjs.org (`node: { registry }` changes it): semver resolution,
+  npm-style hoisting, `.bin` links, `package-lock.json` v3 written and reused,
+  tarballs cached in Cache Storage. **Install scripts are skipped**: they nearly
+  always build native addons, which cannot run in a browser.
+* **Dev servers.** `npm run dev` running `vite`, and `npm start` running
+  `react-scripts start`, hand off to the built-in preview: they print its URL,
+  fire `server-ready` and run until Ctrl-C. (Real Vite needs esbuild's native
+  binary.)
+* **Shell (`jsh`).** Line editing, history, Tab completion, Ctrl-C/Ctrl-D; quotes,
+  `$VAR`, `$(…)`, globs, `&&`/`||`/`;`/`&`, pipes and redirects; `cd`, `ls -la`,
+  `cat`, `mkdir -p`, `rm -rf`, `cp -r`, `mv`, `grep`, `head`, `tail` and friends.
+  Unknown commands print `command not found`.
+
+Not supported yet (see the [ROADMAP](ROADMAP.md)): native addons, streaming
+responses and WebSockets, `execSync`/`spawnSync`, cookies set by a virtual server,
+and the Next.js/Nuxt dev servers. Outside the browser (tests, a CLI), the core's
+`Kernel` runs the same programs in-process:
+`new Kernel({ programs: defaultPrograms() }).spawn('npm', ['install'])`.
 
 ### Isolating the preview (relay mode)
 

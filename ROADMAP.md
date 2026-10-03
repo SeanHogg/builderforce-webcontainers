@@ -35,6 +35,27 @@ ships on its own.
   esm.sh cached in Cache Storage, diagnostics as plain data.
 - Root tsconfigs that only hold `references` (current Vite templates) now supply
   `paths` aliases from `tsconfig.app.json`.
+- **`npm install` into the VFS.** Core `installPackages()`: semver resolution
+  (own resolver), abbreviated packuments, npm-style hoisting with nesting on
+  conflict, `npm:` aliases, peer and optional dependencies (native binaries for
+  other platforms skipped), integrity checks, `node_modules/.bin`, lockfile v3
+  written and reused (no metadata requests when it is current), `npm ci`.
+  Tarballs cached in Cache Storage in the browser. Install scripts are skipped.
+- **Node runtime.** `runtime.spawn('node', …)` runs Node programs, one Web Worker
+  per process (a busy loop cannot freeze the page; `kill` terminates it).
+  CommonJS and ES modules over the VFS with Node resolution (`exports`/`imports`
+  conditions, `type: module`, `require.cache`), and shims for fs (+promises,
+  streams, watch), path, events, buffer, util, process, os, url, querystring,
+  string_decoder, timers, stream, assert, crypto (hashes/HMAC/random/pbkdf2),
+  zlib, child_process, http/https, readline and the small modules. Servers listen
+  on virtual ports, answered through the preview service worker at
+  `/__bfwc/<id>/__port/<port>/` (`server-ready`); localhost requests between
+  processes are routed in-runtime; other `fetch`/`http.request` go to the network.
+  Express installs from npm and serves (network e2e test).
+- **Shell.** `spawn('jsh', { terminal })` for xterm.js: line editing, history,
+  completion, Ctrl-C/Ctrl-D; quotes, `$VAR`/`${VAR:-x}`, `$(…)`, globs, `&&`
+  `||` `;` `&`, pipes, redirects; coreutils; `npm install|ci|run|start|test`,
+  `npx`; `vite`/`react-scripts start` hand off to the in-browser dev server.
 
 ## Next
 
@@ -63,13 +84,33 @@ ships on its own.
 
 ## Toward a full Node runtime
 
-11. **`npm install` into the VFS.** Fetch and unpack tarballs and resolve the tree
-   in a worker, so `node_modules` exists for tools that read it.
-12. **Node API shims.** `fs`, `path`, `process`, `events` and `buffer` over the VFS,
-   enough to run build tools (Vite itself) in a worker.
-13. **HTTP servers.** Map `http.createServer` onto the service worker so
-   Express-style apps can answer preview requests.
-14. **Shell.** A small POSIX shell over the VFS for `npm run` scripts.
+Known limits of what shipped, roughly in the order they are worth closing:
+
+11. **Streaming HTTP.** Responses are buffered whole, so Server-Sent Events,
+   long-polling and chunked progress arrive at once; WebSockets (`ws`, socket.io)
+   have no transport. Needs a streamed MessagePort body and a WebSocket shim.
+12. **ES module live bindings.** ESM is rewritten to the CommonJS wrapper;
+   imported bindings are snapshots, so a cycle that reads a `const` before the
+   other module finished initialising sees `undefined`. Dual packages load their
+   CommonJS build to avoid the transform.
+13. **Synchronous child processes** (`execSync`, `spawnSync`) throw: blocking a
+   worker on another needs `Atomics.wait`, i.e. SharedArrayBuffer and cross-origin
+   isolation, which this runtime refuses to require.
+14. **Install scripts and native addons.** `postinstall` is skipped; `.node`
+   addons cannot load. Packages with a WASM fallback (esbuild-wasm, @swc/wasm)
+   work; ones that only ship native binaries (sharp, better-sqlite3) do not.
+15. **Next.js / Nuxt / SvelteKit dev servers.** Feasible in principle (they are
+   Node HTTP servers), blocked today by: SWC/esbuild/lightningcss native binaries
+   (need WASM builds wired as fallbacks), `worker_threads` (Next spawns workers),
+   streaming responses (11), and their size (hundreds of MB of `node_modules`
+   mirrored into each process worker). Real Vite is blocked by the same native
+   esbuild/rollup binaries, which is why `vite` hands off to the built-in server.
+16. **Cookies from virtual servers.** A service worker cannot set `Set-Cookie`,
+   so session cookies issued by an Express app do not stick.
+17. **Shell gaps.** No functions, `if`/`for`/`while`, here-docs, subshell `( )`
+   or job control (`fg`, `bg`); `npx` installs only what has a `bin`.
+18. **Process start-up cost.** Each process receives a full snapshot of the file
+   system; a shared, copy-on-read store (or OPFS) would make spawning O(1).
 
 ## Principles
 

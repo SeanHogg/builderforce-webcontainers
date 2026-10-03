@@ -11,8 +11,11 @@ import {
   type PackageCdnFactory,
   type ProjectProfile,
   type Transformer,
+  type SpawnOptions,
+  type WebContainerProcess,
 } from '@seanhogg/builderforce-webcontainers-core';
-import { PREVIEW_ID, isWireRequest, previewBase, type WireResponse } from './protocol.js';
+import { PREVIEW_ID, isPortPath, isWireRequest, previewBase, type WireRequest, type WireResponse } from './protocol.js';
+import { createProcessHost, servePortRequest, type NodeRuntimeOptions } from './node/index.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
 import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
 import { createCdnComponentCompilers } from './componentCompilers.js';
@@ -55,6 +58,8 @@ export interface CommonBootOptions {
   attribution?: boolean;
   /** Reload open previews when files change. Default true. */
   liveReload?: boolean;
+  /** The Node runtime behind `spawn` (process workers, npm registry). */
+  node?: NodeRuntimeOptions;
 }
 
 /** Edits arrive in bursts (a save, an agent writing several files): reload once per burst. */
@@ -90,6 +95,18 @@ export interface PreviewRuntime {
   build(options?: RuntimeBuildOptions): Promise<BuildResult>;
   /** Uncaught errors and rejections raised inside the preview. */
   onError(listener: (error: PreviewError) => void): () => void;
+  /**
+   * Run a command — `node server.js`, `npm install`, `npm run dev`, `jsh` for a
+   * terminal — in its own Web Worker. Same shape as `@webcontainer/api`'s
+   * `spawn`: `output`/`input` streams, `exit`, `kill()`, `resize()`. Pass
+   * `{ terminal: { cols, rows } }` when wiring it to xterm.js.
+   */
+  spawn(command: string, args?: string[], options?: SpawnOptions): WebContainerProcess;
+  spawn(command: string, options?: SpawnOptions): WebContainerProcess;
+  /** `server-ready`: a process started listening (or a dev script handed off to the preview); `url` loads it in an iframe. */
+  on(event: 'server-ready', listener: (port: number, url: string) => void): () => void;
+  /** `port`: a virtual server opened or closed. */
+  on(event: 'port', listener: (port: number, type: 'open' | 'close', url: string) => void): () => void;
   dispose(): void;
 }
 
@@ -97,7 +114,7 @@ function randomId(): string {
   return globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 16) ?? Math.random().toString(36).slice(2, 18);
 }
 
-function toWire(reqId: number, served: Awaited<ReturnType<DevServer['handle']>>): { message: WireResponse; transfer: Transferable[] } {
+export function toWire(reqId: number, served: Awaited<ReturnType<DevServer['handle']>>): { message: WireResponse; transfer: Transferable[] } {
   if (typeof served.body === 'string') {
     return { message: { type: 'response', reqId, status: served.status, headers: served.headers, body: served.body }, transfer: [] };
   }
@@ -133,11 +150,17 @@ export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewR
     throw error;
   }
 
+  const previewUrl = new URL(base, transport.origin).href;
+  const processes = createProcessHost({ fs, base, origin: transport.origin, previewUrl, options: options.node });
+
+  const answer = async (request: WireRequest) =>
+    isPortPath(request.path) ? servePortRequest(processes, request) : toWire(request.reqId, await server.handle(request.path, request.search));
+
   const attach = () => {
     const channel = new MessageChannel();
     channel.port1.onmessage = async (event) => {
       if (!isWireRequest(event.data)) return;
-      const { message, transfer } = toWire(event.data.reqId, await server.handle(event.data.path, event.data.search));
+      const { message, transfer } = await answer(event.data);
       channel.port1.postMessage(message, transfer);
     };
     transport.attach(id, channel.port2);
@@ -168,7 +191,7 @@ export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewR
 
   return {
     id,
-    url: new URL(base, transport.origin).href,
+    url: previewUrl,
     fs,
     server,
     mount: (files) => fs.mount(files),
@@ -181,7 +204,10 @@ export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewR
       errorListeners.add(listener);
       return () => errorListeners.delete(listener);
     },
+    spawn: (command: string, args?: string[] | SpawnOptions, spawnOptions?: SpawnOptions) => processes.spawn(command, args as string[], spawnOptions),
+    on: ((event: 'server-ready' | 'port', listener: (...args: any[]) => void) => processes.on(event as 'port', listener)) as PreviewRuntime['on'],
     dispose() {
+      processes.dispose();
       window.removeEventListener('message', onWindowMessage);
       errorListeners.clear();
       clearTimeout(reloadTimer);

@@ -15,6 +15,7 @@
       "import": "./dist/check/index.js"
     },
     "./check/worker.js": "./dist/check/worker.js",
+    "./node/worker.js": "./dist/node/worker.js",
     "./assets": {
       "types": "./dist/assets.d.ts",
       "import": "./dist/assets.js"
