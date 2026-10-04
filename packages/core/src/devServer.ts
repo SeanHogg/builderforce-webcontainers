@@ -77,7 +77,7 @@ function parseQuery(search: string): ImportQuery | undefined {
  */
 export class DevServer {
   private config?: ProjectConfig;
-  private cdn?: PackageCdn;
+  private cdn?: Promise<PackageCdn>;
   private profileCache?: ProjectProfile;
   private readonly cache = new Map<string, { version: number; file: ServedFile }>();
   private readonly unwatch: () => void;
@@ -133,8 +133,8 @@ export class DevServer {
         return query === 'import' ? reply(200, JS_MIME, cssToModule(file, css)) : reply(200, mimeFor(ext), css);
       }
       if (ext === '.json' && query === 'import') return reply(200, JS_MIME, jsonToModule(fs.readText(file) ?? ''));
-      if (loaderFor(ext)) return reply(200, JS_MIME, await compileScript(this.context(), file));
-      if (isScriptPath(file)) return reply(200, JS_MIME, await compileComponent(this.context(), file));
+      if (loaderFor(ext)) return reply(200, JS_MIME, await compileScript(await this.context(), file));
+      if (isScriptPath(file)) return reply(200, JS_MIME, await compileComponent(await this.context(), file));
       if (ext === '.html' || ext === '.htm') {
         return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: this.options.attribution }));
       }
@@ -154,11 +154,11 @@ export class DevServer {
     return reply(200, 'text/html; charset=utf-8', transformHtml(html, { base, entry: profile.entry, attribution }));
   }
 
-  private context(): CompileContext {
+  private async context(): Promise<CompileContext> {
     const { fs, transformer, base } = this.options;
     this.config ??= readProjectConfig(fs);
-    this.cdn ??= (this.options.cdn ?? esmShCdnFactory)(this.config.dependencies, { dev: true });
-    return { fs, config: this.config, cdn: this.cdn, transformer, base, components: this.options.components ?? noComponentCompilers };
+    this.cdn ??= Promise.resolve((this.options.cdn ?? esmShCdnFactory)(this.config.dependencies, { dev: true }));
+    return { fs, config: this.config, cdn: await this.cdn, transformer, base, components: this.options.components ?? noComponentCompilers };
   }
 
   private onChange(change: FsChange): void {

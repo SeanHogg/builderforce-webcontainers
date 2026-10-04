@@ -75,9 +75,10 @@ describe('buildProject on a Vite + React app', () => {
   it('bundles local modules and keeps packages on the CDN as pinned production URLs', () => {
     expect(js).not.toContain('<App />');
     expect(js).toContain('function Button');
-    // Every other declared package is pinned into each one's graph: one React.
-    expect(js).toMatch(/from "https:\/\/esm\.sh\/react-dom@\^18\.3\.1\/client\?deps=react%40%5E18\.3\.1[,"]/);
-    expect(js).toMatch(/"https:\/\/esm\.sh\/react@\^18\.3\.1\/jsx-runtime\?deps=/);
+    // A package carries only the pins it imports: react-dom pins react, and react
+    // is the plain build react-dom links to, so there is one React.
+    expect(js).toMatch(/from "https:\/\/esm\.sh\/react-dom@\^18\.3\.1\/client\?deps=react%40%5E18\.3\.1"/);
+    expect(js).toContain('"https://esm.sh/react@^18.3.1/jsx-runtime"');
     expect(js).not.toMatch(/[?&]dev\b/);
   });
 

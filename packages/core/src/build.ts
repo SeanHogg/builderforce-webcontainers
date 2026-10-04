@@ -71,7 +71,7 @@ export async function buildProject(options: BuildOptions): Promise<BuildResult> 
   if (!profile.supported || !profile.htmlPath) throw new Error(profile.reason ?? 'This project cannot be built here.');
 
   const config = readProjectConfig(fs, 'production');
-  const cdn = (options.cdn ?? esmShCdnFactory)(config.dependencies, { dev: false });
+  const cdn = await (options.cdn ?? esmShCdnFactory)(config.dependencies, { dev: false });
   const html = fs.readText(profile.htmlPath) ?? '';
   const entries = findHtmlEntries(fs, html, profile.htmlPath);
   // CRA pages carry no module script; the dev server injects the entry, so does the build.

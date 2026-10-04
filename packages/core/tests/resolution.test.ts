@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { VirtualFileSystem } from '../src/vfs.js';
 import { isBareSpecifier, resolveAlias, resolveLocal, splitPackageSpecifier } from '../src/resolve.js';
 import { parseDotenv, parseLooseJson, readProjectConfig } from '../src/projectConfig.js';
-import { createEsmShCdn } from '../src/packageCdn.js';
+import { createEsmShCdn, loadPackageManifests } from '../src/packageCdn.js';
 import { rewriteImports } from '../src/rewriteImports.js';
 
 describe('resolveLocal', () => {
@@ -70,13 +70,41 @@ describe('project config', () => {
 });
 
 describe('createEsmShCdn', () => {
-  it('versions the package and pins every other dependency', () => {
+  it('versions the package and, with no manifest, pins every other dependency', () => {
     const cdn = createEsmShCdn({ dependencies: { react: '^18.3.1', 'react-dom': '^18.3.1', local: 'workspace:*' } });
     const url = cdn.urlFor('react-dom', '/client');
     expect(url.startsWith('https://esm.sh/react-dom@^18.3.1/client?deps=')).toBe(true);
     expect(url).toContain(encodeURIComponent('react@^18.3.1'));
     expect(url).not.toContain('local');
     expect(url.endsWith('&dev')).toBe(true);
+  });
+  it('pins only what a package imports, so the app and react-dom share ONE react', () => {
+    const cdn = createEsmShCdn({
+      dependencies: { react: '^18.2.0', 'react-dom': '^18.2.0', vite: '^4.3.9' },
+      manifests: { react: {}, 'react-dom': { peerDependencies: { react: '^18.3.1' } }, vite: {} },
+    });
+    // esm.sh links react-dom's own `import 'react'` to the plain react build; the app must too.
+    expect(cdn.urlFor('react', '')).toBe('https://esm.sh/react@^18.2.0?dev');
+    expect(cdn.urlFor('react', '/jsx-runtime')).toBe('https://esm.sh/react@^18.2.0/jsx-runtime?dev');
+    expect(cdn.urlFor('react-dom', '/client')).toBe(`https://esm.sh/react-dom@^18.2.0/client?deps=${encodeURIComponent('react@^18.2.0')}&dev`);
+    // An undeclared package carries every pin, so the packages IT imports dedupe.
+    expect(cdn.urlFor('framer-motion', '')).toContain(encodeURIComponent('react@^18.2.0'));
+  });
+  it('loads manifests from the CDN and leaves out the ones that fail', async () => {
+    const seen: string[] = [];
+    const manifests = await loadPackageManifests(
+      { 'react-dom': '^18.2.0', broken: '^1.0.0', local: 'workspace:*' },
+      {
+        origin: 'https://cdn.test',
+        fetch: async (url) => {
+          seen.push(url);
+          if (url.includes('broken')) return { ok: false, json: async () => ({}) };
+          return { ok: true, json: async () => ({ peerDependencies: { react: '^18.3.1' } }) };
+        },
+      },
+    );
+    expect(manifests).toEqual({ 'react-dom': { peerDependencies: { react: '^18.3.1' } } });
+    expect(seen).toEqual(['https://cdn.test/react-dom@^18.2.0/package.json', 'https://cdn.test/broken@^1.0.0/package.json']);
   });
   it('falls back to an unversioned URL for undeclared packages', () => {
     expect(createEsmShCdn({ dev: false }).urlFor('lodash-es', '')).toBe('https://esm.sh/lodash-es');

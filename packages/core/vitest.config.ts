@@ -6,5 +6,7 @@ export default defineConfig({
     // TypeScript (parsing lib.dom.d.ts); a cold first load exceeds the 5s default
     // on a busy machine.
     testTimeout: 30_000,
+    // The default CDN loads package manifests from esm.sh; answer those offline.
+    setupFiles: ['tests/offlineManifests.ts'],
   },
 });

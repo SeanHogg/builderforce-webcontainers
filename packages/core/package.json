@@ -1,6 +1,6 @@
 {
   "name": "@seanhogg/builderforce-webcontainers-core",
-  "version": "2026.10.3",
+  "version": "2026.10.4",
   "description": "BuilderForce WebContainers — core. A runtime-agnostic in-browser dev server: virtual file system, module resolution, import rewriting to a package CDN, CSS/JSON/asset modules and project detection. No COOP/COEP required.",
   "main": "dist/index.js",
   "module": "dist/index.js",

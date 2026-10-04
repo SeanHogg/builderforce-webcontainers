@@ -69,7 +69,8 @@ describe('DevServer on a Vite + React app', () => {
     expect(res.headers['content-type']).toMatch(/javascript/);
     expect(js).not.toContain('<App />');
     expect(js).toMatch(/https:\/\/esm\.sh\/react-dom@\^18\.3\.1\/client\?deps=/);
-    expect(js).toMatch(/https:\/\/esm\.sh\/react@\^18\.3\.1\/jsx-runtime/);
+    // The plain React build, the one react-dom's own `import 'react'` links to.
+    expect(js).toContain('https://esm.sh/react@^18.3.1/jsx-runtime?dev"');
     expect(js).toContain(`${BASE}src/App.tsx`);
     expect(js).toContain(`${BASE}src/index.css?import`);
   });
