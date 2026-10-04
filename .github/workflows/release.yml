@@ -29,11 +29,15 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
+      # Independent gates, run concurrently; both must pass before anything ships.
+      - name: Typecheck and test
+        run: |
+          pnpm typecheck & typecheck=$!
+          pnpm test & tests=$!
+          status=0
+          wait "$typecheck" || status=1
+          wait "$tests" || status=1
+          exit "$status"
 
       # Publishes @seanhogg/builderforce-webcontainers-core, then @seanhogg/builderforce-webcontainers.
       # pnpm resolves `workspace:^` to a real range at pack time. Idempotent: a version

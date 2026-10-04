@@ -7,8 +7,15 @@ on:
     branches: [main]
 
 jobs:
+  # Typecheck and test are independent, so they run on separate runners side by side
+  # instead of one after the other.
   build-test:
+    name: ${{ matrix.script }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [typecheck, test]
     steps:
       - uses: actions/checkout@v7
 
@@ -23,11 +30,9 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # Both legs need it: browser resolves core through core's built dist.
       - name: Build (core then browser)
         run: pnpm build
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
+      - name: ${{ matrix.script }}
+        run: pnpm ${{ matrix.script }}
