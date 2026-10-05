@@ -160,3 +160,31 @@ describe('DevServer on Create React App', () => {
     expect(js).toContain('"cra"');
   });
 });
+
+describe('DevServer on a React Native Web app', () => {
+  /** The canvas's mobile scaffold: JSX in .js, `react-native` aliased in a vite.config this runtime does not run. */
+  function reactNativeWebApp(dependencies: Record<string, string>): VirtualFileSystem {
+    const fs = new VirtualFileSystem();
+    fs.mount({
+      'package.json': JSON.stringify({ dependencies, devDependencies: { vite: '^4.3.9' } }),
+      'index.html': '<!doctype html><html><body><div id="root"></div><script type="module" src="/index.js"></script></body></html>',
+      'index.js': `import { createRoot } from 'react-dom/client'; import App from './App'; createRoot(document.getElementById('root')).render(<App />);`,
+      'App.js': `import { View, Text } from 'react-native'; import { StyleSheet } from 'react-native/Libraries/StyleSheet'; export default function App() { return <View><Text>hi</Text></View>; }`,
+    });
+    return fs;
+  }
+
+  it('serves react-native as react-native-web, subpaths included, when the project depends on it', async () => {
+    const fs = reactNativeWebApp({ react: '^18.2.0', 'react-dom': '^18.2.0', 'react-native-web': '^0.19.10' });
+    const js = text((await server(fs).handle('/App.js')).body);
+    expect(js).not.toContain('<View>');
+    expect(js).toContain('https://esm.sh/react-native-web@^0.19.10?');
+    expect(js).toContain('https://esm.sh/react-native-web@^0.19.10/Libraries/StyleSheet?');
+    expect(js).not.toMatch(/esm\.sh\/react-native[@/?]/);
+  });
+
+  it('leaves react-native alone in a project that does not depend on react-native-web', async () => {
+    const fs = reactNativeWebApp({ react: '^18.2.0', 'react-dom': '^18.2.0' });
+    expect(text((await server(fs).handle('/App.js')).body)).toMatch(/esm\.sh\/react-native\?/);
+  });
+});

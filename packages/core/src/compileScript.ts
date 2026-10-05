@@ -6,7 +6,7 @@ import type { ComponentCompilers } from './components.js';
 import { componentExtension } from './components.js';
 import { loaderFor } from './transformer.js';
 import { dirname, extname } from './paths.js';
-import { isBareSpecifier, resolveAlias, resolveLocal, splitPackageSpecifier } from './resolve.js';
+import { isBareSpecifier, resolveAlias, resolveLocal, resolvePackage } from './resolve.js';
 import { rewriteImports } from './rewriteImports.js';
 
 export interface CompileContext {
@@ -63,7 +63,7 @@ export function mapSpecifier(ctx: CompileContext, fromDir: string, specifier: st
   if (isBareSpecifier(path)) {
     const aliased = resolveAlias(ctx.fs, ctx.config.aliases, path);
     if (aliased) return moduleUrl(ctx.base, aliased, query);
-    const { name, subpath } = splitPackageSpecifier(path);
+    const { name, subpath } = resolvePackage(ctx.config.packageAliases, path);
     return ctx.cdn.urlFor(name, subpath);
   }
   const resolved = resolveLocal(ctx.fs, fromDir, path);

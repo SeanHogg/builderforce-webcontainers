@@ -38,7 +38,7 @@ export { createSvelteCompiler } from './svelteCompiler.js';
 export type { SvelteCompilerLike } from './svelteCompiler.js';
 export { contentHash } from './hash.js';
 export { rewriteImports } from './rewriteImports.js';
-export { resolveLocal, resolveAlias, isBareSpecifier, splitPackageSpecifier, RESOLVE_EXTENSIONS } from './resolve.js';
+export { resolveLocal, resolveAlias, isBareSpecifier, splitPackageSpecifier, resolvePackage, RESOLVE_EXTENSIONS } from './resolve.js';
 export { compileScript, compileModule, isScriptPath, mapSpecifier, moduleUrl, buildDefine } from './compileScript.js';
 export { compileComponent } from './compileComponent.js';
 export { transformHtml, errorBridgeScript, liveReloadScript, reloadChannelName, ERROR_MESSAGE_TYPE } from './html.js';

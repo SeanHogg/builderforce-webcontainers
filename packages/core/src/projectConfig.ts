@@ -41,6 +41,8 @@ export interface ProjectConfig {
   /** dependencies + devDependencies, name → version range. */
   dependencies: Record<string, string>;
   aliases: PathAlias[];
+  /** Bare package names served as another package (`react-native` → `react-native-web`). */
+  packageAliases: Record<string, string>;
   jsx: { runtime: 'automatic' | 'classic'; importSource: string };
   /** `VITE_*` and `NODE_ENV` style variables from the `.env` files, in load order. */
   env: Record<string, string>;
@@ -133,6 +135,23 @@ function readAliases(options: Record<string, unknown>): PathAlias[] {
   return aliases.sort((a, b) => b.prefix.length - a.prefix.length);
 }
 
+/**
+ * Packages a project serves as their browser twin. A React Native Web app aliases
+ * `react-native` to `react-native-web` in its Vite or webpack config, which this
+ * runtime does not execute; depending on the twin is the same signal, read from
+ * package.json. Without it the app imports the real `react-native`, which does not
+ * load in a browser. Data, not branches: another twin is another row.
+ */
+const BROWSER_TWINS: ReadonlyArray<{ name: string; twin: string }> = [
+  { name: 'react-native', twin: 'react-native-web' },
+];
+
+function readPackageAliases(dependencies: Record<string, string>): Record<string, string> {
+  const aliases: Record<string, string> = {};
+  for (const { name, twin } of BROWSER_TWINS) if (twin in dependencies) aliases[name] = twin;
+  return aliases;
+}
+
 function readJsx(options: Record<string, unknown>): ProjectConfig['jsx'] {
   const importSource = typeof options.jsxImportSource === 'string' ? options.jsxImportSource : 'react';
   const runtime = options.jsx === 'react' ? 'classic' : 'automatic';
@@ -168,9 +187,11 @@ function readEnv(fs: VirtualFileSystem, mode: BuildMode): Record<string, string>
 
 export function readProjectConfig(fs: VirtualFileSystem, mode: BuildMode = 'development'): ProjectConfig {
   const options = readCompilerOptions(fs);
+  const dependencies = readDependencies(fs);
   return {
-    dependencies: readDependencies(fs),
+    dependencies,
     aliases: readAliases(options),
+    packageAliases: readPackageAliases(dependencies),
     jsx: readJsx(options),
     env: readEnv(fs, mode),
   };

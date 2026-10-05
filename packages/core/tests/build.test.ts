@@ -254,3 +254,20 @@ describe('build HTML helpers', () => {
     expect(out).toBe('<script type="module" src="./assets/m-1.js"></script><link rel="stylesheet" href="./assets/m-1.css">');
   });
 });
+
+describe('buildProject on a React Native Web app', () => {
+  it('bundles react-native imports as react-native-web, as the app\'s vite.config alias does', async () => {
+    const result = await buildProject({
+      files: {
+        'package.json': JSON.stringify({ dependencies: { react: '^18.2.0', 'react-dom': '^18.2.0', 'react-native-web': '^0.19.10' }, devDependencies: { vite: '^4.3.9' } }),
+        'index.html': '<!doctype html><html><body><div id="root"></div><script type="module" src="/index.js"></script></body></html>',
+        'index.js': `import { createRoot } from 'react-dom/client'; import { View } from 'react-native'; createRoot(document.getElementById('root')).render(<View />);`,
+      },
+      bundler,
+      minify: false,
+    });
+    const [, js] = find(byPath(result), /^assets\/index-[A-Z0-9]+\.js$/);
+    expect(js).toContain('https://esm.sh/react-native-web@^0.19.10');
+    expect(js).not.toMatch(/esm\.sh\/react-native[@/?"]/);
+  });
+});

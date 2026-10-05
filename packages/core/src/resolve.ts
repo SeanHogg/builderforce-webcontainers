@@ -18,6 +18,16 @@ export function splitPackageSpecifier(specifier: string): { name: string; subpat
   return { name: parts.slice(0, take).join('/'), subpath: parts.length > take ? '/' + parts.slice(take).join('/') : '' };
 }
 
+/**
+ * The package a bare specifier is served from: {@link splitPackageSpecifier}, with
+ * the project's package aliases applied to the name (`react-native/x` →
+ * `react-native-web` + `/x`), as a bundler alias would.
+ */
+export function resolvePackage(packageAliases: Readonly<Record<string, string>>, specifier: string): { name: string; subpath: string } {
+  const { name, subpath } = splitPackageSpecifier(specifier);
+  return { name: Object.hasOwn(packageAliases, name) ? packageAliases[name]! : name, subpath };
+}
+
 function probe(fs: VirtualFileSystem, base: string): string | undefined {
   if (fs.isFile(base)) return base;
   for (const ext of RESOLVE_EXTENSIONS) if (fs.isFile(base + ext)) return base + ext;

@@ -6,7 +6,7 @@ import type { ComponentCompilers } from './components.js';
 import { componentExtension } from './components.js';
 import { loaderFor } from './transformer.js';
 import { basename, dirname, extname, join } from './paths.js';
-import { isBareSpecifier, resolveAlias, resolveLocal, splitPackageSpecifier } from './resolve.js';
+import { isBareSpecifier, resolveAlias, resolveLocal, resolvePackage } from './resolve.js';
 import { contentHash } from './hash.js';
 
 /**
@@ -110,7 +110,7 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
       if (isBareSpecifier(path)) {
         file = (css ? resolveLocal(fs, fromDir, `./${path}`) : undefined) ?? resolveAlias(fs, config.aliases, path);
         if (!file) {
-          const { name, subpath } = splitPackageSpecifier(path);
+          const { name, subpath } = resolvePackage(config.packageAliases, path);
           // A package stylesheet imported from JS (`import 'bootstrap/dist/css/bootstrap.css'`)
           // can't stay a JS import of a CSS URL; it joins the CSS bundle as an @import.
           if (!css && extname(subpath) === '.css') return { path: `/${PACKAGE_CSS}/${path}`, query: PACKAGE_CSS };
@@ -128,7 +128,7 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
       if (query === 'raw') return { contents: fs.readText(path) ?? '', loader: 'text' };
       if (query === COMPONENT_CSS) return { contents: componentCss.get(path) ?? '', loader: 'css' };
       if (query === PACKAGE_CSS) {
-        const { name, subpath } = splitPackageSpecifier(path.slice(PACKAGE_CSS.length + 2));
+        const { name, subpath } = resolvePackage(config.packageAliases, path.slice(PACKAGE_CSS.length + 2));
         return { contents: `@import ${JSON.stringify(cdn.urlFor(name, subpath))};`, loader: 'css' };
       }
 
