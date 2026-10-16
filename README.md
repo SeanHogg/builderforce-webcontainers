@@ -1,5 +1,7 @@
 # BuilderForce WebContainers
 
+> Part of [Builderforce open source](https://builderforce.ai/open-source): the MIT projects Builderforce.ai is built on.
+
 An open, forkable in-browser dev runtime. Hand it a project as files; it serves a
 live preview in an iframe, with TypeScript, JSX, CSS, JSON and npm packages working
 like they do under Vite, all running in the user's browser.
