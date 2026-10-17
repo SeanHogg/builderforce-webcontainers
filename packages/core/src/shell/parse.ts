@@ -1,243 +1,89 @@
 /**
  * The shell grammar, a practical subset of POSIX sh:
  *
- *   script   := list (('\n' | ';' | '&') list)*
- *   list     := pipeline (('&&' | '||') pipeline)*
- *   pipeline := ['!'] command ('|' command)*
- *   command  := (NAME=word)* word* redirect*
- *   redirect := ('>' | '>>' | '<' | '2>' | '2>>' | '&>') word | '2>&1' | '>&2'
+ *   script    := list (('\n' | ';' | '&') list)*
+ *   list      := pipeline (('&&' | '||') pipeline)*
+ *   pipeline  := ['!'] command ('|' command)*
+ *   command   := simple | compound redirect* | function
+ *   simple    := (NAME=word)* word* redirect*
+ *   compound  := if … then … [elif … then …]* [else …] fi
+ *              | while|until … do … done | for NAME [in word*] do … done
+ *              | case word in (pattern [| pattern]*) … ;; … esac
+ *              | '{' script '}' | '(' script ')'
+ *   function  := NAME '(' ')' compound | 'function' NAME ['(' ')'] compound
+ *   redirect  := ('>' | '>>' | '<' | '2>' | '2>>' | '&>') word | '2>&1' | '>&2' | ('<<' | '<<-') DELIM
  *
- * Words keep their quoting as segments, because expansion (variables, `$(…)`,
- * `~`, globs, field splitting) happens at run time and depends on it.
+ * Reserved words count only in command position and unquoted, as in sh, so
+ * `echo done` prints "done".
  */
+import type { AndOrList, CaseCommand, Command, CompoundCommand, ForCommand, IfCommand, LoopCommand, Pipeline, Redirect, RedirectOp, Script, Segment, SimpleCommand, Word } from './ast.js';
+import { ShellSyntaxError, tokenize, type Token } from './tokenize.js';
 
-export type Segment =
-  | { kind: 'text'; value: string; quoted: boolean }
-  | { kind: 'var'; name: string; quoted: boolean; op?: ':-' | '-' | ':=' | ':+'; arg?: Word }
-  | { kind: 'cmd'; source: string; quoted: boolean }
-  | { kind: 'tilde' };
-export type Word = Segment[];
-
-export type RedirectOp = '>' | '>>' | '<' | '2>' | '2>>' | '&>' | '2>&1' | '>&2';
-export interface Redirect {
-  op: RedirectOp;
-  target?: Word;
-}
-export interface Command {
-  assignments: Array<{ name: string; value: Word }>;
-  words: Word[];
-  redirects: Redirect[];
-}
-export interface Pipeline {
-  negate: boolean;
-  commands: Command[];
-}
-export interface AndOrList {
-  first: Pipeline;
-  rest: Array<{ op: '&&' | '||'; pipeline: Pipeline }>;
-  background: boolean;
-}
-export type Script = AndOrList[];
-
-type Token = { type: 'word'; word: Word; raw: string } | { type: 'op'; op: string };
-
-export class ShellSyntaxError extends Error {
-  /** The input ended inside a quote or after `|`/`&&`: an interactive shell asks for more. */
-  constructor(message: string, readonly incomplete = false) {
-    super(message);
-  }
-}
-
-const OPERATORS = ['2>&1', '>&2', '2>>', '&&', '||', '>>', '2>', '&>', '|', '&', ';', '>', '<', '\n'];
-const SPECIAL_VARS = /^[?$#@*!0-9]/;
-
-/** Find the `)` closing a `$(` at `start` (just after the paren), honouring quotes and nesting. */
-function matchParen(input: string, start: number): number {
-  let depth = 1;
-  for (let i = start; i < input.length; i++) {
-    const ch = input[i];
-    if (ch === '\\') i++;
-    else if (ch === "'") i = input.indexOf("'", i + 1) < 0 ? input.length : input.indexOf("'", i + 1);
-    else if (ch === '"') {
-      for (i++; i < input.length && input[i] !== '"'; i++) if (input[i] === '\\') i++;
-    } else if (ch === '(') depth++;
-    else if (ch === ')' && --depth === 0) return i;
-  }
-  throw new ShellSyntaxError('unexpected end of input: missing )', true);
-}
-
-/** Parse `$…` at `i` (pointing at `$`); returns the segment and the index after it. */
-function readDollar(input: string, i: number, quoted: boolean): [Segment, number] {
-  const next = input[i + 1];
-  if (next === '(') {
-    const end = matchParen(input, i + 2);
-    return [{ kind: 'cmd', source: input.slice(i + 2, end), quoted }, end + 1];
-  }
-  if (next === '{') {
-    const end = input.indexOf('}', i + 2);
-    if (end < 0) throw new ShellSyntaxError('unexpected end of input: missing }', true);
-    const body = input.slice(i + 2, end);
-    const m = /^([A-Za-z_][\w]*|[?$#@*!0-9])(?:(:-|-|:=|:\+)(.*))?$/s.exec(body);
-    if (!m) throw new ShellSyntaxError(`bad substitution: \${${body}}`);
-    const seg: Segment = { kind: 'var', name: m[1]!, quoted };
-    if (m[2]) {
-      seg.op = m[2] as ':-';
-      seg.arg = tokenizeWord(m[3] ?? '', quoted);
-    }
-    return [seg, end + 1];
-  }
-  if (next && SPECIAL_VARS.test(next)) return [{ kind: 'var', name: next, quoted }, i + 2];
-  const m = /^[A-Za-z_]\w*/.exec(input.slice(i + 1));
-  if (!m) return [{ kind: 'text', value: '$', quoted }, i + 1];
-  return [{ kind: 'var', name: m[0], quoted }, i + 1 + m[0].length];
-}
-
-/** Segments of a word body (used for `${x:-default}` arguments). */
-function tokenizeWord(text: string, quoted: boolean): Word {
-  const tokens = tokenize(text, true);
-  const word: Word = [];
-  for (const t of tokens) if (t.type === 'word') word.push(...t.word.map((s) => (s.kind === 'tilde' ? s : { ...s, quoted: quoted || ('quoted' in s && s.quoted) } as Segment)));
-  return word;
-}
-
-export function tokenize(input: string, wordOnly = false): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-  while (i < input.length) {
-    const ch = input[i]!;
-    if (ch === ' ' || ch === '\t' || ch === '\r') {
-      i++;
-      continue;
-    }
-    if (ch === '\\' && input[i + 1] === '\n') {
-      i += 2;
-      continue;
-    }
-    if (ch === '#') {
-      while (i < input.length && input[i] !== '\n') i++;
-      continue;
-    }
-    if (!wordOnly) {
-      const op = OPERATORS.find((o) => input.startsWith(o, i));
-      if (op) {
-        tokens.push({ type: 'op', op });
-        i += op.length;
-        continue;
-      }
-    }
-    // A word: runs until unquoted whitespace or an operator character.
-    const word: Word = [];
-    const start = i;
-    let text = '';
-    const flush = () => {
-      if (text) word.push({ kind: 'text', value: text, quoted: false });
-      text = '';
-    };
-    if (input[i] === '~' && (i + 1 >= input.length || /[\s/;|&<>]/.test(input[i + 1]!))) {
-      word.push({ kind: 'tilde' });
-      i++;
-    }
-    while (i < input.length) {
-      const c = input[i]!;
-      if (/[\s]/.test(c) && !wordOnly) break;
-      if (!wordOnly && /[;|&<>]/.test(c)) break;
-      if (c === '\\') {
-        text += input[i + 1] ?? '';
-        i += 2;
-      } else if (c === "'") {
-        const end = input.indexOf("'", i + 1);
-        if (end < 0) throw new ShellSyntaxError('unexpected end of input: unterminated quote', true);
-        flush();
-        word.push({ kind: 'text', value: input.slice(i + 1, end), quoted: true });
-        i = end + 1;
-      } else if (c === '"') {
-        flush();
-        i++;
-        let inner = '';
-        const pushInner = () => {
-          if (inner) word.push({ kind: 'text', value: inner, quoted: true });
-          inner = '';
-        };
-        let closed = false;
-        while (i < input.length) {
-          const d = input[i]!;
-          if (d === '"') {
-            closed = true;
-            i++;
-            break;
-          }
-          if (d === '\\' && /["\\$`\n]/.test(input[i + 1] ?? '')) {
-            inner += input[i + 1];
-            i += 2;
-          } else if (d === '$') {
-            pushInner();
-            const [seg, next] = readDollar(input, i, true);
-            word.push(seg);
-            i = next;
-          } else if (d === '`') {
-            pushInner();
-            const end = input.indexOf('`', i + 1);
-            if (end < 0) throw new ShellSyntaxError('unexpected end of input: unterminated `', true);
-            word.push({ kind: 'cmd', source: input.slice(i + 1, end), quoted: true });
-            i = end + 1;
-          } else {
-            inner += d;
-            i++;
-          }
-        }
-        if (!closed) throw new ShellSyntaxError('unexpected end of input: unterminated quote', true);
-        pushInner();
-        if (!word.length || word[word.length - 1]!.kind !== 'text') word.push({ kind: 'text', value: '', quoted: true });
-      } else if (c === '$') {
-        flush();
-        const [seg, next] = readDollar(input, i, false);
-        word.push(seg);
-        i = next;
-      } else if (c === '`') {
-        flush();
-        const end = input.indexOf('`', i + 1);
-        if (end < 0) throw new ShellSyntaxError('unexpected end of input: unterminated `', true);
-        word.push({ kind: 'cmd', source: input.slice(i + 1, end), quoted: false });
-        i = end + 1;
-      } else {
-        text += c;
-        i++;
-      }
-    }
-    flush();
-    tokens.push({ type: 'word', word, raw: input.slice(start, i) });
-  }
-  return tokens;
-}
+export type * from './ast.js';
+export { ShellSyntaxError, tokenize } from './tokenize.js';
 
 const ASSIGNMENT = /^([A-Za-z_]\w*)=/;
-const REDIRECTS = new Set(['>', '>>', '<', '2>', '2>>', '&>', '2>&1', '>&2']);
+const NAME = /^[A-Za-z_][\w-]*$/;
+const REDIRECTS = new Set(['>', '>>', '<', '2>', '2>>', '&>', '2>&1', '>&2', '<<', '<<-']);
+/** Words that end a nested list; never the start of a command. */
+const CLOSERS = new Set(['then', 'elif', 'else', 'fi', 'do', 'done', 'esac', '}']);
 
 export function parse(input: string): Script {
   const tokens = tokenize(input);
   let pos = 0;
-  const peek = () => tokens[pos];
+  const peek = (): Token | undefined => tokens[pos];
   const isOp = (op: string) => {
     const t = tokens[pos];
     return t?.type === 'op' && t.op === op;
   };
+  const isWord = (raw: string, at = pos) => {
+    const t = tokens[at];
+    return t?.type === 'word' && t.raw === raw;
+  };
+  const describe = (t: Token | undefined) => (!t ? 'end of input' : t.type === 'op' ? `\`${t.op.replace('\n', 'newline')}'` : t.type === 'word' ? `\`${t.raw}'` : 'here-document');
+  const fail = (t: Token | undefined): never => {
+    throw new ShellSyntaxError(t ? `syntax error near unexpected token ${describe(t)}` : 'unexpected end of input', !t);
+  };
+  const skipNewlines = () => {
+    while (isOp('\n')) pos++;
+  };
+  const skipSeparators = () => {
+    while (isOp('\n') || isOp(';')) pos++;
+  };
+  const expectWord = (raw: string) => {
+    skipSeparators();
+    if (!isWord(raw)) fail(peek());
+    pos++;
+  };
 
-  const command = (): Command => {
-    const cmd: Command = { assignments: [], words: [], redirects: [] };
+  const redirect = (cmd: { redirects: Redirect[] }): boolean => {
+    const t = peek();
+    if (t?.type !== 'op' || !REDIRECTS.has(t.op)) return false;
+    pos++;
+    if (t.op === '2>&1' || t.op === '>&2') {
+      cmd.redirects.push({ op: t.op });
+      return true;
+    }
+    const target = peek();
+    if (t.op === '<<' || t.op === '<<-') {
+      if (target?.type !== 'heredoc' || !target.body) fail(target);
+      pos++;
+      cmd.redirects.push({ op: t.op, heredoc: { body: (target as { body: Word }).body } });
+      return true;
+    }
+    if (target?.type !== 'word') fail(target);
+    pos++;
+    cmd.redirects.push({ op: t.op as RedirectOp, target: (target as { word: Word }).word });
+    return true;
+  };
+
+  const simple = (): SimpleCommand => {
+    const cmd: SimpleCommand = { type: 'simple', assignments: [], words: [], redirects: [] };
     for (;;) {
       const t = peek();
-      if (!t) break;
+      if (!t || t.type === 'heredoc') break;
       if (t.type === 'op') {
-        if (!REDIRECTS.has(t.op)) break;
-        pos++;
-        if (t.op === '2>&1' || t.op === '>&2') {
-          cmd.redirects.push({ op: t.op });
-          continue;
-        }
-        const target = peek();
-        if (target?.type !== 'word') throw new ShellSyntaxError(`syntax error near unexpected token \`${target?.type === 'op' ? target.op.replace('\n', 'newline') : 'newline'}'`);
-        pos++;
-        cmd.redirects.push({ op: t.op as RedirectOp, target: target.word });
+        if (!redirect(cmd)) break;
         continue;
       }
       pos++;
@@ -251,22 +97,183 @@ export function parse(input: string): Script {
     return cmd;
   };
 
+  /** A nested list, up to (not including) one of `stops`. */
+  const list = (stops: ReadonlySet<string>, stopOps: ReadonlySet<string> = new Set()): Script => {
+    const script: Script = [];
+    for (;;) {
+      skipSeparators();
+      const t = peek();
+      if (!t) fail(t);
+      if (t!.type === 'word' && stops.has(t!.raw)) return script;
+      if (t!.type === 'op' && stopOps.has(t!.op)) return script;
+      script.push(andOr());
+      if (isOp('&')) {
+        script[script.length - 1]!.background = true;
+        pos++;
+      }
+    }
+  };
+
+  const ifCommand = (): IfCommand => {
+    pos++; // if
+    const clauses: IfCommand['clauses'] = [];
+    let otherwise: Script | undefined;
+    const condition = list(new Set(['then']));
+    expectWord('then');
+    clauses.push({ condition, body: list(new Set(['elif', 'else', 'fi'])) });
+    for (;;) {
+      if (isWord('elif')) {
+        pos++;
+        const next = list(new Set(['then']));
+        expectWord('then');
+        clauses.push({ condition: next, body: list(new Set(['elif', 'else', 'fi'])) });
+      } else if (isWord('else')) {
+        pos++;
+        otherwise = list(new Set(['fi']));
+      } else break;
+    }
+    expectWord('fi');
+    return { type: 'if', clauses, otherwise, redirects: [] };
+  };
+
+  const doBody = (): Script => {
+    expectWord('do');
+    const body = list(new Set(['done']));
+    expectWord('done');
+    return body;
+  };
+
+  const loop = (type: 'while' | 'until'): LoopCommand => {
+    pos++;
+    const condition = list(new Set(['do']));
+    return { type, condition, body: doBody(), redirects: [] };
+  };
+
+  const forCommand = (): ForCommand => {
+    pos++; // for
+    const t = peek();
+    if (t?.type !== 'word' || !NAME.test(t.raw)) fail(t);
+    const name = (t as { raw: string }).raw;
+    pos++;
+    skipNewlines();
+    let items: Word[] | undefined;
+    if (isWord('in')) {
+      pos++;
+      items = [];
+      while (peek()?.type === 'word') items.push((tokens[pos++] as { word: Word }).word);
+    }
+    return { type: 'for', name, items, body: doBody(), redirects: [] };
+  };
+
+  const caseCommand = (): CaseCommand => {
+    pos++; // case
+    const subject = peek();
+    if (subject?.type !== 'word') fail(subject);
+    pos++;
+    skipNewlines();
+    if (!isWord('in')) fail(peek());
+    pos++;
+    const arms: CaseCommand['arms'] = [];
+    for (;;) {
+      skipSeparators();
+      if (isWord('esac')) break;
+      if (isOp('(')) pos++;
+      const patterns: Word[] = [];
+      for (;;) {
+        const p = peek();
+        if (p?.type !== 'word') fail(p);
+        patterns.push((p as { word: Word }).word);
+        pos++;
+        if (isOp('|')) pos++;
+        else break;
+      }
+      if (!isOp(')')) fail(peek());
+      pos++;
+      const body = list(new Set(['esac']), new Set([';;']));
+      arms.push({ patterns, body });
+      if (isOp(';;')) pos++;
+    }
+    pos++; // esac
+    return { type: 'case', subject: (subject as { word: Word }).word, arms, redirects: [] };
+  };
+
+  const compound = (): CompoundCommand | undefined => {
+    let node: CompoundCommand | undefined;
+    if (isWord('if')) node = ifCommand();
+    else if (isWord('while')) node = loop('while');
+    else if (isWord('until')) node = loop('until');
+    else if (isWord('for')) node = forCommand();
+    else if (isWord('case')) node = caseCommand();
+    else if (isWord('{')) {
+      pos++;
+      const body = list(new Set(['}']));
+      pos++;
+      node = { type: 'group', body, redirects: [] };
+    } else if (isOp('(')) {
+      pos++;
+      const body = list(new Set(), new Set([')']));
+      pos++;
+      node = { type: 'subshell', body, redirects: [] };
+    }
+    if (node) while (redirect(node));
+    return node;
+  };
+
+  const command = (): Command => {
+    const t = peek();
+    if (t?.type === 'word' && CLOSERS.has(t.raw)) fail(t);
+    const block = compound();
+    if (block) return block;
+    // function NAME [()] body  |  NAME () body
+    const named = isWord('function') ? 1 : 0;
+    const nameToken = tokens[pos + named];
+    if (nameToken?.type === 'word' && NAME.test(nameToken.raw)) {
+      const parens = tokens[pos + named + 1]?.type === 'op' && (tokens[pos + named + 1] as { op: string }).op === '(';
+      if (named || parens) {
+        pos += named + 1;
+        if (parens) {
+          pos++;
+          if (!isOp(')')) fail(peek());
+          pos++;
+        }
+        skipNewlines();
+        const body = compound();
+        if (!body) fail(peek());
+        return { type: 'function', name: nameToken.raw, body: body!, redirects: [] };
+      }
+    }
+    return simple();
+  };
+
   const pipeline = (): Pipeline => {
     let negate = false;
-    const t = peek();
-    if (t?.type === 'word' && t.raw === '!') {
+    if (isWord('!')) {
       negate = true;
       pos++;
     }
     const commands = [command()];
     while (isOp('|')) {
       pos++;
-      while (isOp('\n')) pos++;
+      skipNewlines();
       if (!peek()) throw new ShellSyntaxError('unexpected end of input after |', true);
       commands.push(command());
     }
-    for (const c of commands) if (!c.words.length && !c.assignments.length && !c.redirects.length) throw new ShellSyntaxError('syntax error near unexpected token `|\'');
+    for (const c of commands) if (c.type === 'simple' && !c.words.length && !c.assignments.length && !c.redirects.length) fail(peek() ?? { type: 'op', op: '|' });
     return { negate, commands };
+  };
+
+  const andOr = (): AndOrList => {
+    const t = peek()!;
+    if (t.type === 'op' && !REDIRECTS.has(t.op) && t.op !== '(') fail(t);
+    const result: AndOrList = { first: pipeline(), rest: [], background: false };
+    while (isOp('&&') || isOp('||')) {
+      const op = (tokens[pos] as { op: '&&' | '||' }).op;
+      pos++;
+      skipNewlines();
+      if (!peek()) throw new ShellSyntaxError(`unexpected end of input after ${op}`, true);
+      result.rest.push({ op, pipeline: pipeline() });
+    }
+    return result;
   };
 
   const script: Script = [];
@@ -275,21 +282,11 @@ export function parse(input: string): Script {
       pos++;
       continue;
     }
-    const t = peek()!;
-    if (t.type === 'op' && !REDIRECTS.has(t.op)) throw new ShellSyntaxError(`syntax error near unexpected token \`${t.op}'`);
-    const list: AndOrList = { first: pipeline(), rest: [], background: false };
-    while (isOp('&&') || isOp('||')) {
-      const op = (tokens[pos] as { op: '&&' | '||' }).op;
-      pos++;
-      while (isOp('\n')) pos++;
-      if (!peek()) throw new ShellSyntaxError(`unexpected end of input after ${op}`, true);
-      list.rest.push({ op, pipeline: pipeline() });
-    }
+    script.push(andOr());
     if (isOp('&')) {
-      list.background = true;
+      script[script.length - 1]!.background = true;
       pos++;
     }
-    script.push(list);
   }
   return script;
 }

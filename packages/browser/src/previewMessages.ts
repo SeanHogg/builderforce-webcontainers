@@ -30,6 +30,21 @@ export interface PreviewMessages {
 
 const LEVELS = new Set<string>(['log', 'info', 'warn', 'error', 'debug']);
 
+/**
+ * The preview page a window message came from, when it is one of THIS runtime's:
+ * sent from the preview origin, by a page under `base`. Undefined otherwise.
+ */
+export function previewPageOf(event: MessageEvent, origin: string, base: string): URL | undefined {
+  const href = (event.data as { href?: unknown } | null)?.href;
+  if (typeof href !== 'string' || event.origin !== origin) return undefined;
+  try {
+    const page = new URL(href);
+    return page.pathname.startsWith(base) ? page : undefined; // else: another runtime's preview
+  } catch {
+    return undefined;
+  }
+}
+
 function subscribe<T>(set: Set<(value: T) => void>, listener: (value: T) => void): () => void {
   set.add(listener);
   return () => set.delete(listener);
@@ -40,15 +55,8 @@ export function listenToPreview(target: Pick<Window, 'addEventListener' | 'remov
   const consoles = new Set<(message: PreviewConsoleMessage) => void>();
 
   const onMessage = (event: MessageEvent) => {
-    const data = event.data as { type?: unknown; href?: unknown; message?: unknown; stack?: unknown; level?: unknown; text?: unknown } | null;
-    if (!data || typeof data.href !== 'string' || event.origin !== origin) return;
-    let path: string;
-    try {
-      path = new URL(data.href).pathname;
-    } catch {
-      return;
-    }
-    if (!path.startsWith(base)) return; // another runtime's preview
+    if (!previewPageOf(event, origin, base)) return;
+    const data = event.data as { type?: unknown; href: string; message?: unknown; stack?: unknown; level?: unknown; text?: unknown };
     if (data.type === ERROR_MESSAGE_TYPE) {
       const error: PreviewError = { message: String(data.message ?? ''), stack: typeof data.stack === 'string' ? data.stack : undefined, href: data.href };
       for (const listener of errors) listener(error);

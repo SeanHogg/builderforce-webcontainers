@@ -51,24 +51,58 @@ export interface HttpRequestData {
   body: Uint8Array | null;
 }
 
-export interface HttpResponseData {
+export interface HttpResponseHead {
   status: number;
   statusText?: string;
   headers: Record<string, string | string[]>;
+}
+
+/** A whole response, body buffered (`Kernel.request`, tests). */
+export interface HttpResponseData extends HttpResponseHead {
   body: Uint8Array;
 }
 
-export type HttpHandler = (request: HttpRequestData) => Promise<HttpResponseData>;
+/**
+ * A response as the server produces it: the head as soon as it is written, then
+ * the body chunk by chunk (Server-Sent Events, chunked progress). Cancelling the
+ * body hangs up, which the server sees as the client closing the connection.
+ */
+export interface HttpStreamResponse extends HttpResponseHead {
+  body: ReadableStream<Uint8Array>;
+}
+
+export type HttpHandler = (request: HttpRequestData) => Promise<HttpStreamResponse>;
+
+/**
+ * One end of a raw byte pipe — an upgraded connection. The server end carries
+ * whatever the server writes (a WebSocket server writes its `101` reply and then
+ * frames), so packages like `ws` run their own framing over it unchanged.
+ */
+export interface ByteChannel {
+  send(data: Uint8Array): void;
+  /** Hang up; the other end hears `onClose`. */
+  close(): void;
+  onData(listener: (data: Uint8Array) => void): () => void;
+  /** The other end hung up. */
+  onClose(listener: () => void): () => void;
+  readonly closed: boolean;
+}
+
+/** Take over a connection a client asked to upgrade (`Upgrade: websocket`); `socket` is the server end. */
+export type UpgradeHandler = (request: HttpRequestData, socket: ByteChannel) => void;
 
 export interface System {
   fs: VirtualFileSystem;
   /** Outbound network (registry, `http.request`, `fetch`). */
   fetch(input: string, init?: RequestInit): Promise<Response>;
   spawn(command: string, args: string[], options?: ProcessOptions): ChildHandle;
-  /** Register a virtual server; throws `EADDRINUSE`. Port 0 picks a free one. Returns the port and an unlisten. */
-  listen(port: number, handler: HttpHandler): { port: number; close(): void };
-  /** Send a request to a virtual server in this runtime (`http.get('http://localhost:3000')`); undefined when nothing listens. */
-  loopback(port: number, request: HttpRequestData): Promise<HttpResponseData | undefined>;
+  /**
+   * Register a virtual server; throws `EADDRINUSE`. Port 0 picks a free one.
+   * `upgrade` takes over connections that ask to upgrade (WebSockets). Returns the port and an unlisten.
+   */
+  listen(port: number, handler: HttpHandler, upgrade?: UpgradeHandler): { port: number; close(): void };
+  /** Send a request to a virtual server in this runtime (`http.get('http://localhost:3000')`); undefined when nothing listens. The body streams. */
+  loopback(port: number, request: HttpRequestData): Promise<HttpStreamResponse | undefined>;
   /** Where a browser reaches a server on `port` (the preview URL), if known. */
   serverUrl(port: number): string | undefined;
   /** Tell the host a server is reachable without opening a port; used by the dev-server handoff. */

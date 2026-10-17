@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parse } from '../../src/shell/parse.js';
+import { parse, type SimpleCommand } from '../../src/shell/parse.js';
 import { exec, kernelWith, readAll } from '../node/helpers.js';
 import { fakeRegistry, REGISTRY } from '../installer/fakeRegistry.js';
 import type { Kernel } from '../../src/system/kernel.js';
@@ -12,8 +12,9 @@ describe('shell parser', () => {
     expect(script).toHaveLength(2);
     const [first, second] = script;
     expect(first!.first.commands).toHaveLength(2);
-    expect(first!.first.commands[0]!.assignments[0]!.name).toBe('A');
-    expect(first!.first.commands[1]!.redirects.map((r) => r.op)).toEqual(['>', '2>&1']);
+    const [echo, grep] = first!.first.commands as SimpleCommand[];
+    expect(echo!.assignments[0]!.name).toBe('A');
+    expect(grep!.redirects.map((r) => r.op)).toEqual(['>', '2>&1']);
     expect(first!.rest.map((r) => r.op)).toEqual(['&&', '||']);
     expect(second!.background).toBe(true);
     expect(() => parse('echo "open')).toThrow(/unterminated/);

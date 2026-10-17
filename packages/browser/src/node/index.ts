@@ -1,15 +1,16 @@
 /**
  * Glue between the preview runtime and the Node process host: options, the
  * default Worker, and answering `/__port/<n>/…` preview requests from the
- * virtual server listening on that port.
+ * virtual server listening on that port (portResponder.ts).
  */
-import { parsePortPath, type VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
-import type { WireRequest, WireResponse } from '../protocol.js';
+import type { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from './processHost.js';
 
 export { ProcessHost } from './processHost.js';
 export type { ProcessHostOptions, ProcessInfo, WorkerLike } from './processHost.js';
 export { createWorkerProcess } from './workerProcess.js';
+export { servePortRequest, createPortResponder, openPortResponse, injectBridge } from './portResponder.js';
+export type { PortResponder, PortResponderOptions, OpenedPortResponse } from './portResponder.js';
 
 export interface NodeRuntimeOptions {
   /**
@@ -46,24 +47,4 @@ export function createProcessHost(args: { fs: VirtualFileSystem; base: string; o
     env: options.env,
     killGraceMs: options.killGraceMs,
   });
-}
-
-const TEXT = { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' };
-
-/** Answer a preview request addressed to a virtual server. */
-export async function servePortRequest(host: ProcessHost, request: WireRequest): Promise<{ message: WireResponse; transfer: Transferable[] }> {
-  const target = parsePortPath(request.path)!;
-  const response = await host.request(target.port, {
-    method: request.method ?? 'GET',
-    url: target.path + request.search,
-    headers: request.headers ?? {},
-    body: request.body ? new Uint8Array(request.body) : null,
-  });
-  if (!response) {
-    return { message: { type: 'response', reqId: request.reqId, status: 502, headers: TEXT, body: `Nothing is listening on port ${target.port}. Start a server (node server.js) first.` }, transfer: [] };
-  }
-  const headers: Record<string, string> = {};
-  for (const [key, value] of Object.entries(response.headers)) headers[key] = Array.isArray(value) ? value.join(', ') : String(value);
-  const body = response.body.slice().buffer as ArrayBuffer;
-  return { message: { type: 'response', reqId: request.reqId, status: response.status, headers, body }, transfer: [body] };
 }

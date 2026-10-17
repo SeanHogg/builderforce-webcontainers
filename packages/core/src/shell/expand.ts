@@ -6,7 +6,7 @@
  */
 import type { VirtualFileSystem } from '../vfs.js';
 import { join, normalizePath } from '../paths.js';
-import type { Segment, Word } from './parse.js';
+import type { Segment, Word } from './ast.js';
 
 export interface ExpandContext {
   fs: VirtualFileSystem;
@@ -49,12 +49,14 @@ async function paramValue(seg: Extract<Segment, { kind: 'var' }>, ctx: ExpandCon
 
 const GLOB_CHARS = /[*?[]/;
 
-function globToRegExp(pattern: string): RegExp {
+/** A glob as a regular expression. `slash: true` lets `*`/`?` cross `/` (a `case` pattern, not a path). */
+export function patternToRegExp(pattern: string, options: { slash?: boolean } = {}): RegExp {
+  const any = options.slash ? '.' : '[^/]';
   let source = '';
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]!;
-    if (c === '*') source += '[^/]*';
-    else if (c === '?') source += '[^/]';
+    if (c === '*') source += `${any}*`;
+    else if (c === '?') source += any;
     else if (c === '[') {
       const end = pattern.indexOf(']', i + 1);
       if (end < 0) source += '\\[';
@@ -64,7 +66,7 @@ function globToRegExp(pattern: string): RegExp {
       }
     } else source += c.replace(/[.+^${}()|\\]/g, '\\$&');
   }
-  return new RegExp(`^${source}$`);
+  return new RegExp(`^${source}$`, 's');
 }
 
 export function glob(fs: VirtualFileSystem, cwd: string, pattern: string): string[] {
@@ -80,7 +82,7 @@ export function glob(fs: VirtualFileSystem, cwd: string, pattern: string): strin
         if (fs.exists(candidate.startsWith('/') ? candidate : join(cwd, candidate))) next.push(candidate);
         continue;
       }
-      const re = globToRegExp(part);
+      const re = patternToRegExp(part);
       for (const name of fs.readdir(normalizePath(dir))) {
         if (name.startsWith('.') && !part.startsWith('.')) continue;
         if (re.test(name)) next.push(base ? (base.endsWith('/') ? base + name : `${base}/${name}`) : name);

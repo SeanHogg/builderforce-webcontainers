@@ -7,7 +7,7 @@
  */
 import { VirtualFileSystem } from '../vfs.js';
 import type { PackageCache } from '../installer/registry.js';
-import type { ChildHandle, HttpRequestData, HttpResponseData, Program, ProcessOptions, System } from './types.js';
+import type { ByteChannel, ChildHandle, HttpRequestData, HttpResponseData, HttpStreamResponse, Program, ProcessOptions, System } from './types.js';
 import { PortRegistry } from './ports.js';
 import { ServerEvents } from './serverEvents.js';
 import { commandNotFound, resolveCommand } from './commands.js';
@@ -55,7 +55,7 @@ export class Kernel {
       fs: this.fs,
       fetch: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
       spawn: (command, args, spawnOptions) => this.spawnChild(command, args, spawnOptions),
-      listen: (port, handler) => this.ports.listen(port, handler),
+      listen: (port, handler, upgrade) => this.ports.listen(port, handler, upgrade),
       loopback: (port, request) => this.ports.request(port, request),
       serverUrl,
       announceServer: (port, url) => this.servers.announce({ port, url }),
@@ -82,8 +82,20 @@ export class Kernel {
     return runProgram({ program: resolved.program, args: resolved.args, system: this.system, cwd, env, terminal: options.terminal });
   }
 
-  /** Send an HTTP request to a virtual server (what the preview service worker does in the browser). */
+  /** Send an HTTP request to a virtual server (what the preview service worker does in the browser); resolves with the whole response. */
   request(port: number, request: Partial<HttpRequestData> & { url: string }): Promise<HttpResponseData | undefined> {
-    return this.ports.request(port, { method: 'GET', headers: {}, body: null, ...request });
+    return this.ports.requestBuffered(port, withDefaults(request));
+  }
+
+  /** {@link request}, resolving at the head with the body streaming (Server-Sent Events, chunked progress). */
+  requestStream(port: number, request: Partial<HttpRequestData> & { url: string }): Promise<HttpStreamResponse | undefined> {
+    return this.ports.request(port, withDefaults(request));
+  }
+
+  /** Open an upgraded connection (a WebSocket, via `connectWebSocket`); undefined when nothing on `port` takes upgrades. */
+  upgrade(port: number, request: Partial<HttpRequestData> & { url: string }): ByteChannel | undefined {
+    return this.ports.upgrade(port, withDefaults(request));
   }
 }
+
+const withDefaults = (request: Partial<HttpRequestData> & { url: string }): HttpRequestData => ({ method: 'GET', headers: {}, body: null, ...request });

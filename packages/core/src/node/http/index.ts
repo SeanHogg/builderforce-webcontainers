@@ -8,6 +8,7 @@ import { EventEmitterBase } from '../events.js';
 import { ClientRequest, createFetch, type ClientDeps } from './client.js';
 import { FakeSocket, IncomingMessage, OutgoingHeaders, Server, ServerResponse } from './server.js';
 import { METHODS, STATUS_CODES } from './status.js';
+import { textResponse } from '../../system/httpStream.js';
 
 export { createFetch };
 
@@ -74,7 +75,7 @@ export function createNetModule(deps: ClientDeps): Record<string, unknown> {
       const port = typeof first === 'object' && first ? Number((first as { port?: number }).port ?? 0) : Number(first ?? 0);
       if (callback) this.once('listening', callback);
       try {
-        this.reservation = deps.system.listen(port, async () => ({ status: 502, headers: { 'content-type': 'text/plain' }, body: new TextEncoder().encode('Not an HTTP server') }));
+        this.reservation = deps.system.listen(port, async () => textResponse(502, 'Not an HTTP server'));
       } catch (error) {
         queueMicrotask(() => this.emit('error', error));
         return this;

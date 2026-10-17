@@ -2,7 +2,7 @@
  * The command table: every program a process can be. Hosts start from
  * `defaultPrograms()` and may add or replace entries (a custom `git`, say).
  *
- * `npm`/`npx` live in the shell (they run scripts through it), so spawning them
+ * `npm`/`npx`/`pnpm`/`yarn` live in the shell (they run scripts through it), so spawning them
  * directly runs them through a one-shot shell; coreutils run standalone.
  */
 import type { Program } from './types.js';
@@ -25,6 +25,8 @@ export function defaultPrograms(): Record<string, Program> {
     bash: shellProgram,
     npm: viaShell('npm'),
     npx: viaShell('npx'),
+    pnpm: viaShell('pnpm'),
+    yarn: viaShell('yarn'),
   };
   for (const [name, command] of Object.entries(COREUTILS)) programs[name] = asProgram(command, name);
   return programs;

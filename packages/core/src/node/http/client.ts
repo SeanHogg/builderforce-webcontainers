@@ -3,12 +3,13 @@
  * the `fetch` global a program sees. Requests to localhost reach this runtime's
  * own virtual servers (`loopback`); everything else goes through the browser's
  * fetch, so CORS applies — a public API without CORS headers is unreachable
- * from a browser page, and no shim can change that.
+ * from a browser page, and no shim can change that. Response bodies stream:
+ * `res.on('data')` and `response.body` see chunks as the server writes them.
  */
 import { Buffer } from '../buffer.js';
 import type { EventLoop } from '../loop.js';
 import type { HttpRequestData, System } from '../../system/types.js';
-import { FakeSocket, IncomingMessage, OutgoingHeaders } from './server.js';
+import { FakeSocket, IncomingMessage, OutgoingHeaders } from './messages.js';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]']);
 /** Headers a browser refuses to let script set; dropping them beats a TypeError. */
@@ -70,7 +71,8 @@ export async function sendRequest(system: System, url: URL, request: HttpRequest
     const headers = new Headers();
     for (const [k, v] of Object.entries(reply.headers)) for (const item of Array.isArray(v) ? v : [v]) headers.append(k, String(item));
     const empty = reply.status === 204 || reply.status === 304 || request.method === 'HEAD';
-    return new Response(empty ? null : (reply.body as unknown as BodyInit), { status: reply.status, statusText: reply.statusText, headers });
+    if (empty) void reply.body.cancel().catch(() => undefined);
+    return new Response(empty ? null : reply.body, { status: reply.status, statusText: reply.statusText, headers });
   }
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(request.headers)) if (!FORBIDDEN.has(k.toLowerCase())) headers[k] = v;
@@ -92,7 +94,9 @@ export class ClientRequest extends OutgoingHeaders {
   private readonly options: RequestOptions;
 
   constructor(private readonly deps: ClientDeps, input: unknown, extra: unknown, callback: ((res: IncomingMessage) => void) | undefined, defaultProtocol: string) {
-    super({ decodeStrings: true });
+    // Not auto-destroyed on 'finish' (as in Node): the request body is done long before the
+    // response streams in, and destroy() aborts the request — which would cut that response off.
+    super({ decodeStrings: true, autoDestroy: false });
     if (typeof extra === 'function') [callback, extra] = [extra as typeof callback, undefined];
     this.options = toOptions(input, extra, defaultProtocol);
     this.method = this.options.method!;
@@ -131,6 +135,33 @@ export class ClientRequest extends OutgoingHeaders {
   setNoDelay(): void {}
   setSocketKeepAlive(): void {}
 
+  /** Push the body into `res` chunk by chunk; aborting the request hangs up on the server. */
+  private async streamBody(response: Response, res: IncomingMessage): Promise<void> {
+    const reader = response.body?.getReader();
+    if (reader) {
+      const stop = () => void reader.cancel().catch(() => undefined);
+      this.controller.signal.addEventListener('abort', stop);
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done || this.controller.signal.aborted) break;
+          this.deps.loop._run(() => res.push(Buffer.from(value.buffer as ArrayBuffer, value.byteOffset, value.byteLength)));
+        }
+      } catch (error) {
+        if (this.controller.signal.aborted) return;
+        this.deps.loop._run(() => {
+          res.aborted = true;
+          res.destroy(error as Error);
+        });
+        return;
+      } finally {
+        this.controller.signal.removeEventListener('abort', stop);
+      }
+    }
+    if (this.controller.signal.aborted) return;
+    this.deps.loop._run(() => res._complete());
+  }
+
   private async perform(): Promise<void> {
     const release = this.deps.loop.hold();
     try {
@@ -144,10 +175,11 @@ export class ClientRequest extends OutgoingHeaders {
       const res = new IncomingMessage(this.socket);
       res.statusCode = response.status;
       res.statusMessage = response.statusText;
-      res._fill(headersToRecord(response.headers), new Uint8Array(await response.arrayBuffer()));
+      res._setHeaders(headersToRecord(response.headers));
       this.deps.loop._run(() => {
         if (!this.emit('response', res)) res.resume();
       });
+      await this.streamBody(response, res);
     } catch (error) {
       if (!this.aborted) this.deps.loop._run(() => this.emit('error', error));
     } finally {
@@ -165,9 +197,40 @@ export function createFetch(deps: ClientDeps): typeof fetch {
       const url = new URL(request.url);
       if (!isLocalHost(url.hostname)) return await deps.system.fetch(url.href, init ?? (typeof input === 'object' && !(input instanceof URL) ? { method: request.method, headers: request.headers, body: request.body, signal: request.signal } : undefined));
       const body = request.method === 'GET' || request.method === 'HEAD' ? null : new Uint8Array(await request.arrayBuffer());
-      return await sendRequest(deps.system, url, { method: request.method, url: url.pathname + url.search, headers: headersToRecord(request.headers), body });
+      const response = await sendRequest(deps.system, url, { method: request.method, url: url.pathname + url.search, headers: headersToRecord(request.headers), body });
+      return holdWhileReading(response, () => deps.loop.hold());
     } finally {
       release();
     }
   };
+}
+
+/**
+ * A loopback body streams from a server that may live in another process, so
+ * nothing else keeps this one alive while the program awaits the next chunk:
+ * hold the loop for each pending read — and only then, so a body nobody reads
+ * does not keep the process running.
+ */
+function holdWhileReading(response: Response, hold: () => () => void): Response {
+  if (!response.body) return response;
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        const release = hold();
+        try {
+          const { value, done } = await reader.read();
+          if (done) controller.close();
+          else controller.enqueue(value);
+        } catch (error) {
+          controller.error(error);
+        } finally {
+          release();
+        }
+      },
+      cancel: (reason) => reader.cancel(reason),
+    },
+    { highWaterMark: 0 },
+  );
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }

@@ -9,6 +9,8 @@ import { VirtualFileSystem } from './vfs.js';
 import { join } from './paths.js';
 
 export interface ZipExportOptions {
+  /** Only these path prefixes (`node_modules`), relative to the root, no leading slash. Default: everything. */
+  include?: string[];
   /** Path prefixes left out (`node_modules`, `dist`), relative to the root, no leading slash. */
   exclude?: string[];
   /** 0 (store, fastest) to 9. Default 6. */
@@ -18,8 +20,8 @@ export interface ZipExportOptions {
 const encoder = new TextEncoder();
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
 
-function excluded(relative: string, exclude: string[]): boolean {
-  return exclude.some((prefix) => {
+function under(relative: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) => {
     const clean = prefix.replace(/^\/+|\/+$/g, '');
     return relative === clean || relative.startsWith(clean + '/');
   });
@@ -27,14 +29,16 @@ function excluded(relative: string, exclude: string[]): boolean {
 
 export function exportZip(fs: VirtualFileSystem, options: ZipExportOptions = {}): Uint8Array {
   const exclude = options.exclude ?? [];
+  const include = options.include;
+  const excluded = (relative: string) => (include !== undefined && !under(relative, include)) || under(relative, exclude);
   const entries: Zippable = {};
   for (const dir of fs.explicitDirectories()) {
     const relative = dir.slice(1);
-    if (!excluded(relative, exclude) && fs.readdir(dir).length === 0) entries[relative + '/'] = new Uint8Array(0);
+    if (!excluded(relative) && fs.readdir(dir).length === 0) entries[relative + '/'] = new Uint8Array(0);
   }
   for (const path of fs.list()) {
     const relative = path.slice(1);
-    if (excluded(relative, exclude)) continue;
+    if (excluded(relative)) continue;
     const contents = fs.readFile(path)!;
     entries[relative] = typeof contents === 'string' ? encoder.encode(contents) : contents;
   }

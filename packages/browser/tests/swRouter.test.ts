@@ -110,3 +110,61 @@ describe('virtual server routing', () => {
     expect(router.matchForClient(new URL('https://h.test/style.css'), 'other', 'https://h.test')).toBeNull();
   });
 });
+
+describe('streamed responses', () => {
+  /** A page that answers with a streaming head, then whatever the test pushes. */
+  function streamingPort() {
+    const sent: unknown[] = [];
+    const port: PortLike & { push(message: unknown): void; sent: unknown[] } = {
+      sent,
+      onmessage: null,
+      postMessage(message) {
+        sent.push(message);
+        if (!isWireRequest(message)) return;
+        queueMicrotask(() => port.onmessage?.({ data: { type: 'response', reqId: message.reqId, status: 200, headers: { 'content-type': 'text/event-stream' }, body: null, streaming: true } }));
+      },
+      push: (message) => port.onmessage?.({ data: message }),
+    };
+    return port;
+  }
+  const encode = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
+
+  it('answers with a ReadableStream fed by chunk messages until end', async () => {
+    const router = createSwRouter({ scopePath: '/', requestReattach() {}, timeoutMs: 20 });
+    const port = streamingPort();
+    router.attach('p1', port);
+    const res = await router.respond({ id: 'p1', path: '/__port/3000/events', search: '' }, { method: 'GET', headers: {}, body: null });
+    expect(res.status).toBe(200);
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    const reqId = (port.sent[0] as { reqId: number }).reqId;
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    // Long past the head timeout: an open stream is never timed out.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    port.push({ type: 'chunk', reqId, data: encode('data: 1') });
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: 1');
+    port.push({ type: 'chunk', reqId, data: encode('data: 2') });
+    port.push({ type: 'end', reqId });
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: 2');
+    expect((await reader.read()).done).toBe(true);
+  });
+
+  it('tells the page to hang up when the preview cancels the body', async () => {
+    const router = createSwRouter({ scopePath: '/', requestReattach() {} });
+    const port = streamingPort();
+    router.attach('p1', port);
+    const res = await router.respond({ id: 'p1', path: '/__port/3000/events', search: '' }, { method: 'GET', headers: {}, body: null });
+    const reqId = (port.sent[0] as { reqId: number }).reqId;
+    await (res.body as ReadableStream<Uint8Array>).cancel();
+    expect(port.sent[1]).toEqual({ type: 'cancel', reqId });
+  });
+
+  it('errors the stream when the page reports a broken body', async () => {
+    const router = createSwRouter({ scopePath: '/', requestReattach() {} });
+    const port = streamingPort();
+    router.attach('p1', port);
+    const res = await router.respond({ id: 'p1', path: '/__port/3000/', search: '' }, { method: 'GET', headers: {}, body: null });
+    const reqId = (port.sent[0] as { reqId: number }).reqId;
+    port.push({ type: 'end', reqId, error: 'The server process exited.' });
+    await expect((res.body as ReadableStream<Uint8Array>).getReader().read()).rejects.toThrow('The server process exited.');
+  });
+});

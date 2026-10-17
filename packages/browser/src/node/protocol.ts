@@ -2,8 +2,15 @@
  * Messages between the page (the process host, which owns the master file
  * system and the port table) and one process Worker. Everything is plain
  * structured-clone data; file contents travel as strings or bytes.
+ *
+ * HTTP responses stream in both directions with the same three messages: a
+ * `response-head`, `response-chunk`s as the server writes, a `response-end`.
+ * Worker → page they answer an `http-request` (ids the page allocated); page →
+ * worker they answer a `loopback` (ids the worker allocated). `request-cancel`
+ * goes the other way: the reader hung up. Upgraded connections (WebSockets)
+ * are opened by the page (`socket-open`) and carry raw bytes both ways.
  */
-import type { FileContent, HttpRequestData, HttpResponseData } from '@seanhogg/builderforce-webcontainers-core';
+import type { FileContent, HttpRequestData, HttpResponseHead } from '@seanhogg/builderforce-webcontainers-core';
 
 export type FsOp = { op: 'write'; path: string; content: FileContent } | { op: 'remove'; path: string } | { op: 'mkdir'; path: string };
 
@@ -28,6 +35,15 @@ export interface StartMessage {
   packageCache: boolean;
 }
 
+/** A streamed response, chunk by chunk; `head: null` means nothing listens on that port (loopback only). */
+export type ResponseMessage =
+  | { type: 'response-head'; reqId: number; head: HttpResponseHead | null }
+  | { type: 'response-chunk'; reqId: number; data: Uint8Array }
+  | { type: 'response-end'; reqId: number; error?: string };
+
+/** Raw bytes of an upgraded connection, either way; ids allocated by the page. */
+export type SocketMessage = { type: 'socket-data'; connId: number; data: Uint8Array } | { type: 'socket-close'; connId: number };
+
 /** page → worker */
 export type HostToWorker =
   | StartMessage
@@ -40,7 +56,10 @@ export type HostToWorker =
   | { type: 'child-exit'; childId: number; code: number }
   | { type: 'child-error'; childId: number; code: string; message: string }
   | { type: 'http-request'; reqId: number; port: number; request: HttpRequestData }
-  | { type: 'loopback-response'; reqId: number; response: HttpResponseData | null };
+  | { type: 'request-cancel'; reqId: number }
+  | { type: 'socket-open'; connId: number; port: number; request: HttpRequestData }
+  | ResponseMessage
+  | SocketMessage;
 
 /** worker → page */
 export type WorkerToHost =
@@ -53,9 +72,11 @@ export type WorkerToHost =
   | { type: 'child-resize'; childId: number; cols: number; rows: number }
   | { type: 'listen'; port: number }
   | { type: 'unlisten'; port: number }
-  | { type: 'http-response'; reqId: number; response: HttpResponseData }
   | { type: 'loopback'; reqId: number; port: number; request: HttpRequestData }
-  | { type: 'listening'; port: number; url: string };
+  | { type: 'request-cancel'; reqId: number }
+  | { type: 'listening'; port: number; url: string }
+  | ResponseMessage
+  | SocketMessage;
 
 /** The preview-relative URL a virtual server on `port` is reachable at. */
 export function portPath(previewBase: string, port: number): string {

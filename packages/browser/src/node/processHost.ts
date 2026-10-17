@@ -5,6 +5,10 @@
  * write reaches the page, then every other worker). Children a worker spawns
  * (the shell running `node`, `child_process`) are started here too, so every
  * process — however deep — can be killed by terminating its worker.
+ *
+ * Responses from a worker's servers stream through here chunk by chunk (see
+ * responseWire.ts), and upgraded connections (WebSockets) are relayed as raw
+ * bytes between the client end the caller holds and the server's worker.
  */
 import {
   DEFAULT_ENV,
@@ -12,17 +16,21 @@ import {
   ServerEvents,
   allocatePid,
   runArguments,
+  textResponse,
   toRuntimeProcess,
+  type ByteChannel,
   type ChildHandle,
   type FsChange,
   type HttpRequestData,
   type HttpResponseData,
+  type HttpStreamResponse,
   type ProcessOptions,
   type RuntimeProcess,
   type VirtualFileSystem,
 } from '@seanhogg/builderforce-webcontainers-core';
 import type { FsOp, HostToWorker, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
+import { ResponseReceiver, sendResponse } from './responseWire.js';
 
 /** The part of `Worker` the host uses — a real Worker, or an in-thread fake in tests. */
 export interface WorkerLike {
@@ -72,9 +80,16 @@ interface Proc {
   resolveExit(code: number): void;
   registrations: Map<number, { close(): void }>;
   children: Map<number, ChildHandle>;
-  pendingHttp: Map<number, (response: HttpResponseData) => void>;
+  /** Responses its servers are streaming back to requests forwarded here. */
+  responses: ResponseReceiver;
+  /** Its loopback requests being answered, by the worker's request id: cancel functions. */
+  loopbacks: Map<number, () => void>;
+  /** Upgraded connections to its servers: the page-side end of each, by connection id. */
+  sockets: Map<number, ByteChannel>;
   outbox: FsOp[];
 }
+
+const EXITED = 'The server process exited.';
 
 export class ProcessHost {
   readonly ports = new PortRegistry();
@@ -84,6 +99,7 @@ export class ProcessHost {
   private applyingFrom?: Proc;
   private flushScheduled = false;
   private nextReq = 1;
+  private nextConn = 1;
   private readonly unwatch: () => void;
   private readonly stopPorts: () => void;
 
@@ -128,7 +144,9 @@ export class ProcessHost {
       },
       registrations: new Map(),
       children: new Map(),
-      pendingHttp: new Map(),
+      responses: new ResponseReceiver(),
+      loopbacks: new Map(),
+      sockets: new Map(),
       outbox: [],
     };
     this.procs.add(proc);
@@ -173,9 +191,19 @@ export class ProcessHost {
     return [...this.procs].map((proc) => ({ ...proc.info, args: [...proc.info.args], ports: [...proc.registrations.keys()] }));
   }
 
-  /** Dispatch an HTTP request to the server on `port` (the preview service worker's `/__port/<port>/` path). */
+  /** Dispatch an HTTP request to the server on `port` and wait for the whole response. */
   request(port: number, request: HttpRequestData): Promise<HttpResponseData | undefined> {
+    return this.ports.requestBuffered(port, request);
+  }
+
+  /** Dispatch an HTTP request to the server on `port` (the preview's `/__port/<port>/` path); resolves at the head, the body streaming. */
+  requestStream(port: number, request: HttpRequestData): Promise<HttpStreamResponse | undefined> {
     return this.ports.request(port, request);
+  }
+
+  /** Open an upgraded connection (a WebSocket) to the server on `port`; returns the client end. */
+  upgrade(port: number, request: HttpRequestData): ByteChannel | undefined {
+    return this.ports.upgrade(port, request);
   }
 
   dispose(): void {
@@ -206,8 +234,11 @@ export class ProcessHost {
   private cleanup(proc: Proc): void {
     for (const registration of proc.registrations.values()) registration.close();
     proc.registrations.clear();
-    for (const respond of proc.pendingHttp.values()) respond({ status: 502, headers: { 'content-type': 'text/plain' }, body: new TextEncoder().encode('The server process exited.') });
-    proc.pendingHttp.clear();
+    proc.responses.abort(() => textResponse(502, EXITED), EXITED);
+    for (const cancel of [...proc.loopbacks.values()]) cancel();
+    proc.loopbacks.clear();
+    for (const socket of proc.sockets.values()) socket.close();
+    proc.sockets.clear();
     this.procs.delete(proc);
     queueMicrotask(() => proc.worker.terminate());
   }
@@ -287,7 +318,11 @@ export class ProcessHost {
         return proc.children.get(message.childId)?.resize?.(message.cols, message.rows);
       case 'listen': {
         try {
-          const registration = this.ports.listen(message.port, (request) => this.forward(proc, message.port, request));
+          const registration = this.ports.listen(
+            message.port,
+            (request) => this.forward(proc, message.port, request),
+            (request, socket) => this.forwardUpgrade(proc, message.port, request, socket),
+          );
           proc.registrations.set(message.port, registration);
         } catch (error) {
           for (const l of proc.stderr) l(`${(error as Error).message}\n`);
@@ -298,12 +333,23 @@ export class ProcessHost {
         proc.registrations.get(message.port)?.close();
         proc.registrations.delete(message.port);
         return;
-      case 'http-response':
-        proc.pendingHttp.get(message.reqId)?.(message.response);
-        proc.pendingHttp.delete(message.reqId);
+      case 'response-head':
+      case 'response-chunk':
+      case 'response-end':
+        return proc.responses.receive(message);
+      case 'loopback': {
+        const { reqId } = message;
+        const cancel = sendResponse((reply) => this.post(proc, reply), reqId, this.ports.request(message.port, message.request), () => proc.loopbacks.delete(reqId));
+        proc.loopbacks.set(reqId, cancel);
         return;
-      case 'loopback':
-        void this.ports.request(message.port, message.request).then((response) => this.post(proc, { type: 'loopback-response', reqId: message.reqId, response: response ?? null }));
+      }
+      case 'request-cancel':
+        return proc.loopbacks.get(message.reqId)?.();
+      case 'socket-data':
+        return proc.sockets.get(message.connId)?.send(message.data);
+      case 'socket-close':
+        proc.sockets.get(message.connId)?.close();
+        proc.sockets.delete(message.connId);
         return;
       case 'listening':
         this.servers.announce({ port: message.port, url: message.url });
@@ -311,11 +357,23 @@ export class ProcessHost {
     }
   }
 
-  private forward(proc: Proc, port: number, request: HttpRequestData): Promise<HttpResponseData> {
+  private async forward(proc: Proc, port: number, request: HttpRequestData): Promise<HttpStreamResponse> {
+    if (proc.exited) return textResponse(502, EXITED);
     const reqId = this.nextReq++;
-    return new Promise((resolve) => {
-      proc.pendingHttp.set(reqId, resolve);
-      this.post(proc, { type: 'http-request', reqId, port, request });
+    const response = proc.responses.expect(reqId, () => this.post(proc, { type: 'request-cancel', reqId }));
+    this.post(proc, { type: 'http-request', reqId, port, request });
+    return (await response) ?? textResponse(502, `Nothing is listening on port ${port}.`);
+  }
+
+  /** Relay an upgraded connection: `socket` is the server end; its bytes go to the worker, and the worker's come back. */
+  private forwardUpgrade(proc: Proc, port: number, request: HttpRequestData, socket: ByteChannel): void {
+    if (proc.exited) return socket.close();
+    const connId = this.nextConn++;
+    proc.sockets.set(connId, socket);
+    socket.onData((data) => this.post(proc, { type: 'socket-data', connId, data }));
+    socket.onClose(() => {
+      if (proc.sockets.delete(connId)) this.post(proc, { type: 'socket-close', connId });
     });
+    this.post(proc, { type: 'socket-open', connId, port, request });
   }
 }

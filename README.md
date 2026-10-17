@@ -153,6 +153,30 @@ and closing, for a host that lists running servers.
   `fetch('/api')`) from such a page are mapped back to its server. `localhost`
   requests between processes stay inside the runtime; anything else goes through
   the browser's `fetch`, so CORS applies.
+* **Streaming.** Responses stream: the head leaves on `writeHead` (or the first
+  write) and every `res.write()` reaches the preview as its own chunk, so
+  Server-Sent Events, long-polling and chunked progress arrive as they happen —
+  in the preview (the page relays the chunks to the service worker, which answers
+  with a `ReadableStream`), and over loopback (`http.get`, `fetch`). When the
+  preview stops reading (an `EventSource` closed, a page left), the server sees
+  `aborted`/`close` on the request. A browser may stop an idle service worker
+  under a very long-lived stream; `EventSource` reconnects by itself.
+* **WebSockets.** An `upgrade` listener on the server gets a socket over a raw
+  connection (`write`, `on('data')`, `end`, `destroy`, `setNoDelay`,
+  `setTimeout`, `remoteAddress`), so `ws` — and socket.io, which runs on it — do
+  their own handshake and framing unchanged. A service worker cannot intercept a
+  WebSocket, so every preview page gets a small `WebSocket` replacement: a URL
+  naming a virtual server (`ws://localhost:3000/…`, a relative URL, or
+  `ws://${location.host}/…` from a page that server served) is tunnelled over a
+  MessageChannel to the runtime's page (`parent`, else `opener`), which connects
+  to the server and relays text and binary frames, server pushes and close
+  codes. Any other URL gets the browser's own `WebSocket`. A preview opened in a
+  tab with no link back to the runtime's page cannot tunnel.
+* **Cookies.** A service worker cannot set `Set-Cookie`, so the runtime keeps a
+  jar per port (`runtime.cookies`): cookies a server sets are stored (`Path`,
+  `Max-Age`/`Expires`, deletion) and sent back on later requests and WebSocket
+  handshakes, in place of the browser's own. On pages a virtual server served,
+  `document.cookie` shows the non-`HttpOnly` ones and assignments go back to the jar.
 * **npm.** `npm install|i|ci|uninstall|run|start|test|ls|init` and `npx`, against
   registry.npmjs.org (`node: { registry }` changes it): semver resolution,
   npm-style hoisting, `.bin` links, `package-lock.json` v3 written and reused,
@@ -165,16 +189,25 @@ and closing, for a host that lists running servers.
   `react-scripts start`, hand off to the built-in preview: they print its URL,
   fire `onServerListening` and run until Ctrl-C. (Real Vite needs esbuild's native
   binary.)
+* **pnpm and yarn.** `pnpm install|add|remove|run|dlx|<script>` and
+  `yarn [install]|add|remove|run|dlx|<script>` drive the same installer and script
+  runner as npm (`-D`/`--dev` saves to devDependencies), so a README's commands
+  work as written. The tree is npm-style; `pnpm-lock.yaml` and `yarn.lock` are not read.
 * **Shell (`bfsh`).** Line editing, history, Tab completion, Ctrl-C/Ctrl-D; quotes,
-  `$VAR`, `$(…)`, globs, `&&`/`||`/`;`/`&`, pipes and redirects; `cd`, `ls -la`,
-  `cat`, `mkdir -p`, `rm -rf`, `cp -r`, `mv`, `grep`, `head`, `tail` and friends.
+  `$VAR`, `$(…)`, globs, `&&`/`||`/`;`/`&`, pipes and redirects; `if`/`elif`/`else`,
+  `while`/`until`, `for`, `case`, functions with `local` and `return`, `{ …; }` and
+  `( … )`, here-documents (`<<EOF`, `<<-EOF`, `<<'EOF'`), `test`/`[ … ]`, `read`,
+  `shift`, `break`/`continue`, `jobs` and `wait`; `cd`, `ls -la`, `cat`,
+  `mkdir -p`, `rm -rf`, `cp -r`, `mv`, `grep`, `head`, `tail` and friends.
   Unknown commands print `command not found`.
 
-Not supported yet (see the [ROADMAP](ROADMAP.md)): native addons, streaming
-responses and WebSockets, `execSync`/`spawnSync`, cookies set by a virtual server,
-and the Next.js/Nuxt dev servers. Outside the browser (tests, a CLI), the core's
-`Kernel` runs the same programs in-process:
-`new Kernel({ programs: defaultPrograms() }).run('npm', ['install'])`.
+Not supported yet (see the [ROADMAP](ROADMAP.md)): native addons,
+`execSync`/`spawnSync`, WebSocket clients inside Node programs (the `ws` client,
+Node's global `WebSocket`), and the Next.js/Nuxt dev servers. Outside the browser
+(tests, a CLI), the core's `Kernel` runs the same programs in-process:
+`new Kernel({ programs: defaultPrograms() }).run('npm', ['install'])`, with
+`kernel.requestStream()` for a streamed response and
+`connectWebSocket((req) => kernel.upgrade(3000, req), { path: '/' })` for a socket.
 
 ### Files, snapshots and the preview channel
 
@@ -198,8 +231,19 @@ runtime.reload();
 runtime.listProcesses(); // [{ pid, command: 'node', args: ['server.js'], cwd: '/', startedAt, ports: [3000] }]
 ```
 
-The zip is plain zip (any unzip tool opens it). The host decides where a
-snapshot lives (IndexedDB, OPFS, your server). Console forwarding stops after
+The zip is plain zip (any unzip tool opens it). To keep a snapshot across
+reloads, `createSnapshotStore()` holds them in IndexedDB, keeping the most
+recently used few and failing soft when storage is blocked:
+
+```ts
+const snapshots = createSnapshotStore({ maxEntries: 4 });
+const key = `${projectId}:${hash(packageJson)}`;
+const saved = await snapshots.load(key);
+if (saved) runtime.importZip(saved); // installed packages back in a moment
+else if ((await runtime.run('npm', ['install']).wait()) === 0) {
+  await snapshots.save(key, runtime.exportZip({ include: ['node_modules', 'package-lock.json'], level: 1 }));
+}
+``` Console forwarding stops after
 1,000 messages per page load, so a logging loop cannot flood the host.
 
 ### Isolating the preview (relay mode)

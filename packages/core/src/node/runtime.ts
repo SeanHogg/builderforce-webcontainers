@@ -57,8 +57,8 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
   // Servers die with the process: wrap listen so exit can close what is left open.
   const processSystem: System = {
     ...system,
-    listen(port, handler) {
-      const registration = system.listen(port, handler);
+    listen(port, handler, upgrade) {
+      const registration = system.listen(port, handler, upgrade);
       const tracked = {
         port: registration.port,
         close() {

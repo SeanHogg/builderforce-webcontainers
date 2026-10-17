@@ -5,11 +5,13 @@
  *   • CRA's `%PUBLIC_URL%` placeholder is filled;
  *   • a page with no module script (CRA) gets its entry injected;
  *   • the error bridge is prepended, so runtime errors and console output reach the host;
+ *   • the WebSocket bridge follows, so `new WebSocket('ws://localhost:3000')` reaches a virtual server;
  *   • the host's preview scripts run next, before the app;
  *   • the live-reload listener is prepended, so an edit re-renders the preview;
  *   • the attribution badge is appended unless the host turned it off.
  */
 import { injectAttribution } from './attribution.js';
+import { previewSocketScript } from './previewBridge.js';
 
 export const ERROR_MESSAGE_TYPE = 'bfwc:error';
 export const CONSOLE_MESSAGE_TYPE = 'bfwc:console';
@@ -81,8 +83,8 @@ export interface HtmlOptions {
   scripts?: readonly string[];
 }
 
-/** `</script>` inside a script body would end the tag early. */
-const scriptTag = (source: string) => `<script>${source.replace(/<\/script/gi, '<\\/script')}</script>`;
+/** A host script as a tag. `</script>` inside the body would end the tag early, so it is escaped. */
+export const scriptTag = (source: string): string => `<script>${source.replace(/<\/script/gi, '<\\/script')}</script>`;
 
 export function transformHtml(html: string, options: HtmlOptions): string {
   const { base } = options;
@@ -97,7 +99,7 @@ export function transformHtml(html: string, options: HtmlOptions): string {
   }
   if (options.attribution !== false) out = injectAttribution(out);
 
-  const bridge = [errorBridgeScript(), liveReloadScript(base), ...(options.scripts ?? []).map(scriptTag)].join('\n');
+  const bridge = [errorBridgeScript(), previewSocketScript(), liveReloadScript(base), ...(options.scripts ?? []).map(scriptTag)].join('\n');
   if (/<head[^>]*>/i.test(out)) return out.replace(/<head[^>]*>/i, (head) => `${head}\n${bridge}`);
   return bridge + out;
 }

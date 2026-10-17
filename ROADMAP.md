@@ -20,6 +20,8 @@ ships on its own.
 - 2026.10.2: live reload — editing any file reloads every frame showing the preview (`liveReload: false` turns it off); relay mode serves the preview from its own origin, isolated from the host's session (`relayUrl`).
 - 2026.10.6: the public API uses its own vocabulary, not another runtime's: `startPreviewRuntime`, `writeTree` (one `FileTree` shape: contents or a nested tree, flat paths allowed), `run()` returning a `RuntimeProcess` (`pid`, `combinedOutput`, `stdin`, `wait()`, `kill()`, `resizeTerminal()`), `onServerListening` / `onPortChange`, and the `bfsh` shell.
 - 2026.10.7: `fs.rename`, `fs.entries` (with kinds), `fs.watch(…, { under })`; `exportZip` / `importZip` (download a project, or snapshot and restore it with `node_modules`); `writeTree(files, at)`; `reload()`; `onPreviewConsole` and `previewScripts` / `setPreviewScripts`; `listProcesses()`; `.npmrc` scoped registries and auth tokens.
+- 2026.10.8: streaming HTTP — a virtual server's head leaves on `writeHead` and each `res.write()` reaches the preview (page → service worker `ReadableStream`) and loopback clients as its own chunk, so Server-Sent Events, long-polling and chunked progress arrive live, and a client hanging up is seen by the server; WebSockets — `upgrade` listeners get a socket over a raw connection, so `ws`/socket.io run their own framing, and preview pages get a `WebSocket` shim that tunnels virtual-server URLs over a MessageChannel to the host page; cookies from virtual servers — a per-port jar in the host stores `Set-Cookie` (Path, Max-Age/Expires, HttpOnly kept from script), sends it back on requests and handshakes, and mirrors `document.cookie` on pages those servers served.
+- 2026.10.8 (also): shell control flow — `if`/`while`/`until`/`for`/`case`, functions with `local`/`return`, groups and subshells, here-documents, `test`/`[`, `read`, `shift`, `break`/`continue`, `jobs`/`wait`; `pnpm` and `yarn` front ends; `createSnapshotStore()` keeps `exportZip` snapshots in IndexedDB across reloads; `exportZip({ include })`; virtual-server pages get the same error/console bridge and host scripts as dev-server pages.
 
 ## Shipped in 2026.10.3
 
@@ -89,9 +91,10 @@ ships on its own.
 
 Known limits of what shipped, roughly in the order they are worth closing:
 
-11. **Streaming HTTP.** Responses are buffered whole, so Server-Sent Events,
-   long-polling and chunked progress arrive at once; WebSockets (`ws`, socket.io)
-   have no transport. Needs a streamed MessagePort body and a WebSocket shim.
+11. **WebSocket clients in Node programs.** Servers take WebSockets (and the
+   preview connects to them); a Node program dialling one (`ws`'s client,
+   Node's global `WebSocket`, `http.request` with `Upgrade`) has no loopback
+   upgrade path yet.
 12. **ES module live bindings.** ESM is rewritten to the CommonJS wrapper;
    imported bindings are snapshots, so a cycle that reads a `const` before the
    other module finished initialising sees `undefined`. Dual packages load their
@@ -105,13 +108,11 @@ Known limits of what shipped, roughly in the order they are worth closing:
 15. **Next.js / Nuxt / SvelteKit dev servers.** Feasible in principle (they are
    Node HTTP servers), blocked today by: SWC/esbuild/lightningcss native binaries
    (need WASM builds wired as fallbacks), `worker_threads` (Next spawns workers),
-   streaming responses (11), and their size (hundreds of MB of `node_modules`
+   and their size (hundreds of MB of `node_modules`
    mirrored into each process worker). Real Vite is blocked by the same native
    esbuild/rollup binaries, which is why `vite` hands off to the built-in server.
-16. **Cookies from virtual servers.** A service worker cannot set `Set-Cookie`,
-   so session cookies issued by an Express app do not stick.
-17. **Shell gaps.** No functions, `if`/`for`/`while`, here-docs, subshell `( )`
-   or job control (`fg`, `bg`); `npx` installs only what has a `bin`.
+17. **Shell gaps.** No `fg`/`bg` (a background job cannot be brought back to
+   the terminal), no arithmetic `$(( ))`; `npx` installs only what has a `bin`.
 18. **Process start-up cost.** Each process receives a full snapshot of the file
    system; a shared, copy-on-read store (or OPFS) would make spawning O(1).
 

@@ -1,5 +1,6 @@
 import {
   DevServer,
+  PortCookieJars,
   VirtualFileSystem,
   buildProject,
   exportZip,
@@ -17,9 +18,10 @@ import {
   type Transformer,
   type ZipExportOptions,
 } from '@seanhogg/builderforce-webcontainers-core';
-import { PREVIEW_ID, isPortPath, isWireRequest, previewBase, type WireRequest, type WireResponse } from './protocol.js';
-import { createProcessHost, servePortRequest, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
+import { PREVIEW_ID, isPortPath, isWireCancel, isWireRequest, previewBase, type WireReply, type WireResponse } from './protocol.js';
+import { createPortResponder, createProcessHost, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
 import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from './previewMessages.js';
+import { listenToPreviewBridge } from './previewBridge.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
 import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
 import { createCdnComponentCompilers } from './componentCompilers.js';
@@ -119,6 +121,12 @@ export interface PreviewRuntime {
   onPortChange(listener: (change: PortChange) => void): () => void;
   /** Processes still running, with the ports their servers listen on. */
   listProcesses(): ProcessInfo[];
+  /**
+   * Cookies virtual servers set, per port. A service worker cannot set cookies,
+   * so the runtime keeps them and sends them back on later requests (and
+   * WebSocket handshakes); inspect or `clear()` them here.
+   */
+  readonly cookies: PortCookieJars;
   dispose(): void;
 }
 
@@ -153,10 +161,12 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const base = previewBase(transport.scope, id);
   const fs = new VirtualFileSystem();
   const components = options.components ?? createCdnComponentCompilers();
+  /** Run in every preview page: dev-server documents and pages virtual servers serve alike. */
+  let previewScripts: string[] = [...(options.previewScripts ?? [])];
   let server: DevServer;
   try {
     const transformer = options.transformer ?? (await createEsbuildWasmTransformer());
-    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, attribution: options.attribution, previewScripts: options.previewScripts });
+    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, attribution: options.attribution, previewScripts });
   } catch (error) {
     transport.dispose();
     throw error;
@@ -167,15 +177,22 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const node = { ...options.node, createWorker: options.node?.createWorker ?? transport.createWorker?.bind(transport) };
   const processes = createProcessHost({ fs, base, origin: transport.origin, previewUrl, options: node });
 
-  const answer = async (request: WireRequest) =>
-    isPortPath(request.path) ? servePortRequest(processes, request) : toWire(request.reqId, await server.handle(request.path, request.search));
+  const cookies = new PortCookieJars();
+  let responder: ReturnType<typeof createPortResponder> | undefined;
 
   const attach = () => {
     const channel = new MessageChannel();
+    const reply = (message: WireReply, transfer: Transferable[]) => channel.port1.postMessage(message, transfer);
+    // Virtual servers' responses stream (one responder per channel: request ids are per worker).
+    responder?.dispose();
+    const ports = (responder = createPortResponder(processes, { cookies, scripts: () => previewScripts }));
     channel.port1.onmessage = async (event) => {
+      if (isWireCancel(event.data)) return ports.cancel(event.data.reqId);
       if (!isWireRequest(event.data)) return;
-      const { message, transfer } = await answer(event.data);
-      channel.port1.postMessage(message, transfer);
+      const request = event.data;
+      if (isPortPath(request.path)) return ports.serve(request, reply);
+      const { message, transfer } = toWire(request.reqId, await server.handle(request.path, request.search));
+      reply(message, transfer);
     };
     transport.attach(id, channel.port2);
   };
@@ -194,6 +211,8 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     });
 
   const previewMessages = listenToPreview(window, transport.origin, base);
+  // WebSockets and document.cookie for virtual servers, which a service worker cannot carry.
+  const bridge = listenToPreviewBridge(window, transport.origin, base, { upgrade: (port, request) => processes.upgrade(port, request), cookies });
 
   return {
     id,
@@ -212,14 +231,18 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     onError: (listener) => previewMessages.onError(listener),
     onPreviewConsole: (listener) => previewMessages.onConsole(listener),
     setPreviewScripts(scripts) {
-      server.setPreviewScripts(scripts);
+      previewScripts = [...scripts];
+      server.setPreviewScripts(previewScripts);
       transport.reload(base);
     },
     run: (command: string, args?: string[] | ProcessOptions, runOptions?: ProcessOptions) => processes.run(command, args as string[], runOptions),
     onServerListening: (listener) => processes.servers.onListening(listener),
     onPortChange: (listener) => processes.servers.onPortChange(listener),
     listProcesses: () => processes.list(),
+    cookies,
     dispose() {
+      bridge.dispose();
+      responder?.dispose();
       processes.dispose();
       previewMessages.dispose();
       clearTimeout(reloadTimer);

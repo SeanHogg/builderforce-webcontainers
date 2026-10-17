@@ -74,6 +74,8 @@ worker.addEventListener('fetch', (event) => {
         details = { method: request.method, headers, body };
       }
       const r = await router.respond(target, details);
+      // A virtual server's body is a stream fed as the server writes (SSE, chunked progress).
+      if (NULL_BODY.has(r.status) && r.body instanceof ReadableStream) void r.body.cancel();
       return new Response(NULL_BODY.has(r.status) ? null : r.body, { status: r.status, headers: r.headers });
     })(),
   );

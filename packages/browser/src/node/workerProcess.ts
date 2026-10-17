@@ -1,25 +1,31 @@
 /**
  * The worker side of one process: mirror the file system, build a `System`
  * whose spawn/listen/loopback are relayed to the page, run the program, and
- * stream its output back. No worker globals in here — `post` and the message
+ * stream its output back. Its servers' responses stream to the page as they
+ * are written, and connections the page upgrades reach the server's `upgrade`
+ * handler as a byte pipe. No worker globals in here — `post` and the message
  * feed are injected — so the same code runs in a real Worker (worker.ts) and
  * in-thread in tests.
  */
 import {
   VirtualFileSystem,
   commandNotFound,
+  createChannelPair,
   defaultPrograms,
   resolveCommand,
   runProgram,
+  textResponse,
+  type ByteChannel,
   type ChildHandle,
   type FsChange,
   type HttpHandler,
-  type HttpResponseData,
   type PackageCache,
   type System,
+  type UpgradeHandler,
 } from '@seanhogg/builderforce-webcontainers-core';
 import type { FsOp, HostToWorker, StartMessage, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
+import { ResponseReceiver, sendResponse } from './responseWire.js';
 
 export interface WorkerProcessDeps {
   post(message: WorkerToHost): void;
@@ -35,10 +41,15 @@ const EPHEMERAL = 49152;
 
 export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message: HostToWorker): void } {
   const fs = new VirtualFileSystem();
-  const handlers = new Map<number, HttpHandler>();
+  const handlers = new Map<number, { handler: HttpHandler; upgrade?: UpgradeHandler }>();
   const knownPorts = new Set<number>();
   const children = new Map<number, { stdout: Set<(s: string) => void>; stderr: Set<(s: string) => void>; exit: (code: number) => void }>();
-  const loopbacks = new Map<number, (response: HttpResponseData | undefined) => void>();
+  /** Responses to this process's loopback requests, streaming in from the page. */
+  const loopbacks = new ResponseReceiver();
+  /** Responses this process's servers are streaming to the page, by the page's request id. */
+  const serving = new Map<number, () => void>();
+  /** Upgraded connections the page opened, by its connection id (our end of the pipe to the server). */
+  const sockets = new Map<number, ByteChannel>();
   let nextChild = 1;
   let nextReq = 1;
   let applying = false;
@@ -117,17 +128,18 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
         if (!resolveCommand(fs, programs, command, args, cwd, env)) throw commandNotFound(command);
         return remoteChild(command, args, { ...options, cwd, env });
       },
-      listen(port, handler) {
+      listen(port, handler, upgrade) {
         let actual = port;
         if (!actual) for (actual = EPHEMERAL + (message.pid % 1000) * 8; knownPorts.has(actual); actual++);
         if (knownPorts.has(actual)) throw Object.assign(new Error(`listen EADDRINUSE: address already in use :::${actual}`), { code: 'EADDRINUSE', errno: -98, syscall: 'listen', port: actual });
         knownPorts.add(actual);
-        handlers.set(actual, handler);
+        const entry = { handler, upgrade };
+        handlers.set(actual, entry);
         deps.post({ type: 'listen', port: actual });
         return {
           port: actual,
           close() {
-            if (handlers.get(actual) !== handler) return;
+            if (handlers.get(actual) !== entry) return;
             handlers.delete(actual);
             knownPorts.delete(actual);
             deps.post({ type: 'unlisten', port: actual });
@@ -136,12 +148,11 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
       },
       loopback(port, request) {
         const local = handlers.get(port);
-        if (local) return local(request);
+        if (local) return local.handler(request);
         const reqId = nextReq++;
-        return new Promise((resolve) => {
-          loopbacks.set(reqId, resolve);
-          deps.post({ type: 'loopback', reqId, port, request });
-        });
+        const response = loopbacks.expect(reqId, () => deps.post({ type: 'request-cancel', reqId }));
+        deps.post({ type: 'loopback', reqId, port, request });
+        return response;
       },
       serverUrl: (port) => new URL(portPath(message.previewBase, port), message.previewOrigin).href,
       announceServer: (port, url) => deps.post({ type: 'listening', port, url }),
@@ -201,17 +212,37 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
           return;
         }
         case 'http-request': {
-          const handler = handlers.get(message.port);
-          const respond = (response: HttpResponseData) => deps.post({ type: 'http-response', reqId: message.reqId, response });
-          if (!handler) return respond({ status: 502, headers: { 'content-type': 'text/plain' }, body: new TextEncoder().encode(`Nothing is listening on port ${message.port}.`) });
-          void handler(message.request).then(respond, (error: unknown) =>
-            respond({ status: 500, headers: { 'content-type': 'text/plain' }, body: new TextEncoder().encode(String(error instanceof Error ? error.stack : error)) }),
-          );
+          const { reqId } = message;
+          const entry = handlers.get(message.port);
+          const response = entry ? entry.handler(message.request) : Promise.resolve(textResponse(502, `Nothing is listening on port ${message.port}.`));
+          serving.set(reqId, sendResponse(deps.post, reqId, response, () => serving.delete(reqId)));
           return;
         }
-        case 'loopback-response':
-          loopbacks.get(message.reqId)?.(message.response ?? undefined);
-          loopbacks.delete(message.reqId);
+        case 'request-cancel':
+          return serving.get(message.reqId)?.();
+        case 'response-head':
+        case 'response-chunk':
+        case 'response-end':
+          return loopbacks.receive(message);
+        case 'socket-open': {
+          const { connId } = message;
+          const upgrade = handlers.get(message.port)?.upgrade;
+          if (!upgrade) return deps.post({ type: 'socket-close', connId });
+          const [ours, server] = createChannelPair();
+          sockets.set(connId, ours);
+          ours.onData((data) => deps.post({ type: 'socket-data', connId, data }));
+          ours.onClose(() => {
+            sockets.delete(connId);
+            deps.post({ type: 'socket-close', connId });
+          });
+          upgrade(message.request, server);
+          return;
+        }
+        case 'socket-data':
+          return sockets.get(message.connId)?.send(message.data);
+        case 'socket-close':
+          sockets.get(message.connId)?.close();
+          sockets.delete(message.connId);
           return;
       }
     },

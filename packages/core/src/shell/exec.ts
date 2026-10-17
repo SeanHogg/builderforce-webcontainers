@@ -1,18 +1,21 @@
 /**
  * The executor: runs a parsed script. Lists honour `&&`/`||`/`;`/`&`; pipeline
- * stages run concurrently, joined by in-memory pipes; redirects swap a stage's
- * stdin/stdout/stderr for files. Dispatch order per command: shell builtins,
+ * stages run concurrently, joined by in-memory pipes; redirects (here-documents
+ * included) swap a stage's stdin/stdout/stderr. Compound commands run through
+ * compound.ts. Dispatch order per simple command: shell functions, builtins,
  * extra in-process commands (npm, npx), the dev-server handoff, coreutils, and
  * finally `system.spawn` (node, scripts on PATH, `.bin` entries) — which in the
  * browser is a separate Web Worker.
  */
 import type { System } from '../system/types.js';
 import { InputQueue } from '../system/terminal.js';
-import { parse, ShellSyntaxError, type Command as CommandNode, type Pipeline, type Script } from './parse.js';
+import type { Command as CommandNode, FunctionDefinition, Pipeline, Redirect, Script, SimpleCommand, Word } from './ast.js';
+import { parse, ShellSyntaxError } from './parse.js';
 import { expandWord, expandWords, type ExpandContext } from './expand.js';
-import { BUILTINS, COREUTILS, type ShellState } from './builtins.js';
+import { BUILTINS, COREUTILS, type BackgroundJob, type ShellState } from './builtins.js';
 import { resolvePath, type CommandContext } from './context.js';
 import { matchDevServer, runDevServerHandoff } from './devHandoff.js';
+import { runCompound, type Flow, type ScriptRunner } from './compound.js';
 
 export interface ShellIO {
   stdout(text: string): void;
@@ -39,31 +42,44 @@ export interface ShellOptions {
   /** The terminal size, when attached to one. */
   terminalSize?: () => { cols: number; rows: number } | undefined;
   commands?: Record<string, ShellCommand>;
+  /** Functions inherited from a parent shell (subshells and `$(…)`). */
+  functions?: Map<string, FunctionDefinition>;
 }
 
 let nextShellPid = 500;
 
-export class Shell implements ShellState {
+export class Shell implements ShellState, ScriptRunner {
   cwd: string;
   env: Record<string, string>;
   lastStatus = 0;
   history: string[] = [];
   exitRequested?: number;
+  flow?: Flow;
+  positional: string[];
+  readonly functions: Map<string, FunctionDefinition>;
+  readonly jobs = new Map<number, BackgroundJob>();
+  /** One frame per running function: names declared `local`, with the value to restore. */
+  readonly localFrames: Array<Map<string, string | undefined>> = [];
   readonly pid = nextShellPid++;
   readonly system: System;
-  private readonly positional: string[];
+  private nextJob = 1;
   private current?: { io: ShellIO; input: JobInput; signal: AbortSignal };
 
   constructor(readonly options: ShellOptions) {
     this.system = options.system;
     this.cwd = options.cwd;
     this.env = { ...options.env, PWD: options.cwd };
-    this.positional = options.positional ?? [];
+    this.positional = [...(options.positional ?? [])];
+    this.functions = new Map(options.functions);
   }
 
-  /** A child shell for `npm run` / subshells: same IO, its own cwd and environment. */
+  /** A child shell for `npm run` / subshells: same IO, its own cwd, environment and functions. */
   fork(overrides: { cwd?: string; env?: Record<string, string>; positional?: string[] }): Shell {
-    return new Shell({ ...this.options, cwd: overrides.cwd ?? this.cwd, env: { ...this.env, ...overrides.env }, positional: overrides.positional });
+    return new Shell({ ...this.options, cwd: overrides.cwd ?? this.cwd, env: { ...this.env, ...overrides.env }, positional: overrides.positional ?? this.positional, functions: this.functions });
+  }
+
+  subshell(): Shell {
+    return this.fork({});
   }
 
   /** Parse and run `source`. Syntax errors print and return 2. */
@@ -80,23 +96,11 @@ export class Shell implements ShellState {
     const previous = this.current;
     this.current = { io, input, signal };
     try {
-      for (const list of script) {
-        if (this.exitRequested !== undefined || signal.aborted) break;
-        const run = async () => {
-          let status = await this.runPipeline(list.first, io, input, signal);
-          for (const { op, pipeline } of list.rest) {
-            if (this.exitRequested !== undefined || signal.aborted) break;
-            if ((op === '&&') === (status === 0)) status = await this.runPipeline(pipeline, io, input, signal);
-          }
-          return status;
-        };
-        if (list.background) {
-          void run();
-          this.lastStatus = 0;
-        } else this.lastStatus = await run();
-      }
+      await this.runScript(script, io, input, signal);
     } finally {
       this.current = previous;
+      // A `break`/`continue` outside any loop (or `return` outside a function) must not stop later lines.
+      if (!this.localFrames.length) this.flow = undefined;
     }
     if (signal.aborted && this.lastStatus === 0) this.lastStatus = 130;
     return this.exitRequested ?? this.lastStatus;
@@ -107,6 +111,40 @@ export class Shell implements ShellState {
     const job = this.current;
     if (!job) throw new Error('Shell.run outside a job');
     return this.exec(source, job.io, job.input, job.signal);
+  }
+
+  async runScript(script: Script, io: ShellIO, input: JobInput, signal: AbortSignal): Promise<number> {
+    for (const list of script) {
+      if (this.exitRequested !== undefined || signal.aborted || this.flow) break;
+      const run = async () => {
+        let status = await this.runPipeline(list.first, io, input, signal);
+        for (const { op, pipeline } of list.rest) {
+          if (this.exitRequested !== undefined || signal.aborted || this.flow) break;
+          if ((op === '&&') === (status === 0)) status = await this.runPipeline(pipeline, io, input, signal);
+        }
+        return status;
+      };
+      if (list.background) {
+        const id = this.nextJob++;
+        const done = run();
+        this.jobs.set(id, { id, done });
+        void done.finally(() => this.jobs.delete(id));
+        this.lastStatus = 0;
+      } else this.lastStatus = await run();
+    }
+    return this.lastStatus;
+  }
+
+  expandWords(words: Word[], io: ShellIO, signal: AbortSignal): Promise<string[]> {
+    return expandWords(words, this.expandContext(io, signal));
+  }
+
+  async expandText(word: Word, io: ShellIO, signal: AbortSignal): Promise<string> {
+    return (await expandWord(word, this.expandContext(io, signal), { split: false, glob: false })).join('');
+  }
+
+  setVar(name: string, value: string): void {
+    this.env[name] = value;
   }
 
   private expandContext(io: ShellIO, signal: AbortSignal): ExpandContext {
@@ -147,6 +185,21 @@ export class Shell implements ShellState {
   }
 
   private async runCommand(node: CommandNode, io: ShellIO, input: JobInput, signal: AbortSignal, alone: boolean): Promise<number> {
+    if (node.type === 'function') {
+      this.functions.set(node.name, node);
+      return 0;
+    }
+    if (node.type === 'simple') return this.runSimple(node, io, input, signal, alone);
+    const redirected = await this.applyRedirects(node.redirects, io, input, signal);
+    if (typeof redirected === 'number') return redirected;
+    try {
+      return await runCompound(node, this, redirected.io, redirected.input, signal);
+    } finally {
+      redirected.flush();
+    }
+  }
+
+  private async runSimple(node: SimpleCommand, io: ShellIO, input: JobInput, signal: AbortSignal, alone: boolean): Promise<number> {
     const ectx = this.expandContext(io, signal);
     const argv = await expandWords(node.words, ectx);
     const assigned: Record<string, string> = {};
@@ -155,14 +208,27 @@ export class Shell implements ShellState {
       Object.assign(this.env, assigned);
       return 0;
     }
+    const redirected = await this.applyRedirects(node.redirects, io, input, signal);
+    if (typeof redirected === 'number') return redirected;
+    try {
+      return await this.dispatch(argv, assigned, redirected.io, redirected.input, signal, alone && redirected.io.isTerminal);
+    } finally {
+      redirected.flush();
+    }
+  }
 
-    // Redirects.
-    let stdout = io.stdout;
-    let stderr = io.stderr;
+  /** Apply redirects; returns the new IO, or an exit status when a redirect fails. */
+  private async applyRedirects(redirects: Redirect[], io: ShellIO, input: JobInput, signal: AbortSignal): Promise<number | { io: ShellIO; input: JobInput; flush(): void }> {
+    let { stdout, stderr, isTerminal } = io;
     let stdin = input;
-    let isTerminal = io.isTerminal;
     const flushes: Array<() => void> = [];
-    for (const redirect of node.redirects) {
+    const fromText = (text: string): JobInput => {
+      const queue = new InputQueue();
+      queue.push(text);
+      queue.push(null);
+      return { queue };
+    };
+    for (const redirect of redirects) {
       if (redirect.op === '2>&1') {
         stderr = stdout;
         continue;
@@ -171,7 +237,12 @@ export class Shell implements ShellState {
         stdout = stderr;
         continue;
       }
-      const target = (await expandWord(redirect.target!, ectx)).join(' ');
+      if (redirect.heredoc) {
+        const text = await this.expandText(redirect.heredoc.body, io, signal);
+        stdin = fromText(text);
+        continue;
+      }
+      const target = (await expandWord(redirect.target!, this.expandContext(io, signal))).join(' ');
       const path = resolvePath(this, target);
       if (redirect.op === '<') {
         const text = this.system.fs.readText(path);
@@ -179,10 +250,7 @@ export class Shell implements ShellState {
           io.stderr(`bfsh: ${target}: No such file or directory\n`);
           return 1;
         }
-        const queue = new InputQueue();
-        queue.push(text);
-        queue.push(null);
-        stdin = { queue };
+        stdin = fromText(text);
         continue;
       }
       if (this.system.fs.isDirectory(path)) {
@@ -201,16 +269,13 @@ export class Shell implements ShellState {
         isTerminal = false;
       }
     }
-
-    try {
-      return await this.dispatch(argv, assigned, { stdout, stderr, isTerminal }, stdin, signal, alone && isTerminal);
-    } finally {
-      for (const flush of flushes) flush();
-    }
+    return { io: { stdout, stderr, isTerminal }, input: stdin, flush: () => flushes.forEach((flush) => flush()) };
   }
 
   private async dispatch(argv: string[], assigned: Record<string, string>, io: ShellIO, input: JobInput, signal: AbortSignal, attachTerminal: boolean): Promise<number> {
     const [name, ...args] = argv as [string, ...string[]];
+    const fn = this.functions.get(name);
+    if (fn) return this.callFunction(fn, args, io, input, signal);
     const env = { ...this.env, ...assigned };
     const ctx: CommandContext = {
       args,
@@ -231,6 +296,29 @@ export class Shell implements ShellState {
     const coreutil = COREUTILS[name];
     if (coreutil) return coreutil(ctx);
     return this.spawnExternal(name, args, env, io, input, signal, attachTerminal);
+  }
+
+  /** A shell function: its own positional parameters and `local` frame; `return` ends it. */
+  private async callFunction(fn: FunctionDefinition, args: string[], io: ShellIO, input: JobInput, signal: AbortSignal): Promise<number> {
+    const savedPositional = this.positional;
+    this.positional = args;
+    const frame = new Map<string, string | undefined>();
+    this.localFrames.push(frame);
+    try {
+      let status = await runCompound(fn.body, this, io, input, signal);
+      if (this.flow?.kind === 'return') {
+        status = this.flow.status;
+        this.flow = undefined;
+      }
+      return status;
+    } finally {
+      this.localFrames.pop();
+      for (const [name, value] of frame) {
+        if (value === undefined) delete this.env[name];
+        else this.env[name] = value;
+      }
+      this.positional = savedPositional;
+    }
   }
 
   private async spawnExternal(name: string, args: string[], env: Record<string, string>, io: ShellIO, input: JobInput, signal: AbortSignal, attachTerminal: boolean): Promise<number> {

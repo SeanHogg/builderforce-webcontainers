@@ -14,9 +14,10 @@ import { Shell, type JobInput, type ShellCommand, type ShellIO } from './exec.js
 import { LineEditor } from './lineEditor.js';
 import { BUILTINS, COREUTILS, SYSTEM_PROGRAMS } from './builtins.js';
 import { npmCommand, npxCommand } from './npm.js';
+import { pnpmCommand, yarnCommand } from './packageManagers.js';
 import { glob } from './expand.js';
 
-export const SHELL_COMMANDS: Record<string, ShellCommand> = { npm: npmCommand, npx: npxCommand };
+export const SHELL_COMMANDS: Record<string, ShellCommand> = { npm: npmCommand, npx: npxCommand, pnpm: pnpmCommand, yarn: yarnCommand };
 
 function createShell(ctx: ProgramContext, positional: string[] = []): Shell {
   return new Shell({

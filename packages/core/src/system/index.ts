@@ -1,7 +1,30 @@
 export { Kernel, DEFAULT_ENV } from './kernel.js';
 export type { KernelOptions } from './kernel.js';
-export type { System, Program, ProgramContext, ProgramIO, TerminalPort, ProcessOptions, ChildHandle, HttpRequestData, HttpResponseData, HttpHandler } from './types.js';
+export type {
+  System,
+  Program,
+  ProgramContext,
+  ProgramIO,
+  TerminalPort,
+  ProcessOptions,
+  ChildHandle,
+  HttpRequestData,
+  HttpResponseHead,
+  HttpResponseData,
+  HttpStreamResponse,
+  HttpHandler,
+  ByteChannel,
+  UpgradeHandler,
+} from './types.js';
 export { PortRegistry, parsePortPath } from './ports.js';
+export { pushStream, bytesStream, textResponse, readBody, bufferResponse, headOf, drainBody, createChannelPair } from './httpStream.js';
+export type { PushStream } from './httpStream.js';
+export { connectWebSocket } from './webSocketClient.js';
+export type { WebSocketConnection, WebSocketConnectOptions, WebSocketCloseInfo } from './webSocketClient.js';
+export { FrameDecoder, Opcode, encodeFrame, encodeClosePayload, decodeClosePayload, webSocketAccept, webSocketKey, WEBSOCKET_GUID } from './webSocketFrames.js';
+export type { WebSocketFrame } from './webSocketFrames.js';
+export { CookieJar, PortCookieJars, parseSetCookie, defaultCookiePath, cookiePathMatches } from './cookieJar.js';
+export type { StoredCookie } from './cookieJar.js';
 export type { PortEvent } from './ports.js';
 export { runProgram, runArguments, toRuntimeProcess, allocatePid } from './process.js';
 export type { RuntimeProcess, RunProgramOptions } from './process.js';

@@ -1,4 +1,4 @@
-import { PREVIEW_ID, isPortPath, isWireResponse, previewPrefix, type WireResponse } from './protocol.js';
+import { PREVIEW_ID, isPortPath, isWireReply, previewPrefix, type WireCancel, type WireResponse } from './protocol.js';
 
 /** The part of MessagePort the router uses — a fake in tests, a real port in the worker. */
 export interface PortLike {
@@ -22,7 +22,8 @@ export interface RequestDetails {
 export interface RoutedResponse {
   status: number;
   headers: Record<string, string>;
-  body: string | ArrayBuffer;
+  /** A stream when the page streams the body (a virtual server's response): chunks arrive as the server writes them. */
+  body: string | ArrayBuffer | ReadableStream<Uint8Array> | null;
 }
 
 export interface SwRouterOptions {
@@ -46,6 +47,12 @@ const TEXT = { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no
  * router asks open pages to re-attach and waits briefly. A port that stops
  * answering (its tab closed) is dropped on timeout, so the NEXT request goes
  * through the re-attach path instead of timing out forever.
+ *
+ * A virtual server's response streams: the page sends the head (`streaming`),
+ * then `chunk` messages and an `end`, and the router answers the fetch with a
+ * ReadableStream fed by them. The timeout covers only the wait for the head (an
+ * event stream may stay open indefinitely); cancelling the stream (the preview
+ * closed its EventSource) tells the page to hang up on the server.
  */
 export function createSwRouter(options: SwRouterOptions) {
   const prefix = previewPrefix(options.scopePath);
@@ -54,14 +61,29 @@ export function createSwRouter(options: SwRouterOptions) {
   const ports = new Map<string, PortLike>();
   const waiters = new Map<string, Array<(port: PortLike) => void>>();
   const pending = new Map<number, (response: WireResponse) => void>();
+  const streams = new Map<number, ReadableStreamDefaultController<Uint8Array>>();
   let nextId = 0;
 
   function attach(id: string, port: PortLike): void {
     ports.set(id, port);
     port.onmessage = (event) => {
-      if (!isWireResponse(event.data)) return;
-      pending.get(event.data.reqId)?.(event.data);
-      pending.delete(event.data.reqId);
+      const reply = event.data;
+      if (!isWireReply(reply)) return;
+      if (reply.type === 'response') {
+        pending.get(reply.reqId)?.(reply);
+        pending.delete(reply.reqId);
+        return;
+      }
+      const controller = streams.get(reply.reqId);
+      if (!controller) return;
+      try {
+        if (reply.type === 'chunk') return controller.enqueue(new Uint8Array(reply.data));
+        streams.delete(reply.reqId);
+        if (reply.error) controller.error(new Error(reply.error));
+        else controller.close();
+      } catch {
+        streams.delete(reply.reqId); // the reader already went away
+      }
     };
     for (const wake of waiters.get(id) ?? []) wake(port);
     waiters.delete(id);
@@ -125,7 +147,14 @@ export function createSwRouter(options: SwRouterOptions) {
       }, timeoutMs);
       pending.set(reqId, (response) => {
         clearTimeout(timer);
-        resolve({ status: response.status, headers: response.headers, body: response.body });
+        if (!response.streaming) return resolve({ status: response.status, headers: response.headers, body: response.body });
+        const body = new ReadableStream<Uint8Array>({
+          start: (controller) => void streams.set(reqId, controller),
+          cancel: () => {
+            if (streams.delete(reqId)) port.postMessage({ type: 'cancel', reqId } satisfies WireCancel);
+          },
+        });
+        resolve({ status: response.status, headers: response.headers, body });
       });
       port.postMessage({ type: 'request', reqId, path: target.path, search: target.search, ...details });
     });

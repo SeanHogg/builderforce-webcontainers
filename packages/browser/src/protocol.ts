@@ -66,8 +66,32 @@ export interface WireResponse {
   reqId: number;
   status: number;
   headers: Record<string, string>;
-  body: string | ArrayBuffer;
+  /** The whole body — or, with `streaming`, null: the body follows as `chunk` messages until `end`. */
+  body: string | ArrayBuffer | null;
+  streaming?: boolean;
 }
+
+/** page → worker: the next piece of a streaming response's body. */
+export interface WireChunk {
+  type: 'chunk';
+  reqId: number;
+  data: ArrayBuffer;
+}
+
+/** page → worker: a streaming response is complete (`error`: it broke off, e.g. the server process exited). */
+export interface WireEnd {
+  type: 'end';
+  reqId: number;
+  error?: string;
+}
+
+/** worker → page: the preview stopped reading a streaming response (closed an EventSource, navigated away). */
+export interface WireCancel {
+  type: 'cancel';
+  reqId: number;
+}
+
+export type WireReply = WireResponse | WireChunk | WireEnd;
 
 /**
  * The URL prefix previews live under, for a worker scope. Serving the worker from
@@ -91,4 +115,14 @@ export function isWireRequest(value: unknown): value is WireRequest {
 export function isWireResponse(value: unknown): value is WireResponse {
   const v = value as WireResponse | null;
   return !!v && v.type === 'response' && typeof v.reqId === 'number';
+}
+
+export function isWireReply(value: unknown): value is WireReply {
+  const v = value as WireReply | null;
+  return !!v && (v.type === 'response' || v.type === 'chunk' || v.type === 'end') && typeof v.reqId === 'number';
+}
+
+export function isWireCancel(value: unknown): value is WireCancel {
+  const v = value as WireCancel | null;
+  return !!v && v.type === 'cancel' && typeof v.reqId === 'number';
 }
