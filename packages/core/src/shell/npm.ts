@@ -13,7 +13,7 @@ import { binDirectories, findExecutable } from '../system/commands.js';
 import { findPackageScope } from '../node/resolve.js';
 import { parseFlags, type CommandContext } from './context.js';
 import type { JobInput, Shell } from './exec.js';
-import { matchDevServer } from './devHandoff.js';
+import { devServerHandoff } from './devHandoff.js';
 
 export const NPM_VERSION = '10.8.2';
 
@@ -213,7 +213,7 @@ export async function npxCommand(ctx: CommandContext, shell: Shell, input: JobIn
   }
   const binName = bin.replace(/^@[^/]+\//, '').replace(/@[^@]*$/, '');
   const io = { stdout: ctx.io.stdout, stderr: ctx.io.stderr, isTerminal: ctx.io.isTerminal };
-  if (matchDevServer([binName, ...rest])) return shell.fork({}).exec([binName, ...rest].map(quote).join(' '), io, input, ctx.signal);
+  if (devServerHandoff(ctx, [binName, ...rest])) return shell.fork({}).exec([binName, ...rest].map(quote).join(' '), io, input, ctx.signal);
   let found = findExecutable(ctx.fs, binName, ctx.cwd, { PATH: '' });
   if (!found) {
     // Not installed locally: install into a scratch project, as npx does.

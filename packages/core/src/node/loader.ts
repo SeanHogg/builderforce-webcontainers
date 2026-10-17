@@ -37,8 +37,6 @@ export interface NodeModule {
   __tla?: Promise<unknown>;
 }
 
-const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as FunctionConstructor;
-
 function stripShebang(source: string): string {
   const text = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source;
   return text.startsWith('#!') ? '//' + text.slice(2) : text;
@@ -160,28 +158,41 @@ export function createModuleSystem(options: LoaderOptions) {
     _compile(content: string, filename: string, esm = false): unknown {
       const require = makeRequire(this);
       const dir = dirname(filename);
-      const names = ['exports', 'require', 'module', '__filename', '__dirname', ...globalNames];
-      const values: unknown[] = [this.exports, require, this, filename, dir, ...globalValues];
+      const cjsNames = ['exports', 'require', 'module', '__filename', '__dirname'];
+      const cjsValues: unknown[] = [this.exports, require, this, filename, dir];
       let source = content;
+      let helperNames: string[] = [];
+      let helperValues: unknown[] = [];
       if (esm) {
-        names.push('__bfwc_import', '__bfwc_dynamic', '__bfwc_meta', '__bfwc_esm', '__bfwc_star', '__bfwc_get');
-        values.push(...esmHelpers(this, filename));
+        helperNames = ['__bfwc_exports', '__bfwc_import', '__bfwc_dynamic', '__bfwc_meta', '__bfwc_esm', '__bfwc_star', '__bfwc_get'];
+        helperValues = [this.exports, ...esmHelpers(this, filename)];
       } else if ((source = rewriteDynamicImports(content)) !== content) {
-        names.push('__bfwc_dynamic');
-        values.push(esmHelpers(this, filename)[1]);
+        helperNames = ['__bfwc_dynamic'];
+        helperValues = [esmHelpers(this, filename)[1]];
       }
       const code = `${stripShebang(source)}\n//# sourceURL=${encodeURI('file://' + filename)}`;
+      // The process's globals are an OUTER scope, as real globals are, so module code may
+      // shadow them (`const process = require('process')`, `import { Buffer } from 'node:buffer'`).
+      // An ES module may also declare the CommonJS names itself (`const require =
+      // createRequire(import.meta.url)`, `const __filename = fileURLToPath(…)`), so for it
+      // those sit in the outer scope too and only the rewrite's own helpers are parameters.
+      // The module's body starts on the wrapper's line, so stack line numbers hold.
+      const [outerNames, outerValues, innerNames, innerValues] = esm
+        ? [[...globalNames, ...cjsNames], [...globalValues, ...cjsValues], helperNames, helperValues]
+        : [globalNames, globalValues, [...cjsNames, ...helperNames], [...cjsValues, ...helperValues]];
+      const wrapped = (async: boolean) =>
+        new Function(...outerNames, `return ${async ? 'async ' : ''}function (${innerNames.join(', ')}) {${code}\n}`)(...outerValues) as (...args: unknown[]) => unknown;
       let fn: (...args: unknown[]) => unknown;
       try {
-        fn = new Function(...names, code) as typeof fn;
+        fn = wrapped(false);
       } catch (error) {
-        if (esm && error instanceof SyntaxError && /await/.test(error.message)) fn = new AsyncFunction(...names, code) as typeof fn;
+        if (esm && error instanceof SyntaxError && /await/.test(error.message)) fn = wrapped(true);
         else {
           if (error instanceof Error) error.message = `${filename}: ${error.message}`;
           throw error;
         }
       }
-      const result = fn.apply(this.exports, values);
+      const result = fn.apply(this.exports, innerValues);
       if (result instanceof Promise) this.__tla = result;
       return result;
     }

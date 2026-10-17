@@ -9,6 +9,7 @@ import { startNode, type NodeInstance } from './runtime.js';
 import { NODE_VERSION } from './process.js';
 import { inspect } from './inspect.js';
 import { parseDotenv } from '../projectConfig.js';
+import { textChunks } from '../system/terminal.js';
 
 interface NodeCli {
   entry?: string;
@@ -66,12 +67,14 @@ Options: -v, -r <module>, --env-file=<file>. Running in BuilderForce WebContaine
 async function readAllStdin(ctx: ProgramContext): Promise<string> {
   let text = '';
   await new Promise<void>((resolve) => {
-    const stop = ctx.io.onStdin((chunk) => {
-      if (chunk === null) {
-        stop();
-        resolve();
-      } else text += chunk;
-    });
+    const stop = ctx.io.onStdin(
+      textChunks((chunk) => {
+        if (chunk === null) {
+          stop();
+          resolve();
+        } else text += chunk;
+      }),
+    );
   });
   return text;
 }
@@ -88,7 +91,7 @@ function startRepl(instance: NodeInstance, ctx: ProgramContext): void {
     release();
     instance.run(() => instance.process.exit(0));
   };
-  const stop = io.onStdin((chunk) => {
+  const stop = io.onStdin(textChunks((chunk) => {
     if (chunk === null) return leave();
     for (const raw of chunk.split(/\r?\n/)) {
       const line = raw.trim();
@@ -99,7 +102,7 @@ function startRepl(instance: NodeInstance, ctx: ProgramContext): void {
       else io.stdout(inspect(result.value, { colors: false }) + '\n');
     }
     io.stdout('> ');
-  });
+  }));
 }
 
 /** Evaluate `expression` inside the CommonJS wrapper, so it sees require, process, timers… of this process. */

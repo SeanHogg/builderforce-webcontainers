@@ -6,7 +6,7 @@
  * own line discipline), or cooked by the shell for everything else.
  */
 import type { Program, ProgramContext } from '../system/types.js';
-import { InputQueue, LineDiscipline } from '../system/terminal.js';
+import { InputQueue, LineDiscipline, textChunks } from '../system/terminal.js';
 import { join } from '../paths.js';
 import { binDirectories } from '../system/commands.js';
 import { parse, ShellSyntaxError } from './parse.js';
@@ -40,7 +40,7 @@ function stdinJob(ctx: ProgramContext, controller?: AbortController): { input: J
   const queue = new InputQueue();
   const terminal = ctx.io.terminal;
   if (!terminal) {
-    const stop = ctx.io.onStdin((chunk) => queue.push(chunk));
+    const stop = ctx.io.onStdin(textChunks((chunk) => queue.push(chunk)));
     return { input: { queue }, stop };
   }
   terminal.setRawMode(true);
@@ -50,11 +50,11 @@ function stdinJob(ctx: ProgramContext, controller?: AbortController): { input: J
     deliver: (chunk) => queue.push(chunk),
     signal: (name) => controller?.abort(name),
   });
-  const stop = ctx.io.onStdin((chunk) => {
+  const stop = ctx.io.onStdin(textChunks((chunk) => {
     if (chunk === null) queue.push(null);
     else if (rawSink) rawSink(chunk);
     else discipline.input(chunk);
-  });
+  }));
   return {
     input: { queue, setRawSink: (sink) => void (rawSink = sink) },
     stop() {
@@ -186,7 +186,7 @@ async function interactive(ctx: ProgramContext): Promise<number> {
     }
   };
 
-  const stopInput = ctx.io.onStdin((chunk) => (chunk === null ? finish(shell.lastStatus) : onInput(chunk)));
+  const stopInput = ctx.io.onStdin(textChunks((chunk) => (chunk === null ? finish(shell.lastStatus) : onInput(chunk))));
   const onAbort = () => {
     job?.controller.abort('SIGHUP');
     finish(129);

@@ -27,6 +27,7 @@ import {
   type HttpStreamResponse,
   type ProcessOptions,
   type RuntimeProcess,
+  type StdioChunk,
   type VirtualFileSystem,
 } from '@seanhogg/builderforce-webcontainers-core';
 import type { FsOp, HostToWorker, WorkerToHost } from './protocol.js';
@@ -76,8 +77,8 @@ interface Proc {
   pid: number;
   info: Omit<ProcessInfo, 'ports'>;
   worker: WorkerLike;
-  stdout: Set<(chunk: string) => void>;
-  stderr: Set<(chunk: string) => void>;
+  stdout: Set<(chunk: StdioChunk) => void>;
+  stderr: Set<(chunk: StdioChunk) => void>;
   exited: boolean;
   resolveExit(code: number): void;
   registrations: Map<number, { close(): void }>;

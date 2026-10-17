@@ -5,8 +5,8 @@
  * program it hosts. Also {@link RuntimeProcess}, the stream-based handle the
  * public `run()` returns.
  */
-import type { ChildHandle, Program, ProgramIO, ProcessOptions, System } from './types.js';
-import { InputQueue, LineDiscipline, toTerminal } from './terminal.js';
+import type { ChildHandle, Program, ProgramIO, ProcessOptions, StdioChunk, System } from './types.js';
+import { InputQueue, LineDiscipline, textChunks, toTerminal } from './terminal.js';
 import type { IpcEndpoint } from './ipc.js';
 
 let nextPid = 1000;
@@ -26,25 +26,17 @@ export interface RunProgramOptions extends ProcessOptions {
   channel?: IpcEndpoint;
 }
 
-/** Decode byte chunks without splitting multi-byte characters across writes. */
-function textSink(emit: (text: string) => void): (chunk: string | Uint8Array) => void {
-  const decoder = new TextDecoder();
-  return (chunk) => {
-    const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
-    if (text) emit(text);
-  };
-}
-
 export function runProgram(options: RunProgramOptions): ChildHandle {
   const pid = options.pid ?? allocatePid();
-  const stdin = new InputQueue();
-  const stdoutListeners = new Set<(chunk: string) => void>();
-  const stderrListeners = new Set<(chunk: string) => void>();
+  const stdin = new InputQueue<StdioChunk>();
+  const stdoutListeners = new Set<(chunk: StdioChunk) => void>();
+  const stderrListeners = new Set<(chunk: StdioChunk) => void>();
   const resizeListeners = new Set<(cols: number, rows: number) => void>();
   const controller = new AbortController();
   // A dead process prints nothing: a straggling callback that writes after exit is dropped.
-  const emitOut = (text: string) => settled || stdoutListeners.forEach((l) => l(text));
-  const emitErr = (text: string) => settled || stderrListeners.forEach((l) => l(text));
+  // Chunks pass through as written: bytes stay bytes, so a binary protocol over a child's pipes survives.
+  const emitOut = (chunk: StdioChunk) => settled || stdoutListeners.forEach((l) => l(chunk));
+  const emitErr = (chunk: StdioChunk) => settled || stderrListeners.forEach((l) => l(chunk));
   let settled = false;
   let forceExit: (code: number) => void = () => undefined;
 
@@ -60,8 +52,8 @@ export function runProgram(options: RunProgramOptions): ChildHandle {
     : undefined;
 
   const io: ProgramIO = {
-    stdout: textSink(emitOut),
-    stderr: textSink(emitErr),
+    stdout: emitOut,
+    stderr: emitErr,
     onStdin: (listener) => stdin.subscribe(listener),
     terminal: size && discipline
       ? {
@@ -137,7 +129,7 @@ export function runProgram(options: RunProgramOptions): ChildHandle {
       return () => stderrListeners.delete(listener);
     },
     write(data) {
-      if (discipline) discipline.input(data);
+      if (discipline) discipline.input(typeof data === 'string' ? data : new TextDecoder().decode(data));
       else stdin.push(data);
     },
     closeStdin: () => stdin.push(null),
@@ -176,9 +168,10 @@ export function toRuntimeProcess(child: ChildHandle, terminal: boolean): Runtime
   const combinedOutput = new ReadableStream<string>({
     start(controller) {
       let open = true;
-      const push = (chunk: string) => open && controller.enqueue(terminal ? toTerminal(chunk) : chunk);
-      child.onStdout(push);
-      child.onStderr(push);
+      const push = (text: string | null) => text !== null && open && controller.enqueue(terminal ? toTerminal(text) : text);
+      // One decoder per stream, so a character split across writes on one is not garbled by the other.
+      child.onStdout(textChunks(push));
+      child.onStderr(textChunks(push));
       void child.exit.then(() => {
         open = false;
         controller.close();

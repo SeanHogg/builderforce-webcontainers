@@ -22,6 +22,7 @@ import {
   type HttpHandler,
   type PackageCache,
   type ProcessOptions,
+  type StdioChunk,
   type System,
   type UpgradeHandler,
 } from '@seanhogg/builderforce-webcontainers-core';
@@ -45,7 +46,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
   const fs = new VirtualFileSystem();
   const handlers = new Map<number, { handler: HttpHandler; upgrade?: UpgradeHandler }>();
   const knownPorts = new Set<number>();
-  const children = new Map<number, { stdout: Set<(s: string) => void>; stderr: Set<(s: string) => void>; exit: (code: number) => void; ipc?: ReturnType<typeof createIpcEndpoint> }>();
+  const children = new Map<number, { stdout: Set<(chunk: StdioChunk) => void>; stderr: Set<(chunk: StdioChunk) => void>; exit: (code: number) => void; ipc?: ReturnType<typeof createIpcEndpoint> }>();
   /** This process's channel to its parent, when it was spawned with `ipc`. */
   let parentChannel: ReturnType<typeof createIpcEndpoint> | undefined;
   /** Responses to this process's loopback requests, streaming in from the page. */
@@ -96,8 +97,8 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
   function remoteChild(command: string, args: string[], options: ProcessOptions = {}): ChildHandle {
     flush(); // the child must see every write made so far
     const childId = nextChild++;
-    const stdout = new Set<(s: string) => void>();
-    const stderr = new Set<(s: string) => void>();
+    const stdout = new Set<(chunk: StdioChunk) => void>();
+    const stderr = new Set<(chunk: StdioChunk) => void>();
     let resolveExit!: (code: number) => void;
     const exit = new Promise<number>((resolve) => (resolveExit = resolve));
     const ipc = options.ipc

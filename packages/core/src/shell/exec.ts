@@ -8,13 +8,13 @@
  * browser is a separate Web Worker.
  */
 import type { System } from '../system/types.js';
-import { InputQueue } from '../system/terminal.js';
+import { InputQueue, textChunks } from '../system/terminal.js';
 import type { Command as CommandNode, FunctionDefinition, Pipeline, Redirect, Script, SimpleCommand, Word } from './ast.js';
 import { parse, ShellSyntaxError } from './parse.js';
 import { expandWord, expandWords, type ExpandContext } from './expand.js';
 import { BUILTINS, COREUTILS, type BackgroundJob, type ShellState } from './builtins.js';
 import { resolvePath, type CommandContext } from './context.js';
-import { matchDevServer, runDevServerHandoff } from './devHandoff.js';
+import { devServerHandoff, runDevServerHandoff } from './devHandoff.js';
 import { runCompound, type Flow, type ScriptRunner } from './compound.js';
 
 export interface ShellIO {
@@ -291,7 +291,7 @@ export class Shell implements ShellState, ScriptRunner {
     if (builtin) return builtin(ctx, this);
     const command = this.options.commands?.[name];
     if (command) return command(ctx, this, input);
-    const handoff = matchDevServer(argv);
+    const handoff = devServerHandoff(ctx, argv);
     if (handoff) return runDevServerHandoff(ctx, argv, handoff);
     const coreutil = COREUTILS[name];
     if (coreutil) return coreutil(ctx);
@@ -331,8 +331,9 @@ export class Shell implements ShellState, ScriptRunner {
       io.stderr(`bfsh: command not found: ${name}\n`);
       return 127;
     }
-    child.onStdout(io.stdout);
-    child.onStderr(io.stderr);
+    // The shell's own IO is text; a child's bytes are decoded as they enter it.
+    child.onStdout(textChunks((text) => text !== null && io.stdout(text)));
+    child.onStderr(textChunks((text) => text !== null && io.stderr(text)));
     let stop: (() => void) | undefined;
     if (size && input.setRawSink) input.setRawSink((data) => child.write(data));
     else stop = input.queue.subscribe((chunk) => (chunk === null ? child.closeStdin() : child.write(chunk)));

@@ -4,7 +4,7 @@
  * `path` and `process` close over that process's cwd, IO and event loop.
  */
 import type { VirtualFileSystem } from '../vfs.js';
-import type { ProgramIO, System, ThreadInfo } from '../system/types.js';
+import type { ProgramIO, StdioChunk, System, ThreadInfo } from '../system/types.js';
 import type { IpcEndpoint } from '../system/ipc.js';
 import type { EventLoop } from './loop.js';
 import type { NodeProcess } from './process.js';
@@ -52,8 +52,8 @@ export function createBuiltins(deps: BuiltinDeps) {
     loop,
     cwd: () => proc.cwd() as string,
     env,
-    stdout: (c: string) => void proc.stdout.write(c),
-    stderr: (c: string) => void proc.stderr.write(c),
+    stdout: (c: StdioChunk) => void proc.stdout.write(c),
+    stderr: (c: StdioChunk) => void proc.stderr.write(c),
   };
 
   const factories: Record<string, Factory> = {

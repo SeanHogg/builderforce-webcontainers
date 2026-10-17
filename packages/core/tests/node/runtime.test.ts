@@ -112,7 +112,7 @@ describe('node runtime: event loop', () => {
       'index.js': `
         let n = 0;
         const t = setInterval(() => { n++; if (n === 3) { clearInterval(t); console.log('interval', n); } }, 1);
-        setTimeout(() => console.log('timeout'), 40);
+        setTimeout(() => console.log('timeout'), 250); // well past 3 × 1ms ticks even at Windows' ~16ms timer granularity
         setImmediate(() => console.log('immediate'));
         process.nextTick(() => console.log('tick'));
         Promise.resolve().then(() => console.log('micro'));
@@ -147,6 +147,45 @@ describe('spawning process.execPath', () => {
     });
     expect(code).toBe(0);
     expect(output).toBe('in child /usr/local/bin/node\nchild exited 0\n');
+  });
+});
+
+describe('modules declaring names the wrapper provides', () => {
+  it('lets ES modules and CommonJS declare require, __filename, process and Buffer themselves', async () => {
+    const { output, code } = await runNode(
+      {
+        'main.mjs': `
+          import process from 'node:process';
+          import { createRequire } from 'node:module';
+          import { fileURLToPath } from 'node:url';
+          const require = createRequire(import.meta.url);
+          const __filename = fileURLToPath(import.meta.url);
+          export const name = 'esm';
+          console.log(__filename, typeof process.cwd, require('./legacy.cjs'));
+        `,
+        'legacy.cjs': `const Buffer = require('buffer').Buffer; const process = require('process'); module.exports = Buffer.from('ok').toString() + typeof process.cwd;`,
+      },
+      'main.mjs',
+    );
+    expect(code).toBe(0);
+    expect(output).toBe('/main.mjs function okfunction\n');
+  });
+});
+
+describe('binary stdio', () => {
+  it("carries bytes through a child's stdin and stdout untouched (esbuild's service protocol)", async () => {
+    const { output, code } = await runNode({
+      'index.js': `
+        const child = require('child_process').spawn(process.execPath, ['echo.js']);
+        const got = [];
+        child.stdout.on('data', (d) => got.push(d));
+        child.on('close', () => { const all = Buffer.concat(got); console.log(Buffer.isBuffer(got[0]), [...all].join(',')); });
+        child.stdin.end(Buffer.from([0, 255, 128, 10, 0xe2, 0x82]));
+      `,
+      'echo.js': `process.stdin.on('data', (d) => process.stdout.write(Buffer.concat([Buffer.from([7]), d])));`,
+    });
+    expect(code).toBe(0);
+    expect(output).toBe('true 7,0,255,128,10,226,130\n');
   });
 });
 

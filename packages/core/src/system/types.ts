@@ -16,11 +16,14 @@ export interface TerminalPort {
   setRawMode(raw: boolean): void;
 }
 
+/** What flows through stdio: text, or bytes kept as bytes (binary protocols over a child's pipes). */
+export type StdioChunk = string | Uint8Array;
+
 export interface ProgramIO {
-  stdout(chunk: string | Uint8Array): void;
-  stderr(chunk: string | Uint8Array): void;
-  /** Stdin chunks as they arrive; `null` is end-of-file. Buffered until the first subscriber. */
-  onStdin(listener: (chunk: string | null) => void): () => void;
+  stdout(chunk: StdioChunk): void;
+  stderr(chunk: StdioChunk): void;
+  /** Stdin chunks as they arrive, bytes or text as written; `null` is end-of-file. Buffered until the first subscriber. Text consumers wrap the listener in `textChunks`. */
+  onStdin(listener: (chunk: StdioChunk | null) => void): () => void;
   /** Present when attached to a terminal (xterm.js). */
   terminal?: TerminalPort;
 }
@@ -48,9 +51,10 @@ export interface ThreadInfo {
 /** A child as its parent sees it (separate stdout/stderr listeners, unlike the streams of the public `RuntimeProcess`). */
 export interface ChildHandle {
   readonly pid: number;
-  onStdout(listener: (chunk: string) => void): () => void;
-  onStderr(listener: (chunk: string) => void): () => void;
-  write(data: string): void;
+  /** Output as the child wrote it: text, or bytes kept as bytes. */
+  onStdout(listener: (chunk: StdioChunk) => void): () => void;
+  onStderr(listener: (chunk: StdioChunk) => void): () => void;
+  write(data: StdioChunk): void;
   closeStdin(): void;
   kill(signal?: string): void;
   resize?(cols: number, rows: number): void;

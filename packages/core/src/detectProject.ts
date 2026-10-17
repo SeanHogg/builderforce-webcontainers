@@ -21,10 +21,11 @@ export interface ProjectProfile {
 }
 
 /**
- * Frameworks that need a server or a build pipeline this runtime does not have.
- * Data, not branches: supporting one later means deleting its row. Checked before
- * the plain-framework rules below, so SvelteKit and Nuxt (which depend on svelte
- * and vue) are declined rather than mistaken for a Vite + Svelte/Vue app.
+ * Frameworks that run their own dev server, which the instant preview does not
+ * replace: they run as Node processes here (`npm run dev`, Next.js on its wasm
+ * SWC, SvelteKit/Nuxt on real Vite). Checked before the plain-framework rules
+ * below, so SvelteKit and Nuxt (which depend on svelte and vue) are not mistaken
+ * for a Vite + Svelte/Vue app.
  */
 const NEEDS_NODE: ReadonlyArray<{ dependency: string; reason: string }> = [
   { dependency: 'next', reason: 'Next.js needs its Node server.' },
@@ -59,10 +60,16 @@ function findEntry(fs: VirtualFileSystem): string | undefined {
   return undefined;
 }
 
-export function detectProject(fs: VirtualFileSystem): ProjectProfile {
+/** Why the project's framework runs its own dev server (Next.js, Nuxt, SvelteKit…), or undefined. */
+export function ownServerReason(fs: VirtualFileSystem): string | undefined {
   const deps = readDependencyNames(fs);
-  const blocker = NEEDS_NODE.find((row) => deps.has(row.dependency));
-  if (blocker) return { supported: false, publicDir: '/public', reason: blocker.reason };
+  return NEEDS_NODE.find((row) => deps.has(row.dependency))?.reason;
+}
+
+export function detectProject(fs: VirtualFileSystem): ProjectProfile {
+  const blocker = ownServerReason(fs);
+  if (blocker) return { supported: false, publicDir: '/public', reason: blocker };
+  const deps = readDependencyNames(fs);
 
   const framework = detectFramework(deps);
   if (fs.isFile('/index.html')) {

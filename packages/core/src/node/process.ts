@@ -5,6 +5,7 @@
  * `process.platform`, `process.versions.node` and `process.stdout.isTTY`.
  */
 import { EventEmitterBase } from './events.js';
+import { Buffer } from './buffer.js';
 import { Readable } from './stream/readable.js';
 import { Writable } from './stream/writable.js';
 import type { EventLoop } from './loop.js';
@@ -104,8 +105,9 @@ class StdinStream extends Readable {
   private subscription?: () => void;
   private release?: () => void;
 
+  // Buffers, as in Node, unless the program calls setEncoding: a binary protocol on stdin must arrive intact.
   constructor(private readonly io: ProgramIO, private readonly loop: EventLoop) {
-    super({ encoding: 'utf8' });
+    super();
     this.isTTY = !!io.terminal;
   }
 
@@ -147,7 +149,7 @@ class StdinStream extends Readable {
       if (chunk === null) {
         this.stopListening();
         this.push(null);
-      } else this.push(chunk);
+      } else this.push(Buffer.from(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk));
     });
   }
 

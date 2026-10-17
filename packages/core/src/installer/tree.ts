@@ -13,6 +13,7 @@
 import type { PackageManifest } from './registry.js';
 import { parseDependency, type PackageJson, type ParsedSpec } from './spec.js';
 import { satisfies, validRange } from './semver.js';
+import { wasmBuildOf } from './wasmBuilds.js';
 
 export type EdgeType = 'prod' | 'dev' | 'optional' | 'peer';
 
@@ -106,6 +107,19 @@ function dependenciesOf(m: PackageJson | PackageManifest, isRoot: boolean, produ
   return [...out.values()].filter((d) => !bundled.has(d.name)).sort((a, b) => (a.name < b.name ? -1 : 1));
 }
 
+/** A native-binary package's wasm twin when one fits the range (`wasmBuilds.ts`), else the package itself. */
+async function pickPreferringWasm(options: ResolveTreeOptions, spec: ParsedSpec): Promise<PackageManifest> {
+  const twin = wasmBuildOf(spec);
+  if (twin) {
+    try {
+      return await options.pick(twin);
+    } catch {
+      // no twin release for this range: the original package, as written
+    }
+  }
+  return options.pick(spec);
+}
+
 /** Does `version` satisfy the edge's range? A dist-tag never "matches" without a pick. */
 function matches(version: string, range: string): boolean {
   const r = range || '*';
@@ -180,7 +194,7 @@ export async function resolveTree(options: ResolveTreeOptions): Promise<Map<stri
 
       let manifest: PackageManifest;
       try {
-        manifest = await options.pick(spec);
+        manifest = await pickPreferringWasm(options, spec);
       } catch (error) {
         if (dep.type !== 'optional') throw error;
         options.warn(`skipped optional ${dep.name}: ${(error as Error).message}`);

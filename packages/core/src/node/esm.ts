@@ -149,7 +149,7 @@ export function esmToCjs(source: string): string {
       reexportStarts.add(imp.ss);
       const nsMatch = /^export\s*\*\s*as\s+("[^"]*"|'[^']*'|[^\s]+)/.exec(statement);
       if (nsMatch) getters.set(nsMatch[1]!.replace(/^["']|["']$/g, ''), ns);
-      else if (/^export\s*\*/.test(statement)) edits.push({ start: imp.ss, end: imp.se, text: `${load} __bfwc_star(exports, ${ns});` });
+      else if (/^export\s*\*/.test(statement)) edits.push({ start: imp.ss, end: imp.se, text: `${load} __bfwc_star(__bfwc_exports, ${ns});` });
       else for (const [imported, exported] of parseList(/\{([^}]*)\}/.exec(statement)?.[1] ?? '')) getters.set(exported, access(ns, imported));
       if (!edits.some((e) => e.start === imp.ss)) edits.push({ start: imp.ss, end: imp.se, text: load });
       continue;
@@ -216,5 +216,5 @@ export function esmToCjs(source: string): string {
   for (const edit of edits) code = code.slice(0, edit.start) + edit.text + code.slice(edit.end);
   const getterList = [...getters].map(([name, expr]) => `${JSON.stringify(name)}: () => ${expr}`).join(', ');
   // One line, so stack-trace line numbers stay aligned with the source.
-  return `"use strict";__bfwc_esm(exports, { ${getterList} });${code}`;
+  return `"use strict";__bfwc_esm(__bfwc_exports, { ${getterList} });${code}`;
 }

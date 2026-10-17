@@ -9,7 +9,8 @@ import { EventEmitterBase } from './events.js';
 import { Readable } from './stream/readable.js';
 import { Writable } from './stream/writable.js';
 import type { EventLoop } from './loop.js';
-import type { ChildHandle, System } from '../system/types.js';
+import type { ChildHandle, StdioChunk, System } from '../system/types.js';
+import { Buffer } from './buffer.js';
 import type { IpcEndpoint } from '../system/ipc.js';
 import { queueCallback } from './processExit.js';
 
@@ -35,8 +36,8 @@ export interface ChildProcessDeps {
   cwd(): string;
   env(): Record<string, string | undefined>;
   /** Parent's stdio for `stdio: 'inherit'`. */
-  stdout(chunk: string): void;
-  stderr(chunk: string): void;
+  stdout(chunk: StdioChunk): void;
+  stderr(chunk: StdioChunk): void;
 }
 
 const quote = (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`);
@@ -68,7 +69,7 @@ class ChildProcess extends EventEmitterBase {
     this.stderr = new Readable({ read() {} });
     this.stdin = new Writable({
       write: (chunk: Uint8Array | string, _enc: string, cb: () => void) => {
-        this.handle?.write(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
+        this.handle?.write(typeof chunk === 'string' ? chunk : new Uint8Array(chunk)); // bytes stay bytes
         cb();
       },
       final: (cb: () => void) => {
@@ -107,8 +108,9 @@ class ChildProcess extends EventEmitterBase {
         deps.loop._run(() => this.emit('disconnect'));
       });
     }
-    this.handle.onStdout((chunk) => (inherit ? deps.stdout(chunk) : this.stdout.push(chunk)));
-    this.handle.onStderr((chunk) => (inherit ? deps.stderr(chunk) : this.stderr.push(chunk)));
+    // Piped output arrives as Buffers, as in Node.
+    this.handle.onStdout((chunk) => (inherit ? deps.stdout(chunk) : this.stdout.push(Buffer.from(chunk))));
+    this.handle.onStderr((chunk) => (inherit ? deps.stderr(chunk) : this.stderr.push(Buffer.from(chunk))));
     options.signal?.addEventListener('abort', () => this.kill());
     queueCallback(() => this.emit('spawn'));
     void this.handle.exit.then((code) => {

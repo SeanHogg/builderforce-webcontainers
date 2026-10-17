@@ -16,6 +16,7 @@ export type {
   ByteChannel,
   UpgradeHandler,
   ThreadInfo,
+  StdioChunk,
 } from './types.js';
 export { createIpcEndpoint, createIpcPair } from './ipc.js';
 export type { IpcEndpoint } from './ipc.js';

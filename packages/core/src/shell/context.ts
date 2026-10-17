@@ -5,7 +5,7 @@
  */
 import type { VirtualFileSystem } from '../vfs.js';
 import type { Program, System } from '../system/types.js';
-import { InputQueue } from '../system/terminal.js';
+import { InputQueue, textChunks } from '../system/terminal.js';
 import { join, normalizePath } from '../paths.js';
 
 export interface CommandIO {
@@ -70,7 +70,7 @@ export function parseFlags(args: string[], withValue: string[] = []): { flags: S
 export function asProgram(command: Command, name: string): Program {
   return async (ctx) => {
     const stdin = new InputQueue();
-    const stop = ctx.io.onStdin((chunk) => stdin.push(chunk));
+    const stop = ctx.io.onStdin(textChunks((chunk) => stdin.push(chunk)));
     try {
       return await command({
         args: ctx.args,

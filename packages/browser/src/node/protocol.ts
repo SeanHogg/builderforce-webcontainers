@@ -14,7 +14,7 @@
  * process and the page (its parent's side), and `child-ipc` /
  * `child-ipc-disconnect` between a parent process and the page (its child's side).
  */
-import type { FileContent, HttpRequestData, HttpResponseHead, ThreadInfo } from '@seanhogg/builderforce-webcontainers-core';
+import type { FileContent, HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo } from '@seanhogg/builderforce-webcontainers-core';
 
 export type FsOp = { op: 'write'; path: string; content: FileContent } | { op: 'remove'; path: string } | { op: 'mkdir'; path: string };
 
@@ -61,12 +61,12 @@ export type IpcMessage =
 /** page → worker */
 export type HostToWorker =
   | StartMessage
-  | { type: 'stdin'; data: string | null }
+  | { type: 'stdin'; data: StdioChunk | null }
   | { type: 'kill'; signal: string }
   | { type: 'resize'; cols: number; rows: number }
   | { type: 'fs'; ops: FsOp[] }
   | { type: 'ports'; open: number[]; closed: number[] }
-  | { type: 'child-out'; childId: number; stream: 'stdout' | 'stderr'; data: string }
+  | { type: 'child-out'; childId: number; stream: 'stdout' | 'stderr'; data: StdioChunk }
   | { type: 'child-exit'; childId: number; code: number }
   | { type: 'child-error'; childId: number; code: string; message: string }
   | { type: 'http-request'; reqId: number; port: number; request: HttpRequestData }
@@ -78,11 +78,11 @@ export type HostToWorker =
 
 /** worker → page */
 export type WorkerToHost =
-  | { type: 'stdout' | 'stderr'; data: string }
+  | { type: 'stdout' | 'stderr'; data: StdioChunk }
   | { type: 'exit'; code: number }
   | { type: 'fs'; ops: FsOp[] }
   | { type: 'spawn'; childId: number; command: string; args: string[]; cwd?: string; env?: Record<string, string>; terminal?: { cols: number; rows: number }; ipc?: boolean; thread?: ThreadInfo }
-  | { type: 'child-stdin'; childId: number; data: string | null }
+  | { type: 'child-stdin'; childId: number; data: StdioChunk | null }
   | { type: 'child-kill'; childId: number; signal: string }
   | { type: 'child-resize'; childId: number; cols: number; rows: number }
   | { type: 'listen'; port: number }

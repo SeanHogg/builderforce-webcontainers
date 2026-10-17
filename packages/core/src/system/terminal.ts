@@ -1,7 +1,7 @@
 /**
  * What a kernel's TTY layer does between xterm.js and a program:
  *
- * - InputQueue: stdin as a buffered stream of string chunks (data that arrives
+ * - InputQueue: stdin as a buffered stream of chunks — text, or bytes (data that arrives
  *   before the program subscribes is kept, not dropped).
  * - LineDiscipline: "cooked" mode — echo, backspace, Ctrl-U, Enter delivers the
  *   line, Ctrl-C raises SIGINT, Ctrl-D is end-of-file. A program that calls
@@ -9,22 +9,24 @@
  * - toTerminal: `\n` → `\r\n` on output (the TTY's ONLCR), since xterm.js
  *   only moves to column 0 on `\r`.
  */
+import type { StdioChunk } from './types.js';
 
-export class InputQueue {
-  private readonly buffered: Array<string | null> = [];
-  private readonly listeners = new Set<(chunk: string | null) => void>();
+
+export class InputQueue<T extends StdioChunk = string> {
+  private readonly buffered: Array<T | null> = [];
+  private readonly listeners = new Set<(chunk: T | null) => void>();
   private ended = false;
 
   private draining = false;
 
-  push(chunk: string | null): void {
+  push(chunk: T | null): void {
     if (this.ended) return;
     if (chunk === null) this.ended = true;
     this.buffered.push(chunk);
     this.drain();
   }
 
-  subscribe(listener: (chunk: string | null) => void): () => void {
+  subscribe(listener: (chunk: T | null) => void): () => void {
     this.listeners.add(listener);
     this.drain();
     return () => this.listeners.delete(listener);
@@ -51,18 +53,38 @@ export class InputQueue {
   readAll(): Promise<string> {
     return new Promise((resolve) => {
       let text = '';
-      const stop = this.subscribe((chunk) => {
-        if (chunk === null) {
-          stop();
-          resolve(text);
-        } else text += chunk;
-      });
+      const stop = this.subscribe(
+        textChunks((chunk) => {
+          if (chunk === null) {
+            stop();
+            resolve(text);
+          } else text += chunk;
+        }),
+      );
     });
   }
 
   get isEnded(): boolean {
     return this.ended;
   }
+}
+
+/**
+ * A text listener over a bytes-or-text stream: bytes are decoded as UTF-8 with
+ * characters split across chunks kept whole; `null` (end) flushes, then passes on.
+ */
+export function textChunks(listener: (text: string | null) => void): (chunk: StdioChunk | null) => void {
+  const decoder = new TextDecoder();
+  return (chunk) => {
+    if (chunk === null) {
+      const rest = decoder.decode();
+      if (rest) listener(rest);
+      listener(null);
+      return;
+    }
+    const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+    if (text) listener(text);
+  };
 }
 
 export function toTerminal(text: string): string {

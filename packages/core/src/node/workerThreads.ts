@@ -12,7 +12,8 @@
 import { EventEmitterBase } from './events.js';
 import { Readable } from './stream/readable.js';
 import type { EventLoop } from './loop.js';
-import type { ChildHandle, System, ThreadInfo } from '../system/types.js';
+import type { ChildHandle, StdioChunk, System, ThreadInfo } from '../system/types.js';
+import { Buffer } from './buffer.js';
 import type { IpcEndpoint } from '../system/ipc.js';
 import { join } from '../paths.js';
 import { keepAliveWhileListened, type ChannelKeepAlive } from './ipc.js';
@@ -37,8 +38,8 @@ export interface WorkerThreadsDeps {
   loop: EventLoop;
   cwd(): string;
   env(): Record<string, string | undefined>;
-  stdout(chunk: string): void;
-  stderr(chunk: string): void;
+  stdout(chunk: StdioChunk): void;
+  stderr(chunk: StdioChunk): void;
   /** Set when this process is itself a worker thread. */
   thread?: ThreadInfo;
   /** Its channel to the parent (the thread's `parentPort`). */
@@ -130,8 +131,8 @@ export function createWorkerThreadsModule(deps: WorkerThreadsDeps): Record<strin
         return;
       }
       const handle = this.handle;
-      handle.onStdout((chunk) => (options.stdout ? this.stdout.push(chunk) : deps.stdout(chunk)));
-      handle.onStderr((chunk) => (options.stderr ? this.stderr.push(chunk) : deps.stderr(chunk)));
+      handle.onStdout((chunk) => (options.stdout ? this.stdout.push(Buffer.from(chunk)) : deps.stdout(chunk)));
+      handle.onStderr((chunk) => (options.stderr ? this.stderr.push(Buffer.from(chunk)) : deps.stderr(chunk)));
       handle.ipc?.onMessage((message) => {
         const envelope = message as Envelope;
         loop._run(() => (envelope.kind === 'error' ? this.emit('error', errorFrom(envelope)) : this.emit('message', envelope.value)));

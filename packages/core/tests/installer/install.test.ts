@@ -41,6 +41,26 @@ describe('installPackages', () => {
     expect(result.added).toBe(5);
   });
 
+  it("installs a native-binary package's wasm twin under the original name, falling back where none fits", async () => {
+    const { fs, run } = await setup(
+      {
+        esbuild: { versions: { '0.21.5': {} } },
+        'esbuild-wasm': { versions: { '0.21.5': {} } },
+        rollup: { versions: { '3.29.4': {}, '4.20.0': {} } },
+        '@rollup/wasm-node': { versions: { '4.20.0': {} } },
+        vite: { versions: { '5.4.0': { dependencies: { esbuild: '^0.21.3', rollup: '^4.13.0' } } } },
+        legacy: { versions: { '1.0.0': { dependencies: { rollup: '^3.0.0' } } } },
+      },
+      { dependencies: { vite: '^5.4.0', legacy: '1.0.0' } },
+    );
+    await run();
+    expect(fs.readText('/node_modules/esbuild/index.js')).toBe('module.exports = "esbuild-wasm@0.21.5";');
+    // `legacy` is reached first and takes the top slot with the real Rollup 3, which has no
+    // wasm twin (and needs none); Vite's Rollup 4 nests as the twin.
+    expect(fs.readText('/node_modules/rollup/index.js')).toBe('module.exports = "rollup@3.29.4";');
+    expect(fs.readText('/node_modules/vite/node_modules/rollup/index.js')).toBe('module.exports = "@rollup/wasm-node@4.20.0";');
+  });
+
   it('nests deeper rather than shadow a version a sibling already resolves to', async () => {
     const { fs, run } = await setup(
       {
