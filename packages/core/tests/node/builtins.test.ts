@@ -59,6 +59,34 @@ describe('node builtins', () => {
     expect(code).toBe(0);
   });
 
+  it("zlib: Node's internal _processChunk/_handle, which minizlib (tar) drives", async () => {
+    const { output } = await runNode(
+      script(`
+        const zlib = require('zlib');
+        const gz = zlib.gzipSync('hello tar');
+        const unzip = new zlib.Unzip();
+        const close = unzip._handle.close; unzip._handle.close = () => {};
+        const head = unzip._processChunk(gz.subarray(0, 8), zlib.constants.Z_NO_FLUSH);
+        const rest = unzip._processChunk(gz.subarray(8), zlib.constants.Z_FINISH);
+        unzip._handle.close = close;
+        console.log(Buffer.concat([head, rest]).toString());
+      `),
+    );
+    expect(output).toBe('hello tar\n');
+  });
+
+  it('vm: the context is the global object of the code it runs', async () => {
+    const { output } = await runNode(
+      script(`
+        const vm = require('vm');
+        const ctx = { b: 1 };
+        const result = vm.runInNewContext('globalThis.m = globalThis.m || {}; globalThis.m.a = b + 1; c = JSON.stringify([b]); typeof require', ctx);
+        console.log(ctx.m.a, ctx.c, result, typeof globalThis.m);
+      `),
+    );
+    expect(output).toBe('2 [1] undefined undefined\n');
+  });
+
   it('path, url, querystring, util, os', async () => {
     const { output } = await runNode(
       script(`

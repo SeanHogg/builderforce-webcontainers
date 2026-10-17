@@ -9,6 +9,7 @@ import { ClientRequest, createFetch, type ClientDeps } from './client.js';
 import { FakeSocket, IncomingMessage, OutgoingHeaders, Server, ServerResponse } from './server.js';
 import { METHODS, STATUS_CODES } from './status.js';
 import { textResponse } from '../../system/httpStream.js';
+import { queueCallback } from '../processExit.js';
 
 export { createFetch };
 
@@ -77,12 +78,12 @@ export function createNetModule(deps: ClientDeps): Record<string, unknown> {
       try {
         this.reservation = deps.system.listen(port, async () => textResponse(502, 'Not an HTTP server'));
       } catch (error) {
-        queueMicrotask(() => this.emit('error', error));
+        queueCallback(() => this.emit('error', error));
         return this;
       }
       this.listening = true;
       this.release = deps.loop.hold();
-      queueMicrotask(() => this.emit('listening'));
+      queueCallback(() => this.emit('listening'));
       return this;
     }
     address() {
@@ -94,7 +95,7 @@ export function createNetModule(deps: ClientDeps): Record<string, unknown> {
       this.listening = false;
       this.release?.();
       if (callback) this.once('close', callback);
-      queueMicrotask(() => this.emit('close'));
+      queueCallback(() => this.emit('close'));
       return this;
     }
     ref(): this { return this; }

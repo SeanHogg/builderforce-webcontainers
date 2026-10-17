@@ -7,6 +7,7 @@
 import { Buffer } from './buffer.js';
 import { hashAlgorithm, HASHES } from './hashes.js';
 import { Transform } from './stream/index.js';
+import { queueCallback } from './processExit.js';
 
 type Input = string | ArrayBufferView;
 
@@ -123,7 +124,7 @@ const unsupported = (name: string) => () => {
 export function createCryptoModule(): Record<string, unknown> {
   const randomBytes = (size: number, callback?: (error: Error | null, buf: Buffer) => void) => {
     const buf = randomFill(Buffer.alloc(size));
-    if (callback) queueMicrotask(() => callback(null, buf));
+    if (callback) queueCallback(() => callback(null, buf));
     return buf;
   };
   return {
@@ -142,13 +143,13 @@ export function createCryptoModule(): Record<string, unknown> {
     randomFill: (view: ArrayBufferView, ...rest: unknown[]) => {
       const callback = rest.pop() as (e: Error | null, v: ArrayBufferView) => void;
       randomFill(view);
-      queueMicrotask(() => callback(null, view));
+      queueCallback(() => callback(null, view));
     },
     randomUUID: () => globalThis.crypto.randomUUID(),
     randomInt(min: number, max?: number | ((e: Error | null, n: number) => void), callback?: (e: Error | null, n: number) => void) {
       if (typeof max !== 'number') [callback, max, min] = [max as typeof callback, min, 0];
       const value = min + Math.floor((globalThis.crypto.getRandomValues(new Uint32Array(1))[0]! / 2 ** 32) * (max - min));
-      if (callback) queueMicrotask(() => callback!(null, value));
+      if (callback) queueCallback(() => callback!(null, value));
       return value;
     },
     getRandomValues: <T extends ArrayBufferView>(view: T) => randomFill(view),
@@ -162,7 +163,7 @@ export function createCryptoModule(): Record<string, unknown> {
     },
     pbkdf2Sync,
     pbkdf2(password: Input, salt: Input, iterations: number, keylen: number, digest: string, callback: (e: Error | null, key?: Buffer) => void) {
-      queueMicrotask(() => {
+      queueCallback(() => {
         try {
           callback(null, pbkdf2Sync(password, salt, iterations, keylen, digest));
         } catch (error) {

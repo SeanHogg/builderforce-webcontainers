@@ -8,6 +8,7 @@ import { EventEmitterBase } from './events.js';
 import type { EventLoop } from './loop.js';
 import { decode } from './buffer.js';
 import { callable } from './callable.js';
+import { queueCallback } from './processExit.js';
 
 export function createOsModule(env: () => Record<string, string | undefined>): Record<string, unknown> {
   const cpus = Array.from({ length: Math.max(1, Math.min(16, globalThis.navigator?.hardwareConcurrency ?? 4)) }, () => ({
@@ -171,10 +172,24 @@ export function createAsyncHooksModule(): Record<string, unknown> {
   };
 }
 
+const VM_CODE = '__bfwc_vm_code';
+
 export function createVmModule(): Record<string, unknown> {
+  // The context IS the code's global object: free names read it first (then the real
+  // builtins), assignments and `globalThis.x = …` land on it. Next.js reads its client
+  // manifests back off the context this way.
   const run = (code: string, context: Record<string, unknown> = {}) => {
-    const names = Object.keys(context).filter((k) => /^[A-Za-z_$][\w$]*$/.test(k));
-    return new Function(...names, `return eval(${JSON.stringify(code)})`)(...names.map((n) => context[n]));
+    const sandbox: Record<PropertyKey, unknown> = new Proxy(context, {
+      has: (_target, key) => key !== VM_CODE,
+      get: (target, key) => {
+        if (key === Symbol.unscopables) return undefined;
+        if (key === 'globalThis') return sandbox;
+        return key in target ? target[key as string] : Reflect.get(globalThis, key);
+      },
+      set: (target, key, value) => Reflect.set(target, key, value),
+    });
+    // Sloppy-mode function: `with` routes every free name through the sandbox.
+    return new Function(VM_CODE, `with (this) { return eval(${VM_CODE}); }`).call(sandbox, code);
   };
   class Script {
     constructor(private readonly code: string) {}
@@ -231,7 +246,7 @@ const unavailable = (name: string) => () => {
 export function createStubModules(): Record<string, Record<string, unknown>> {
   return {
     perf_hooks: { performance: globalThis.performance, PerformanceObserver: class { observe() {} disconnect() {} }, monitorEventLoopDelay: () => ({ enable() {}, disable() {}, percentile: () => 0, mean: 0, max: 0, min: 0 }), constants: {} },
-    dns: { lookup: (host: string, options: unknown, cb?: (e: Error | null, address: string, family: number) => void) => queueMicrotask(() => ((typeof options === 'function' ? options : cb) as NonNullable<typeof cb>)(null, host === 'localhost' ? '127.0.0.1' : host, 4)), resolve: unavailable('dns.resolve'), promises: { lookup: async (host: string) => ({ address: host === 'localhost' ? '127.0.0.1' : host, family: 4 }) }, setDefaultResultOrder: () => undefined },
+    dns: { lookup: (host: string, options: unknown, cb?: (e: Error | null, address: string, family: number) => void) => queueCallback(() => ((typeof options === 'function' ? options : cb) as NonNullable<typeof cb>)(null, host === 'localhost' ? '127.0.0.1' : host, 4)), resolve: unavailable('dns.resolve'), promises: { lookup: async (host: string) => ({ address: host === 'localhost' ? '127.0.0.1' : host, family: 4 }) }, setDefaultResultOrder: () => undefined },
     v8: { getHeapStatistics: () => ({ total_heap_size: 30e6, used_heap_size: 20e6, heap_size_limit: 2e9 }), getHeapSpaceStatistics: () => [], serialize: (v: unknown) => new TextEncoder().encode(JSON.stringify(v)), deserialize: (b: Uint8Array) => JSON.parse(new TextDecoder().decode(b)), setFlagsFromString: () => undefined, cachedDataVersionTag: () => 0 },
     cluster: { isMaster: true, isPrimary: true, isWorker: false, workers: {}, fork: unavailable('cluster.fork'), on: () => undefined, settings: {} },
     inspector: { open: () => undefined, close: () => undefined, url: () => undefined, Session: class { connect() {} post() {} disconnect() {} }, console: globalThis.console },

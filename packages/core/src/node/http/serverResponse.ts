@@ -55,6 +55,13 @@ export class ServerResponse extends OutgoingHeaders {
   override flushHeaders(): void {
     this.sendHead();
   }
+  /** Node internals that middleware (compression, on-headers) patch around: send the head now; is it out yet? */
+  _implicitHeader(): void {
+    this.sendHead();
+  }
+  get _header(): boolean {
+    return this.headersSent;
+  }
   writeContinue(): void {}
   writeProcessing(): void {}
   writeEarlyHints(): void {}

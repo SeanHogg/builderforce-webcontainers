@@ -14,6 +14,7 @@ import { Writable } from '../stream/writable.js';
 import { createSyncFs, type FsContext, type SyncFs } from './sync.js';
 import { Dirent, Stats, constants } from './stats.js';
 import { normalizePath } from '../../paths.js';
+import { queueCallback } from '../processExit.js';
 
 export interface FsModuleContext extends FsContext {
   /** Keep the process alive (a watcher is open); call the result to let go. */
@@ -34,7 +35,7 @@ export function createFsModule(ctx: FsModuleContext): Record<string, any> {
   const toCallback = (fn: Fn, shape: (result: any, args: any[]) => any[] = (r) => [r]) =>
     (...args: any[]) => {
       const cb = lastCallback(args);
-      queueMicrotask(() => {
+      queueCallback(() => {
         let result: unknown;
         try {
           result = fn(...args);
@@ -63,7 +64,7 @@ export function createFsModule(ctx: FsModuleContext): Record<string, any> {
       this.path = typeof options === 'object' && opts.fd !== undefined ? '' : sync._resolve(path);
       this.offset = opts.start ?? 0;
       this.endAt = opts.end ?? Infinity;
-      queueMicrotask(() => {
+      queueCallback(() => {
         try {
           const contents = sync.readFileSync(this.path) as Buffer;
           this.data = contents;
@@ -109,7 +110,7 @@ export function createFsModule(ctx: FsModuleContext): Record<string, any> {
     constructor(path: string | URL, private readonly options: { flags?: string; encoding?: string } | string = {}) {
       super({ decodeStrings: true });
       this.path = sync._resolve(path);
-      queueMicrotask(() => {
+      queueCallback(() => {
         try {
           this.open();
           this.emit('open', -1);
@@ -217,7 +218,7 @@ export function createFsModule(ctx: FsModuleContext): Record<string, any> {
     if (!name.endsWith('Sync')) continue;
     const base = name.slice(0, -4);
     const fn = (sync as unknown as Record<string, Fn>)[name]!;
-    if (base === 'exists') fs.exists = (p: string, cb: Fn) => queueMicrotask(() => cb(sync.existsSync(p)));
+    if (base === 'exists') fs.exists = (p: string, cb: Fn) => queueCallback(() => cb(sync.existsSync(p)));
     // (err, bytes, buffer|buffers), as Node's callbacks report them.
     else if (['read', 'write', 'readv', 'writev'].includes(base)) fs[base] = toCallback(fn, (n, args) => [n, args[1]]);
     else fs[base] = toCallback(fn);

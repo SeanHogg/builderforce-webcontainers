@@ -6,8 +6,9 @@
  */
 import { EventEmitterBase } from '../events.js';
 import { Buffer } from '../buffer.js';
+import { queueCallback } from '../processExit.js';
 
-export const tick = (fn: () => void) => queueMicrotask(fn);
+export const tick = queueCallback;
 
 export interface ReadableOptions {
   highWaterMark?: number;

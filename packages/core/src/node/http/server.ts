@@ -14,6 +14,7 @@ import { pushStream } from '../../system/httpStream.js';
 import { FakeSocket, IncomingMessage } from './messages.js';
 import { ServerResponse } from './serverResponse.js';
 import { UpgradeSocket } from './upgradeSocket.js';
+import { queueCallback } from '../processExit.js';
 
 export { FakeSocket, IncomingMessage, OutgoingHeaders } from './messages.js';
 export { ServerResponse } from './serverResponse.js';
@@ -48,12 +49,12 @@ export class Server extends EventEmitterBase {
     try {
       this.registration = this.deps.system.listen(port, (request) => this.handle(request), (request, socket) => this.upgrade(request, socket));
     } catch (error) {
-      queueMicrotask(() => this.emit('error', error));
+      queueCallback(() => this.emit('error', error));
       return this;
     }
     this.listening = true;
     this.release = this.deps.loop.hold();
-    queueMicrotask(() => this.emit('listening'));
+    queueCallback(() => this.emit('listening'));
     return this;
   }
 
@@ -63,7 +64,7 @@ export class Server extends EventEmitterBase {
 
   close(callback?: (error?: Error) => void): this {
     if (!this.registration) {
-      if (callback) queueMicrotask(() => callback(Object.assign(new Error('Server is not running.'), { code: 'ERR_SERVER_NOT_RUNNING' })));
+      if (callback) queueCallback(() => callback(Object.assign(new Error('Server is not running.'), { code: 'ERR_SERVER_NOT_RUNNING' })));
       return this;
     }
     this.registration.close();
@@ -72,7 +73,7 @@ export class Server extends EventEmitterBase {
     this.release?.();
     this.release = undefined;
     if (callback) this.once('close', callback);
-    queueMicrotask(() => this.emit('close'));
+    queueCallback(() => this.emit('close'));
     return this;
   }
 

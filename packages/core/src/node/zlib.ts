@@ -6,6 +6,7 @@
 import * as fflate from 'fflate';
 import { Buffer } from './buffer.js';
 import { Transform } from './stream/index.js';
+import { queueCallback } from './processExit.js';
 
 type Input = string | ArrayBufferView | ArrayBuffer;
 type Options = { level?: number };
@@ -35,6 +36,8 @@ const STREAMS: Record<string, (options?: Options) => InstanceType<StreamCtor>> =
   InflateRaw: () => new fflate.Inflate(),
   Unzip: () => new fflate.Decompress() as unknown as InstanceType<StreamCtor>,
 };
+
+const Z_FINISH = 4;
 
 function zlibError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
@@ -72,6 +75,25 @@ class ZlibStream extends Transform {
     }
   }
 
+  /** Node's native handle, which minizlib (tar) briefly patches around `_processChunk`. */
+  _handle = { close: () => undefined };
+
+  /** Node's internal synchronous step: minizlib drives it directly instead of `write`. */
+  _processChunk(chunk: Uint8Array, flushFlag: number): Buffer {
+    const out: Uint8Array[] = [];
+    const ondata = this.engine.ondata;
+    this.engine.ondata = (data: Uint8Array) => void (data.length && out.push(data));
+    try {
+      this.bytesWritten += chunk.length;
+      this.engine.push(chunk, flushFlag === Z_FINISH);
+    } catch (error) {
+      throw zlibError(error);
+    } finally {
+      this.engine.ondata = ondata;
+    }
+    return Buffer.concat(out);
+  }
+
   flush(_kind?: unknown, callback?: () => void): void {
     callback?.();
   }
@@ -93,7 +115,7 @@ const noBrotli = () => {
 export function createZlibModule(): Record<string, unknown> {
   const mod: Record<string, unknown> = {
     constants: {
-      Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3, Z_FINISH: 4, Z_BLOCK: 5,
+      Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3, Z_FINISH, Z_BLOCK: 5,
       Z_OK: 0, Z_STREAM_END: 1, Z_NEED_DICT: 2, Z_ERRNO: -1, Z_STREAM_ERROR: -2, Z_DATA_ERROR: -3, Z_BUF_ERROR: -5,
       Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9, Z_DEFAULT_COMPRESSION: -1,
       Z_FILTERED: 1, Z_HUFFMAN_ONLY: 2, Z_RLE: 3, Z_FIXED: 4, Z_DEFAULT_STRATEGY: 0,
@@ -124,7 +146,7 @@ export function createZlibModule(): Record<string, unknown> {
     };
     mod[name] = (input: Input, options: Options | ((e: Error | null, r?: Buffer) => void), callback?: (e: Error | null, r?: Buffer) => void) => {
       const cb = (typeof options === 'function' ? options : callback)!;
-      queueMicrotask(() => {
+      queueCallback(() => {
         try {
           cb(null, Buffer.from(fn(bytes(input), typeof options === 'object' ? options : undefined)));
         } catch (error) {

@@ -13,13 +13,11 @@ import type { VirtualFileSystem } from '../vfs.js';
 import { join, normalizePath } from '../paths.js';
 import { fsError } from './fs/stats.js';
 import { format } from './inspect.js';
+import { ProcessExit, queueCallback } from './processExit.js';
 
 export const NODE_VERSION = '20.18.0';
 
-/** Thrown by `process.exit()` to unwind user code; the runtime catches it. */
-export class ProcessExit {
-  constructor(readonly code: number) {}
-}
+export { ProcessExit };
 
 let nextPid = 100;
 
@@ -64,7 +62,7 @@ class TtyWriteStream extends Writable {
   override write(chunk: unknown, encoding?: any, callback?: any): boolean {
     if (typeof encoding === 'function') callback = encoding;
     this.sink(typeof chunk === 'string' || chunk instanceof Uint8Array ? chunk : String(chunk));
-    if (typeof callback === 'function') queueMicrotask(callback);
+    if (typeof callback === 'function') queueCallback(callback);
     return true;
   }
 
@@ -213,7 +211,9 @@ export function createProcess(options: ProcessOptions): NodeProcess {
   Object.assign(proc, {
     title: 'node',
     version: `v${NODE_VERSION}`,
-    versions: { node: NODE_VERSION, v8: '11.3.244.8-node.23', uv: '1.48.0', zlib: '1.3.0.1', modules: '115', napi: '9', unicode: '15.1' },
+    // `webcontainer` is the ecosystem's in-browser-runtime marker: tools that check it
+    // pick their WebAssembly builds over native binaries (Next.js loads @next/swc-wasm-nodejs).
+    versions: { node: NODE_VERSION, v8: '11.3.244.8-node.23', uv: '1.48.0', zlib: '1.3.0.1', modules: '115', napi: '9', unicode: '15.1', webcontainer: NODE_VERSION },
     release: { name: 'node', lts: 'Iron' },
     platform: 'linux',
     arch: 'x64',

@@ -11,6 +11,7 @@ import { Writable } from './stream/writable.js';
 import type { EventLoop } from './loop.js';
 import type { ChildHandle, System } from '../system/types.js';
 import type { IpcEndpoint } from '../system/ipc.js';
+import { queueCallback } from './processExit.js';
 
 interface SpawnOptions {
   cwd?: string;
@@ -24,6 +25,8 @@ interface SpawnOptions {
   ipc?: boolean;
   /** `fork`: pipe the child's stdout/stderr to `child.stdout`/`stderr` instead of the parent's. */
   silent?: boolean;
+  /** Keep running after this process exits (otherwise it is killed with it). */
+  detached?: boolean;
 }
 
 export interface ChildProcessDeps {
@@ -52,6 +55,10 @@ class ChildProcess extends EventEmitterBase {
   stdio: [Writable, Readable, Readable];
   private handle?: ChildHandle;
   private ipc?: IpcEndpoint;
+  /** Lets go of the parent's event loop; undefined once released (exit, or `unref()`). */
+  private release?: () => void;
+  private exited = false;
+  private readonly hold: () => () => void;
 
   constructor(deps: ChildProcessDeps, command: string, args: string[], options: SpawnOptions) {
     super();
@@ -75,14 +82,15 @@ class ChildProcess extends EventEmitterBase {
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(options.env ?? deps.env())) if (v !== undefined) env[k] = String(v);
     const [file, argv] = options.shell ? ['bfsh', ['-c', [command, ...args].join(' ')]] : [command, args];
-    const release = deps.loop.hold();
+    this.hold = () => deps.loop.hold();
+    this.release = this.hold();
     try {
-      this.handle = deps.system.spawn(file, argv, { cwd: options.cwd ?? deps.cwd(), env, ipc: options.ipc });
+      this.handle = deps.system.spawn(file, argv, { cwd: options.cwd ?? deps.cwd(), env, ipc: options.ipc, detached: options.detached });
     } catch (error) {
-      release();
+      this.unref();
       const code = (error as { code?: string }).code ?? 'ENOENT';
       const failure = Object.assign(new Error(`spawn ${command} ${code}`), { code, errno: -2, syscall: `spawn ${command}`, path: command, spawnargs: args });
-      queueMicrotask(() => {
+      queueCallback(() => {
         this.emit('error', failure);
         this.emit('close', -2, null);
       });
@@ -102,8 +110,9 @@ class ChildProcess extends EventEmitterBase {
     this.handle.onStdout((chunk) => (inherit ? deps.stdout(chunk) : this.stdout.push(chunk)));
     this.handle.onStderr((chunk) => (inherit ? deps.stderr(chunk) : this.stderr.push(chunk)));
     options.signal?.addEventListener('abort', () => this.kill());
-    queueMicrotask(() => this.emit('spawn'));
+    queueCallback(() => this.emit('spawn'));
     void this.handle.exit.then((code) => {
+      this.exited = true;
       this.exitCode = this.killed ? null : code;
       this.stdout.push(null);
       this.stderr.push(null);
@@ -111,7 +120,7 @@ class ChildProcess extends EventEmitterBase {
         this.emit('exit', this.exitCode, this.signalCode);
         this.emit('close', this.exitCode, this.signalCode);
       });
-      release();
+      this.unref();
     });
   }
 
@@ -126,8 +135,8 @@ class ChildProcess extends EventEmitterBase {
   send(message: unknown, ...rest: unknown[]): boolean {
     const callback = rest.find((arg): arg is (error: Error | null) => void => typeof arg === 'function');
     const fail = (error: Error) => {
-      if (callback) queueMicrotask(() => callback(error));
-      else queueMicrotask(() => this.emit('error', error));
+      if (callback) queueCallback(() => callback(error));
+      else queueCallback(() => this.emit('error', error));
       return false;
     };
     if (!this.ipc) return fail(Object.assign(new Error('Channel closed'), { code: 'ERR_IPC_CHANNEL_CLOSED' }));
@@ -136,14 +145,20 @@ class ChildProcess extends EventEmitterBase {
     } catch (error) {
       return fail(error as Error);
     }
-    if (callback) queueMicrotask(() => callback(null));
+    if (callback) queueCallback(() => callback(null));
     return true;
   }
   disconnect(): void {
     this.ipc?.disconnect();
   }
-  ref(): void {}
-  unref(): void {}
+  /** A running child keeps the parent alive until `unref()` (then `ref()` to hold it again). */
+  ref(): void {
+    if (!this.release && this.handle && !this.exited) this.release = this.hold();
+  }
+  unref(): void {
+    this.release?.();
+    this.release = undefined;
+  }
 }
 
 type ExecCallback = (error: (Error & { code?: number | string }) | null, stdout: string, stderr: string) => void;

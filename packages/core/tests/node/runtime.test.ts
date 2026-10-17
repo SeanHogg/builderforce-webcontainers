@@ -134,6 +134,8 @@ describe('node runtime: event loop', () => {
     expect((await exec(kernel, 'node', ['-p', '6 * 7'])).output).toBe('42\n');
     expect((await exec(kernel, 'node', ['-e', 'console.log(process.argv.slice(1).join(","))', 'a', 'b'])).output).toBe('a,b\n');
     expect((await exec(kernel, 'node', ['-v'])).output).toMatch(/^v20\./);
+    // The in-browser-runtime marker tools check to choose WebAssembly builds (Next.js's SWC).
+    expect((await exec(kernel, 'node', ['-p', 'typeof process.versions.webcontainer'])).output).toBe('string\n');
   });
 });
 
@@ -145,6 +147,24 @@ describe('spawning process.execPath', () => {
     });
     expect(code).toBe(0);
     expect(output).toBe('in child /usr/local/bin/node\nchild exited 0\n');
+  });
+});
+
+describe('children die with their parent', () => {
+  it('kills a still-running child (and frees its port) when the parent exits, unless detached', async () => {
+    const { kernel, output, code } = await runNode({
+      'index.js': `
+        const { spawn } = require('child_process');
+        spawn(process.execPath, ['server.js', '4100'], { detached: true }).unref();
+        spawn(process.execPath, ['server.js', '4000']).stdout.on('data', (d) => { console.log(String(d).trim()); process.exit(0); });
+      `,
+      'server.js': `const port = Number(process.argv[2]); require('http').createServer(() => {}).listen(port, () => console.log('up', port));`,
+    });
+    expect(code).toBe(0);
+    expect(output).toBe('up 4000\n');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(kernel.ports.has(4000)).toBe(false);
+    expect(kernel.ports.has(4100)).toBe(true);
   });
 });
 

@@ -82,12 +82,29 @@ export function runProgram(options: RunProgramOptions): ChildHandle {
       : undefined,
   };
 
+  // Children die with their parent unless `detached`: an orphan here would hold its
+  // ports and timers with nothing left that can reach it to stop it.
+  const children = new Set<ChildHandle>();
+  const system: System = {
+    ...options.system,
+    spawn(command, args, spawnOptions) {
+      const child = options.system.spawn(command, args, spawnOptions);
+      if (!spawnOptions?.detached) {
+        children.add(child);
+        void child.exit.then(() => children.delete(child));
+      }
+      return child;
+    },
+  };
+  const settle = (resolve: (code: number) => void, code: number) => {
+    options.channel?.disconnect();
+    settled = true;
+    for (const child of children) child.kill('SIGTERM');
+    resolve(code);
+  };
+
   const exit = new Promise<number>((resolve) => {
-    forceExit = (code) => {
-      options.channel?.disconnect();
-      settled = true;
-      resolve(code);
-    };
+    forceExit = (code) => settle(resolve, code);
     queueMicrotask(async () => {
       let code: number;
       try {
@@ -96,7 +113,7 @@ export function runProgram(options: RunProgramOptions): ChildHandle {
           cwd: options.cwd,
           env: options.env,
           io,
-          system: options.system,
+          system,
           signal: controller.signal,
           ipc: options.channel,
           thread: options.thread,
@@ -105,9 +122,7 @@ export function runProgram(options: RunProgramOptions): ChildHandle {
         io.stderr(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
         code = 1;
       }
-      options.channel?.disconnect();
-      settled = true;
-      resolve(code);
+      settle(resolve, code);
     });
   });
 

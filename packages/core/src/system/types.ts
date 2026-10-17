@@ -34,6 +34,8 @@ export interface ProcessOptions {
   ipc?: boolean;
   /** Run as a `worker_threads` Worker: the child's `worker_threads` reports this, over the `ipc` channel. */
   thread?: ThreadInfo;
+  /** Outlive the parent (`spawn(…, { detached: true })`). Otherwise a child still running when its parent exits is killed with it. */
+  detached?: boolean;
 }
 
 /** What a process started as a worker thread sees in `worker_threads`. */
