@@ -6,13 +6,14 @@ import {
   type BuildResult,
   type Bundler,
   type ComponentCompilers,
-  type FileSystemTree,
-  type FlatFiles,
+  type FileTree,
   type PackageCdnFactory,
+  type PortChange,
+  type ProcessOptions,
   type ProjectProfile,
+  type RuntimeProcess,
+  type ServerAddress,
   type Transformer,
-  type SpawnOptions,
-  type WebContainerProcess,
 } from '@seanhogg/builderforce-webcontainers-core';
 import { PREVIEW_ID, isPortPath, isWireRequest, previewBase, type WireRequest, type WireResponse } from './protocol.js';
 import { createProcessHost, servePortRequest, type NodeRuntimeOptions } from './node/index.js';
@@ -41,9 +42,9 @@ export interface RelayOptions {
   scope?: never;
 }
 
-export type BootOptions = (SameOriginOptions | RelayOptions) & CommonBootOptions;
+export type PreviewRuntimeOptions = (SameOriginOptions | RelayOptions) & CommonRuntimeOptions;
 
-export interface CommonBootOptions {
+export interface CommonRuntimeOptions {
   /** Compiler. Defaults to esbuild-wasm. */
   transformer?: Transformer;
   /** Package CDN factory, for previews (`dev: true`) and builds (`dev: false`). Defaults to esm.sh. */
@@ -58,7 +59,7 @@ export interface CommonBootOptions {
   attribution?: boolean;
   /** Reload open previews when files change. Default true. */
   liveReload?: boolean;
-  /** The Node runtime behind `spawn` (process workers, npm registry). */
+  /** The Node runtime behind `run` (process workers, npm registry). */
   node?: NodeRuntimeOptions;
 }
 
@@ -84,7 +85,8 @@ export interface PreviewRuntime {
   readonly url: string;
   readonly fs: VirtualFileSystem;
   readonly server: DevServer;
-  mount(files: FileSystemTree | FlatFiles): void;
+  /** Write files into the runtime (nested or flat; see `FileTree`). Open previews reload. */
+  writeTree(files: FileTree): void;
   /** Whether this runtime can serve the mounted project, and why not. */
   profile(): ProjectProfile;
   /**
@@ -96,17 +98,16 @@ export interface PreviewRuntime {
   /** Uncaught errors and rejections raised inside the preview. */
   onError(listener: (error: PreviewError) => void): () => void;
   /**
-   * Run a command — `node server.js`, `npm install`, `npm run dev`, `jsh` for a
-   * terminal — in its own Web Worker. Same shape as `@webcontainer/api`'s
-   * `spawn`: `output`/`input` streams, `exit`, `kill()`, `resize()`. Pass
-   * `{ terminal: { cols, rows } }` when wiring it to xterm.js.
+   * Run a command — `node server.js`, `npm install`, `npm run dev`, `bfsh` for a
+   * terminal — in its own Web Worker. Pass `{ terminal: { cols, rows } }` when
+   * wiring it to xterm.js.
    */
-  spawn(command: string, args?: string[], options?: SpawnOptions): WebContainerProcess;
-  spawn(command: string, options?: SpawnOptions): WebContainerProcess;
-  /** `server-ready`: a process started listening (or a dev script handed off to the preview); `url` loads it in an iframe. */
-  on(event: 'server-ready', listener: (port: number, url: string) => void): () => void;
-  /** `port`: a virtual server opened or closed. */
-  on(event: 'port', listener: (port: number, type: 'open' | 'close', url: string) => void): () => void;
+  run(command: string, args?: string[], options?: ProcessOptions): RuntimeProcess;
+  run(command: string, options?: ProcessOptions): RuntimeProcess;
+  /** A process started listening (or a dev script handed off to the preview); `url` loads it in an iframe. */
+  onServerListening(listener: (server: ServerAddress) => void): () => void;
+  /** A virtual server opened or closed its port. */
+  onPortChange(listener: (change: PortChange) => void): () => void;
   dispose(): void;
 }
 
@@ -130,7 +131,7 @@ export function toWire(reqId: number, served: Awaited<ReturnType<DevServer['hand
  * nothing else: no cross-origin isolation headers, no SharedArrayBuffer. Pass
  * `relayUrl` to serve the preview from its own origin (see `RelayOptions`).
  */
-export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewRuntime> {
+export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promise<PreviewRuntime> {
   const id = options.id ?? randomId();
   if (!PREVIEW_ID.test(id)) throw new Error(`Preview id "${id}" may only contain letters, digits, "_" and "-".`);
 
@@ -196,7 +197,7 @@ export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewR
     url: previewUrl,
     fs,
     server,
-    mount: (files) => fs.mount(files),
+    writeTree: (files) => fs.writeTree(files),
     profile: () => server.profile(),
     async build(buildOptions = {}) {
       const bundler = options.bundler ?? (await createEsbuildWasmBundler());
@@ -206,8 +207,9 @@ export async function bootPreviewRuntime(options: BootOptions): Promise<PreviewR
       errorListeners.add(listener);
       return () => errorListeners.delete(listener);
     },
-    spawn: (command: string, args?: string[] | SpawnOptions, spawnOptions?: SpawnOptions) => processes.spawn(command, args as string[], spawnOptions),
-    on: ((event: 'server-ready' | 'port', listener: (...args: any[]) => void) => processes.on(event as 'port', listener)) as PreviewRuntime['on'],
+    run: (command: string, args?: string[] | ProcessOptions, runOptions?: ProcessOptions) => processes.run(command, args as string[], runOptions),
+    onServerListening: (listener) => processes.servers.onListening(listener),
+    onPortChange: (listener) => processes.servers.onPortChange(listener),
     dispose() {
       processes.dispose();
       window.removeEventListener('message', onWindowMessage);

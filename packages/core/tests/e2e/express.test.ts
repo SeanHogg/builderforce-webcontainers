@@ -30,9 +30,9 @@ describe.runIf(process.env.BFWC_NETWORK === '1')('real-world packages (network)'
     expect(install.output).toMatch(/added \d+ packages/);
     expect(install.code).toBe(0);
 
-    const ready = new Promise<number>((resolve) => kernel.on('server-ready', (port) => resolve(port)));
-    const proc = kernel.spawn('node', ['server.js']);
-    const output = readAll(proc.output);
+    const ready = new Promise<number>((resolve) => kernel.servers.onListening(({ port }) => resolve(port)));
+    const proc = kernel.run('node', ['server.js']);
+    const output = readAll(proc.combinedOutput);
     expect(await ready).toBe(3000);
 
     const home = await kernel.request(3000, { url: '/' });
@@ -49,7 +49,7 @@ describe.runIf(process.env.BFWC_NETWORK === '1')('real-world packages (network)'
 
     expect((await kernel.request(3000, { url: '/missing' }))?.status).toBe(404);
     proc.kill();
-    await proc.exit;
+    await proc.wait();
     expect(await output).toContain('listening');
   }, 180_000);
 });

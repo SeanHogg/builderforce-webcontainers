@@ -9,19 +9,19 @@ headers, no session caps, MIT licensed.
    scope stays off the rest of your app. You can resolve its path with
    `import.meta.resolve('@seanhogg/builderforce-webcontainers/sw.js')`, or copy it
    in your build.
-2. Boot and mount:
+2. Start and write the files:
 
 ```ts
-import { bootPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
+import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
 
-const runtime = await bootPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
-runtime.mount(files);
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+runtime.writeTree(files);
 if (runtime.profile().supported) iframe.src = runtime.url;
 else showFallback(runtime.profile().reason);
 ```
 
 To run untrusted code (AI-written, arbitrary packages), isolate the preview on its
-own origin with `bootPreviewRuntime({ relayUrl })`. That origin serves
+own origin with `startPreviewRuntime({ relayUrl })`. That origin serves
 `relay.html`, `sw.js` and `process-worker.js` (strings in `@seanhogg/builderforce-webcontainers/assets`)
 with `Content-Security-Policy: frame-ancestors` limited to your app. See the
 [root README](../../README.md#isolating-the-preview-relay-mode).

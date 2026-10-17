@@ -20,7 +20,7 @@ function viaShell(command: string): Program {
 export function defaultPrograms(): Record<string, Program> {
   const programs: Record<string, Program> = {
     node: nodeProgram,
-    jsh: shellProgram,
+    bfsh: shellProgram,
     sh: shellProgram,
     bash: shellProgram,
     npm: viaShell('npm'),

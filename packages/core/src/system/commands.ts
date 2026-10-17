@@ -1,8 +1,8 @@
 /**
  * Command lookup, shared by the kernel, the browser host and the shell:
- * registered programs first (node, npm, jsh, coreutils), then a path or a
+ * registered programs first (node, npm, bfsh, coreutils), then a path or a
  * `PATH`/`node_modules/.bin` lookup. A found file runs under `node` (a `.bin`
- * shim runs its target directly) or, with a shell shebang, under `jsh`.
+ * shim runs its target directly) or, with a shell shebang, under `bfsh`.
  */
 import type { VirtualFileSystem } from '../vfs.js';
 import { dirname, extname, join, normalizePath } from '../paths.js';
@@ -10,7 +10,7 @@ import { readBinLink } from '../installer/bins.js';
 import type { Program } from './types.js';
 
 export interface ResolvedCommand {
-  /** The registered program that will run (`node`, `jsh`, `ls`…). */
+  /** The registered program that will run (`node`, `bfsh`, `ls`…). */
   name: string;
   program: Program;
   args: string[];
@@ -40,12 +40,12 @@ export function findExecutable(fs: VirtualFileSystem, command: string, cwd: stri
 }
 
 /** How to run a script file: its interpreter and arguments. */
-export function interpreterFor(fs: VirtualFileSystem, path: string): { name: 'node' | 'jsh'; args: string[] } {
+export function interpreterFor(fs: VirtualFileSystem, path: string): { name: 'node' | 'bfsh'; args: string[] } {
   const target = readBinLink(fs, path);
   if (target) return { name: 'node', args: [target] };
   const firstLine = (fs.readText(path) ?? '').split('\n', 1)[0] ?? '';
-  if (/^#!.*\b(?:sh|bash|jsh|zsh|dash)\b/.test(firstLine)) return { name: 'jsh', args: [path] };
-  if (['.sh', '.bash'].includes(extname(path))) return { name: 'jsh', args: [path] };
+  if (/^#!.*\b(?:sh|bash|bfsh|zsh|dash)\b/.test(firstLine)) return { name: 'bfsh', args: [path] };
+  if (['.sh', '.bash'].includes(extname(path))) return { name: 'bfsh', args: [path] };
   return { name: 'node', args: [path] };
 }
 

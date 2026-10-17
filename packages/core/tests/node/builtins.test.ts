@@ -168,7 +168,7 @@ describe('node builtins', () => {
 });
 
 describe('node http', () => {
-  it('serves requests on a virtual port and announces server-ready', async () => {
+  it('serves requests on a virtual port and announces the listening server', async () => {
     const kernel = kernelWith({
       'server.js': `
         const http = require('http');
@@ -184,16 +184,16 @@ describe('node http', () => {
         server.listen(3000, () => console.log('listening', server.address().port));
       `,
     });
-    const ready = new Promise<[number, string]>((resolve) => kernel.on('server-ready', (port, url) => resolve([port, url])));
-    const proc = kernel.spawn('node', ['server.js']);
-    const output = readAll(proc.output);
+    const ready = new Promise<[number, string]>((resolve) => kernel.servers.onListening(({ port, url }) => resolve([port, url])));
+    const proc = kernel.run('node', ['server.js']);
+    const output = readAll(proc.combinedOutput);
     expect(await ready).toEqual([3000, 'http://localhost:3000/']);
     const response = await kernel.request(3000, { method: 'POST', url: '/echo?x=1', body: new TextEncoder().encode('payload') });
     expect(response?.status).toBe(201);
     expect(response?.headers['x-path']).toBe('/echo?x=1');
     expect(new TextDecoder().decode(response?.body)).toBe('POST payload 7'); // content-length is synthesised for body parsers
     proc.kill();
-    expect(await proc.exit).toBe(143);
+    expect(await proc.wait()).toBe(143);
     expect(await output).toBe('listening 3000\n');
     expect(kernel.ports.has(3000)).toBe(false);
   });

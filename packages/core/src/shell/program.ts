@@ -1,5 +1,5 @@
 /**
- * The `jsh` program: `jsh -c "…"`, `jsh script.sh`, a script on stdin, or —
+ * The `bfsh` program: `bfsh -c "…"`, `bfsh script.sh`, a script on stdin, or —
  * attached to a terminal — the interactive shell. Interactively the shell owns
  * the keyboard (raw mode) while it edits a line, and hands it to the running
  * job otherwise: straight through to a terminal-attached child (which has its
@@ -22,7 +22,7 @@ function createShell(ctx: ProgramContext, positional: string[] = []): Shell {
   return new Shell({
     system: ctx.system,
     cwd: ctx.cwd,
-    env: { ...ctx.env, SHELL: '/bin/jsh' },
+    env: { ...ctx.env, SHELL: '/bin/bfsh' },
     positional,
     terminalSize: () => (ctx.io.terminal ? { cols: ctx.io.terminal.cols, rows: ctx.io.terminal.rows } : undefined),
     commands: SHELL_COMMANDS,
@@ -131,7 +131,7 @@ async function interactive(ctx: ProgramContext): Promise<number> {
     try {
       await shell.exec(line, io, current.input, controller.signal);
     } catch (error) {
-      ctx.io.stderr(`jsh: ${error instanceof Error ? error.message : String(error)}\n`);
+      ctx.io.stderr(`bfsh: ${error instanceof Error ? error.message : String(error)}\n`);
     }
     job = undefined;
     if (shell.exitRequested !== undefined) return finish(shell.exitRequested);
@@ -206,7 +206,7 @@ export const shellProgram: Program = async (ctx) => {
     const path = args[0].startsWith('/') ? args[0] : join(ctx.cwd, args[0]);
     const source = ctx.system.fs.readText(path);
     if (source === undefined) {
-      ctx.io.stderr(`jsh: ${args[0]}: No such file or directory\n`);
+      ctx.io.stderr(`bfsh: ${args[0]}: No such file or directory\n`);
       return 127;
     }
     return runOnce(ctx, createShell(ctx, args.slice(1)), source.replace(/^#!.*\n/, ''));

@@ -14,19 +14,19 @@ export async function readAll(stream: ReadableStream<string>): Promise<string> {
 
 export function kernelWith(files: FlatFiles = {}, options: Partial<KernelOptions> = {}): Kernel {
   const kernel = new Kernel({ programs: defaultPrograms(), ...options });
-  kernel.fs.mount(files);
+  kernel.fs.writeTree(files);
   return kernel;
 }
 
 /** Spawn and wait: output (stdout+stderr interleaved) and exit code. */
 export async function exec(kernel: Kernel, command: string, args: string[] = [], options: { cwd?: string; input?: string; env?: Record<string, string> } = {}) {
-  const proc = kernel.spawn(command, args, { cwd: options.cwd, env: options.env });
+  const proc = kernel.run(command, args, { cwd: options.cwd, env: options.env });
   if (options.input !== undefined) {
-    const writer = proc.input.getWriter();
+    const writer = proc.stdin.getWriter();
     await writer.write(options.input);
     await writer.close();
   }
-  const [output, code] = await Promise.all([readAll(proc.output), proc.exit]);
+  const [output, code] = await Promise.all([readAll(proc.combinedOutput), proc.wait()]);
   return { output, code };
 }
 

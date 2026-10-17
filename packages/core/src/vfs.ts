@@ -2,13 +2,17 @@ import { normalizePath, join, dirname } from './paths.js';
 
 export type FileContent = string | Uint8Array;
 
-/** The nested tree shape `@webcontainer/api`'s `mount()` takes — accepted as-is. */
-export interface FileSystemTree {
-  [name: string]: { file: { contents: FileContent } } | { directory: FileSystemTree };
-}
-
-/** A flat `{ 'src/main.tsx': '...' }` map, the other shape callers commonly hold. */
+/** A flat `{ 'src/main.tsx': '...' }` map: path → contents. */
 export type FlatFiles = Record<string, FileContent>;
+
+/**
+ * Files to write: a name maps to contents (a file) or to another tree (a
+ * directory). Names may hold slashes, so a {@link FlatFiles} map is a tree too,
+ * and the two styles mix freely: `{ src: { 'main.tsx': '…' }, 'public/a.svg': '…' }`.
+ */
+export interface FileTree {
+  [name: string]: FileContent | FileTree;
+}
 
 export interface FsChange {
   /** `mkdir` is an explicitly created (possibly empty) directory. */
@@ -129,18 +133,14 @@ export class VirtualFileSystem {
     return this.mtimes.get(normalizePath(path));
   }
 
-  /**
-   * Write many files at once. Takes either the nested WebContainer tree or a flat
-   * path→contents map — or a mix, since each entry is judged on its own.
-   */
-  mount(files: FileSystemTree | FlatFiles, at = '/'): void {
+  /** Write many files at once, under `at` (default `/`). A nested object is a directory, created even when empty. */
+  writeTree(files: FileTree, at = '/'): void {
     for (const [name, entry] of Object.entries(files)) {
       const path = join(at, name);
       if (typeof entry === 'string' || entry instanceof Uint8Array) this.writeFile(path, entry);
-      else if ('file' in entry) this.writeFile(path, entry.file.contents);
       else {
         this.mkdir(path);
-        this.mount(entry.directory, path);
+        this.writeTree(entry, path);
       }
     }
   }

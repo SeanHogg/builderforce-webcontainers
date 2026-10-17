@@ -4,7 +4,7 @@ import { exec, kernelWith, readAll } from '../node/helpers.js';
 import { fakeRegistry, REGISTRY } from '../installer/fakeRegistry.js';
 import type { Kernel } from '../../src/system/kernel.js';
 
-const sh = (kernel: Kernel, script: string, options: { cwd?: string; input?: string } = {}) => exec(kernel, 'jsh', ['-c', script], options);
+const sh = (kernel: Kernel, script: string, options: { cwd?: string; input?: string } = {}) => exec(kernel, 'bfsh', ['-c', script], options);
 
 describe('shell parser', () => {
   it('splits lists, pipelines, redirects and assignments, keeping quoting', () => {
@@ -31,7 +31,7 @@ describe('shell execution', () => {
   it('pipes, redirects and command substitution', async () => {
     const kernel = kernelWith();
     const { output } = await sh(kernel, `printf 'b\\na\\nc\\n' | grep -v c | head -n 1; echo hi > out.txt; echo there >> out.txt; cat out.txt; cat < out.txt | wc -l; echo "[$(echo inner)]"; nosuch 2> err.txt; cat err.txt`);
-    expect(output).toBe('b\nhi\nthere\n      2\n[inner]\njsh: command not found: nosuch\n');
+    expect(output).toBe('b\nhi\nthere\n      2\n[inner]\nbfsh: command not found: nosuch\n');
     expect(kernel.fs.readText('/out.txt')).toBe('hi\nthere\n');
   });
 
@@ -43,7 +43,7 @@ describe('shell execution', () => {
   });
 
   it('reports unknown commands with 127', async () => {
-    expect(await sh(kernelWith(), 'definitely-missing')).toEqual({ output: 'jsh: command not found: definitely-missing\n', code: 127 });
+    expect(await sh(kernelWith(), 'definitely-missing')).toEqual({ output: 'bfsh: command not found: definitely-missing\n', code: 127 });
   });
 
   it('runs node, with per-command env assignments and stdin', async () => {
@@ -81,12 +81,12 @@ describe('shell execution', () => {
 
   it('hands `npm run dev` (vite) off to the in-browser dev server', async () => {
     const kernel = kernelWith({ 'package.json': JSON.stringify({ scripts: { dev: 'vite --port 5174' } }) }, { previewUrl: 'https://app.test/__bfwc/p1/' });
-    const ready = new Promise<[number, string]>((resolve) => kernel.on('server-ready', (port, url) => resolve([port, url])));
-    const proc = kernel.spawn('npm', ['run', 'dev']);
-    const output = readAll(proc.output);
+    const ready = new Promise<[number, string]>((resolve) => kernel.servers.onListening(({ port, url }) => resolve([port, url])));
+    const proc = kernel.run('npm', ['run', 'dev']);
+    const output = readAll(proc.combinedOutput);
     expect(await ready).toEqual([5174, 'https://app.test/__bfwc/p1/']);
     proc.kill('SIGINT');
-    await proc.exit;
+    await proc.wait();
     expect(await output).toContain('https://app.test/__bfwc/p1/');
   });
 });
@@ -94,9 +94,9 @@ describe('shell execution', () => {
 describe('interactive shell', () => {
   it('edits lines, recalls history, runs commands and exits', async () => {
     const kernel = kernelWith({ 'sub/file.txt': 'x' });
-    const proc = kernel.spawn('jsh', [], { terminal: { cols: 80, rows: 24 } });
-    const output = readAll(proc.output);
-    const writer = proc.input.getWriter();
+    const proc = kernel.run('bfsh', [], { terminal: { cols: 80, rows: 24 } });
+    const output = readAll(proc.combinedOutput);
+    const writer = proc.stdin.getWriter();
     const tick = () => new Promise((r) => setTimeout(r, 20));
     await writer.write('echo hellp\x7fo\r');
     await tick();
@@ -109,7 +109,7 @@ describe('interactive shell', () => {
     await writer.write('echo partial\x03');
     await tick();
     await writer.write('exit 4\r');
-    expect(await proc.exit).toBe(4);
+    expect(await proc.wait()).toBe(4);
     const text = await output;
     // Each run: the echoed command line, then its output line.
     expect(text.split('hello\r\nhello\r\n').length - 1).toBe(2);

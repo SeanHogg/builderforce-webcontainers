@@ -18,6 +18,7 @@ ships on its own.
 - Preview errors forwarded to the host page.
 - 2026.10.1: documents opt into COEP (`credentialless`), so a cross-origin-isolated host can frame the preview.
 - 2026.10.2: live reload — editing any file reloads every frame showing the preview (`liveReload: false` turns it off); relay mode serves the preview from its own origin, isolated from the host's session (`relayUrl`).
+- 2026.10.6: the public API uses its own vocabulary, not another runtime's: `startPreviewRuntime`, `writeTree` (one `FileTree` shape: contents or a nested tree, flat paths allowed), `run()` returning a `RuntimeProcess` (`pid`, `combinedOutput`, `stdin`, `wait()`, `kill()`, `resizeTerminal()`), `onServerListening` / `onPortChange`, and the `bfsh` shell.
 
 ## Shipped in 2026.10.3
 
@@ -42,7 +43,7 @@ ships on its own.
   other platforms skipped), integrity checks, `node_modules/.bin`, lockfile v3
   written and reused (no metadata requests when it is current), `npm ci`.
   Tarballs cached in Cache Storage in the browser. Install scripts are skipped.
-- **Node runtime.** `runtime.spawn('node', …)` runs Node programs, one Web Worker
+- **Node runtime.** `runtime.run('node', …)` runs Node programs, one Web Worker
   per process (a busy loop cannot freeze the page; `kill` terminates it).
   CommonJS and ES modules over the VFS with Node resolution (`exports`/`imports`
   conditions, `type: module`, `require.cache`), and shims for fs (+promises,
@@ -50,10 +51,10 @@ ships on its own.
   string_decoder, timers, stream, assert, crypto (hashes/HMAC/random/pbkdf2),
   zlib, child_process, http/https, readline and the small modules. Servers listen
   on virtual ports, answered through the preview service worker at
-  `/__bfwc/<id>/__port/<port>/` (`server-ready`); localhost requests between
+  `/__bfwc/<id>/__port/<port>/` (`onServerListening`); localhost requests between
   processes are routed in-runtime; other `fetch`/`http.request` go to the network.
   Express installs from npm and serves (network e2e test).
-- **Shell.** `spawn('jsh', { terminal })` for xterm.js: line editing, history,
+- **Shell.** `run('bfsh', { terminal })` for xterm.js: line editing, history,
   completion, Ctrl-C/Ctrl-D; quotes, `$VAR`/`${VAR:-x}`, `$(…)`, globs, `&&`
   `||` `;` `&`, pipes, redirects; coreutils; `npm install|ci|run|start|test`,
   `npx`; `vite`/`react-scripts start` hand off to the in-browser dev server.

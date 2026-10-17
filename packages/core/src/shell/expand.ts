@@ -29,7 +29,7 @@ async function paramValue(seg: Extract<Segment, { kind: 'var' }>, ctx: ExpandCon
     case '@':
     case '*': value = ctx.positional.join(' '); break;
     case '!': value = ''; break;
-    case '0': value = 'jsh'; break;
+    case '0': value = 'bfsh'; break;
     default: value = /^\d$/.test(seg.name) ? ctx.positional[Number(seg.name) - 1] : ctx.get(seg.name);
   }
   if (!seg.op) return value ?? '';

@@ -1,4 +1,4 @@
-import { VirtualFileSystem, type FileSystemTree, type FlatFiles } from './vfs.js';
+import { VirtualFileSystem, type FileTree } from './vfs.js';
 import type { Bundler, BundleOutput } from './bundler.js';
 import type { PackageCdnFactory } from './packageCdn.js';
 import { esmShCdnFactory } from './packageCdn.js';
@@ -18,8 +18,8 @@ import { findHtmlEntries, rewriteBuiltHtml } from './buildHtml.js';
  * content hash in its name and can be cached forever.
  */
 export interface BuildOptions {
-  /** The project: a file system, or files as `mount()` takes them. */
-  files: VirtualFileSystem | FlatFiles | FileSystemTree;
+  /** The project: a file system, or files as `writeTree()` takes them. */
+  files: VirtualFileSystem | FileTree;
   bundler: Bundler;
   /** Package CDN factory (called with `dev: false`). Default: esm.sh. */
   cdn?: PackageCdnFactory;
@@ -50,7 +50,7 @@ const encoder = new TextEncoder();
 function toFileSystem(files: BuildOptions['files']): VirtualFileSystem {
   if (files instanceof VirtualFileSystem) return files;
   const fs = new VirtualFileSystem();
-  fs.mount(files);
+  fs.writeTree(files);
   return fs;
 }
 

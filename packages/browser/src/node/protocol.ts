@@ -55,7 +55,7 @@ export type WorkerToHost =
   | { type: 'unlisten'; port: number }
   | { type: 'http-response'; reqId: number; response: HttpResponseData }
   | { type: 'loopback'; reqId: number; port: number; request: HttpRequestData }
-  | { type: 'server-ready'; port: number; url: string };
+  | { type: 'listening'; port: number; url: string };
 
 /** The preview-relative URL a virtual server on `port` is reachable at. */
 export function portPath(previewBase: string, port: number): string {

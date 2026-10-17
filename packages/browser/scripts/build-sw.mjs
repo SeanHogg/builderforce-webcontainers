@@ -32,7 +32,7 @@ const relayHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Previ
 await mkdir('dist/check', { recursive: true });
 await writeFile('dist/check/worker.js', await bundle('src/check/worker.ts'));
 
-// The process worker: one per spawned process (node, npm, jsh), with the whole
+// The process worker: one per spawned process (node, npm, bfsh), with the whole
 // core runtime inlined. The host finds it beside dist/node/index.js.
 await mkdir('dist/node', { recursive: true });
 const processWorker = await bundle('src/node/worker.ts');

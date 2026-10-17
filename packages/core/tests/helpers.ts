@@ -19,6 +19,6 @@ export const text = (body: string | Uint8Array) => (typeof body === 'string' ? b
 
 export function project(files: Record<string, string | Uint8Array>): VirtualFileSystem {
   const fs = new VirtualFileSystem();
-  fs.mount(files);
+  fs.writeTree(files);
   return fs;
 }

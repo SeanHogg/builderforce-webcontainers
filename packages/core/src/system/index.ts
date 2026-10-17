@@ -1,10 +1,12 @@
 export { Kernel, DEFAULT_ENV } from './kernel.js';
-export type { KernelOptions, KernelSpawnOptions } from './kernel.js';
-export type { System, Program, ProgramContext, ProgramIO, TerminalPort, SpawnOptions, ChildHandle, HttpRequestData, HttpResponseData, HttpHandler } from './types.js';
+export type { KernelOptions } from './kernel.js';
+export type { System, Program, ProgramContext, ProgramIO, TerminalPort, ProcessOptions, ChildHandle, HttpRequestData, HttpResponseData, HttpHandler } from './types.js';
 export { PortRegistry, parsePortPath } from './ports.js';
 export type { PortEvent } from './ports.js';
-export { runProgram, toWebContainerProcess, allocatePid } from './process.js';
-export type { WebContainerProcess, RunProgramOptions } from './process.js';
+export { runProgram, runArguments, toRuntimeProcess, allocatePid } from './process.js';
+export type { RuntimeProcess, RunProgramOptions } from './process.js';
+export { ServerEvents } from './serverEvents.js';
+export type { ServerAddress, PortChange } from './serverEvents.js';
 export { resolveCommand, findExecutable, binDirectories, interpreterFor, commandNotFound } from './commands.js';
 export type { ResolvedCommand } from './commands.js';
 export { InputQueue, LineDiscipline, toTerminal } from './terminal.js';

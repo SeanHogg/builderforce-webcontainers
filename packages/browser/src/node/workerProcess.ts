@@ -144,7 +144,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
         });
       },
       serverUrl: (port) => new URL(portPath(message.previewBase, port), message.previewOrigin).href,
-      announceServer: (port, url) => deps.post({ type: 'server-ready', port, url }),
+      announceServer: (port, url) => deps.post({ type: 'listening', port, url }),
       previewUrl: message.previewUrl,
       registry: message.registry,
       packageCache: message.packageCache ? deps.packageCache?.() : undefined,
@@ -154,7 +154,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
 
     const resolved = resolveCommand(fs, programs, message.command, message.args, message.cwd, message.env);
     if (!resolved) {
-      deps.post({ type: 'stderr', data: `jsh: command not found: ${message.command}\n` });
+      deps.post({ type: 'stderr', data: `bfsh: command not found: ${message.command}\n` });
       deps.post({ type: 'exit', code: 127 });
       return;
     }

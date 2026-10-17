@@ -3,7 +3,7 @@
  * dev` / `npm start` usually run) cannot run here as-is — Vite itself needs
  * esbuild's native binary — but the runtime already IS a Vite-style dev server:
  * the in-browser DevServer serving the preview. So these commands announce that
- * preview as their server (`server-ready`) and stay "running" until Ctrl-C,
+ * preview as their server (a listening announcement) and stay "running" until Ctrl-C,
  * which is exactly what a host waiting on `npm run dev` expects.
  */
 import type { CommandContext } from './context.js';

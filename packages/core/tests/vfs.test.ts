@@ -18,10 +18,11 @@ describe('paths', () => {
 });
 
 describe('VirtualFileSystem', () => {
-  it('mounts the nested WebContainer tree and a flat map alike', () => {
+  it('writes nested and flat trees alike, keeping empty nested directories', () => {
     const fs = new VirtualFileSystem();
-    fs.mount({ src: { directory: { 'main.tsx': { file: { contents: 'a' } } } } });
-    fs.mount({ 'src/App.tsx': 'b', 'index.html': '<html></html>' });
+    fs.writeTree({ src: { 'main.tsx': 'a', empty: {} } });
+    fs.writeTree({ 'src/App.tsx': 'b', 'index.html': '<html></html>' });
+    expect(fs.isDirectory('/src/empty')).toBe(true);
     expect(fs.list()).toEqual(['/index.html', '/src/App.tsx', '/src/main.tsx']);
     expect(fs.readdir('/')).toEqual(['index.html', 'src']);
     expect(fs.isDirectory('/src')).toBe(true);
@@ -47,7 +48,7 @@ describe('VirtualFileSystem', () => {
 
   it('removes a directory recursively and emits each removal', () => {
     const fs = new VirtualFileSystem();
-    fs.mount({ 'src/a.ts': '', 'src/deep/b.ts': '', 'srcx.ts': '' });
+    fs.writeTree({ 'src/a.ts': '', 'src/deep/b.ts': '', 'srcx.ts': '' });
     const removed: string[] = [];
     fs.watch((c) => c.type === 'remove' && removed.push(c.path));
     fs.rm('/src');

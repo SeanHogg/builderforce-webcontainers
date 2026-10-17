@@ -29,7 +29,7 @@ describe('attribution badge', () => {
 
   it('flows through the dev server option', async () => {
     const fs = new VirtualFileSystem();
-    fs.mount({ 'index.html': '<html><body></body></html>' });
+    fs.writeTree({ 'index.html': '<html><body></body></html>' });
     const make = (attribution?: boolean) =>
       new DevServer({ fs, transformer: createEsbuildTransformer(esbuild), base: '/p/', attribution });
     expect(text((await make().handle('/')).body)).toContain('bfwc-attribution');

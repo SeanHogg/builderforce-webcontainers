@@ -68,7 +68,7 @@ class ChildProcess extends EventEmitterBase {
 
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(options.env ?? deps.env())) if (v !== undefined) env[k] = String(v);
-    const [file, argv] = options.shell ? ['jsh', ['-c', [command, ...args].join(' ')]] : [command, args];
+    const [file, argv] = options.shell ? ['bfsh', ['-c', [command, ...args].join(' ')]] : [command, args];
     const release = deps.loop.hold();
     try {
       this.handle = deps.system.spawn(file, argv, { cwd: options.cwd ?? deps.cwd(), env });

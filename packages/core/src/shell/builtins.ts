@@ -31,9 +31,9 @@ export const COREUTILS: Record<string, Command> = {
 };
 
 /** Programs the runtime provides besides coreutils (reported by `which`/`type`). */
-export const SYSTEM_PROGRAMS = ['node', 'npm', 'npx', 'jsh', 'sh', 'bash'];
+export const SYSTEM_PROGRAMS = ['node', 'npm', 'npx', 'bfsh', 'sh', 'bash'];
 
-const HELP = `jsh — BuilderForce WebContainers shell
+const HELP = `bfsh — BuilderForce WebContainers shell
 
   Builtins:  cd, pwd, export, unset, exit, source, history, type, which, help
   Files:     ls [-la], cat, mkdir [-p], rm [-rf], cp [-r], mv, touch

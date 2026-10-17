@@ -9,15 +9,17 @@
 import {
   DEFAULT_ENV,
   PortRegistry,
+  ServerEvents,
   allocatePid,
-  toWebContainerProcess,
+  runArguments,
+  toRuntimeProcess,
   type ChildHandle,
   type FsChange,
   type HttpRequestData,
   type HttpResponseData,
-  type SpawnOptions,
+  type ProcessOptions,
+  type RuntimeProcess,
   type VirtualFileSystem,
-  type WebContainerProcess,
 } from '@seanhogg/builderforce-webcontainers-core';
 import type { FsOp, HostToWorker, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
@@ -63,9 +65,9 @@ interface Proc {
 
 export class ProcessHost {
   readonly ports = new PortRegistry();
+  /** Servers listening, ports opening and closing. */
+  readonly servers = new ServerEvents();
   private readonly procs = new Set<Proc>();
-  private readonly serverReady = new Set<(port: number, url: string) => void>();
-  private readonly portListeners = new Set<(port: number, type: 'open' | 'close', url: string) => void>();
   private applyingFrom?: Proc;
   private flushScheduled = false;
   private nextReq = 1;
@@ -77,8 +79,7 @@ export class ProcessHost {
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
       for (const proc of this.procs) this.post(proc, { type: 'ports', open: type === 'open' ? [port] : [], closed: type === 'close' ? [port] : [] });
-      for (const l of this.portListeners) l(port, type, url);
-      if (type === 'open') for (const l of this.serverReady) l(port, url);
+      this.servers.portChanged({ type, port, url });
     });
   }
 
@@ -86,13 +87,15 @@ export class ProcessHost {
     return new URL(portPath(this.options.previewBase, port), this.options.previewOrigin).href;
   }
 
-  /** Same shape as `WebContainer#spawn`. */
-  spawn(command: string, args: string[] | SpawnOptions = [], options: SpawnOptions = {}): WebContainerProcess {
-    if (!Array.isArray(args)) [options, args] = [args, []];
-    return toWebContainerProcess(this.spawnChild(command, args, options), !!options.terminal);
+  /** Start a command in its own Web Worker, as a stream-based {@link RuntimeProcess}. */
+  run(command: string, args?: string[], options?: ProcessOptions): RuntimeProcess;
+  run(command: string, options?: ProcessOptions): RuntimeProcess;
+  run(command: string, argsOrOptions?: string[] | ProcessOptions, maybeOptions?: ProcessOptions): RuntimeProcess {
+    const [args, options] = runArguments(argsOrOptions, maybeOptions);
+    return toRuntimeProcess(this.spawnChild(command, args, options), !!options.terminal);
   }
 
-  spawnChild(command: string, args: string[] = [], options: SpawnOptions = {}): ChildHandle {
+  spawnChild(command: string, args: string[] = [], options: ProcessOptions = {}): ChildHandle {
     const pid = allocatePid();
     const worker = this.options.createWorker();
     let resolveExit!: (code: number) => void;
@@ -154,14 +157,6 @@ export class ProcessHost {
   /** Dispatch an HTTP request to the server on `port` (the preview service worker's `/__port/<port>/` path). */
   request(port: number, request: HttpRequestData): Promise<HttpResponseData | undefined> {
     return this.ports.request(port, request);
-  }
-
-  on(event: 'server-ready', listener: (port: number, url: string) => void): () => void;
-  on(event: 'port', listener: (port: number, type: 'open' | 'close', url: string) => void): () => void;
-  on(event: 'server-ready' | 'port', listener: (...args: any[]) => void): () => void {
-    const set = (event === 'server-ready' ? this.serverReady : this.portListeners) as Set<(...args: any[]) => void>;
-    set.add(listener);
-    return () => set.delete(listener);
   }
 
   dispose(): void {
@@ -291,8 +286,8 @@ export class ProcessHost {
       case 'loopback':
         void this.ports.request(message.port, message.request).then((response) => this.post(proc, { type: 'loopback-response', reqId: message.reqId, response: response ?? null }));
         return;
-      case 'server-ready':
-        for (const l of this.serverReady) l(message.port, message.url);
+      case 'listening':
+        this.servers.announce({ port: message.port, url: message.url });
         return;
     }
   }

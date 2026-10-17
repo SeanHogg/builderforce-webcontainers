@@ -9,7 +9,7 @@ const BASE = '/__bfwc/p1/';
 /** A typical generated Vite + React + TS app, the shape the canvas produces. */
 function viteReactApp(): VirtualFileSystem {
   const fs = new VirtualFileSystem();
-  fs.mount({
+  fs.writeTree({
     'package.json': JSON.stringify({
       dependencies: { react: '^18.3.1', 'react-dom': '^18.3.1' },
       devDependencies: { vite: '^5.4.0', typescript: '^5.5.0' },
@@ -145,7 +145,7 @@ describe('DevServer on a Vite + React app', () => {
 describe('DevServer on Create React App', () => {
   it('injects the entry and compiles JSX in .js files', async () => {
     const fs = new VirtualFileSystem();
-    fs.mount({
+    fs.writeTree({
       'package.json': JSON.stringify({ dependencies: { react: '18.3.1', 'react-dom': '18.3.1' } }),
       'public/index.html': '<html><head><link rel="icon" href="%PUBLIC_URL%/favicon.ico"></head><body><div id="root"></div></body></html>',
       'src/index.js': `import { createRoot } from 'react-dom/client'; createRoot(document.getElementById('root')).render(<h1>{process.env.REACT_APP_NAME}</h1>);`,
@@ -165,7 +165,7 @@ describe('DevServer on a React Native Web app', () => {
   /** The canvas's mobile scaffold: JSX in .js, `react-native` aliased in a vite.config this runtime does not run. */
   function reactNativeWebApp(dependencies: Record<string, string>): VirtualFileSystem {
     const fs = new VirtualFileSystem();
-    fs.mount({
+    fs.writeTree({
       'package.json': JSON.stringify({ dependencies, devDependencies: { vite: '^4.3.9' } }),
       'index.html': '<!doctype html><html><body><div id="root"></div><script type="module" src="/index.js"></script></body></html>',
       'index.js': `import { createRoot } from 'react-dom/client'; import App from './App'; createRoot(document.getElementById('root')).render(<App />);`,

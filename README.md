@@ -38,12 +38,12 @@ the rest of the gap.
 ## Quick start
 
 ```ts
-import { bootPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
+import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
 
 // 1. Serve node_modules/@seanhogg/builderforce-webcontainers/dist/sw.js at /__bfwc/sw.js
-// 2. Boot, mount, preview:
-const runtime = await bootPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: 'my-project' });
-runtime.mount({
+// 2. Start, write files, preview:
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: 'my-project' });
+runtime.writeTree({
   'package.json': JSON.stringify({ dependencies: { react: '^18.3.1', 'react-dom': '^18.3.1' } }),
   'index.html': '<div id="root"></div><script type="module" src="/src/main.tsx"></script>',
   'src/main.tsx': `import { createRoot } from 'react-dom/client';
@@ -67,7 +67,7 @@ the runtime loads the official compiler from a CDN (`@vue/compiler-sfc`'s browse
 build from jsDelivr, `svelte/compiler` from esm.sh), pinned to the project's own
 `vue` / `svelte` range so compiler and runtime agree. Vue `<style scoped>` and
 Svelte's component CSS are scoped as usual. Pass `components` to
-`bootPreviewRuntime` to supply compilers yourself. Not yet: `<style lang="scss">`
+`startPreviewRuntime` to supply compilers yourself. Not yet: `<style lang="scss">`
 and other preprocessors, and TypeScript in Svelte 4 (Svelte 5 handles it).
 
 ### Building for deployment
@@ -115,24 +115,28 @@ serve `dist/check/worker.js` and pass `workerUrl`. In Node, use
 
 ### Node.js, npm and a terminal
 
-`runtime.spawn()` has the same shape as `@webcontainer/api`'s, so code written
-against WebContainers ports over with little change:
+`runtime.run()` starts a command and hands back a `RuntimeProcess`: its `pid`,
+a `combinedOutput` stream (stdout and stderr as written), a `stdin` stream,
+`wait()` for the exit code, `kill()` and `resizeTerminal()`.
 
 ```ts
-const install = runtime.spawn('npm', ['install']);
-install.output.pipeTo(new WritableStream({ write: (chunk) => console.log(chunk) }));
-if ((await install.exit) !== 0) throw new Error('install failed');
+const install = runtime.run('npm', ['install']);
+install.combinedOutput.pipeTo(new WritableStream({ write: (chunk) => console.log(chunk) }));
+if ((await install.wait()) !== 0) throw new Error('install failed');
 
-runtime.on('server-ready', (port, url) => (iframe.src = url)); // …/__bfwc/<id>/__port/3000/
-runtime.spawn('node', ['server.js']);
+runtime.onServerListening(({ url }) => (iframe.src = url)); // …/__bfwc/<id>/__port/3000/
+runtime.run('node', ['server.js']);
 
 // An interactive shell for xterm.js:
-const shell = runtime.spawn('jsh', { terminal: { cols: term.cols, rows: term.rows } });
-shell.output.pipeTo(new WritableStream({ write: (data) => term.write(data) }));
-const input = shell.input.getWriter();
-term.onData((data) => input.write(data));
-term.onResize(({ cols, rows }) => shell.resize({ cols, rows }));
+const shell = runtime.run('bfsh', { terminal: { cols: term.cols, rows: term.rows } });
+shell.combinedOutput.pipeTo(new WritableStream({ write: (data) => term.write(data) }));
+const keys = shell.stdin.getWriter();
+term.onData((data) => keys.write(data));
+term.onResize(({ cols, rows }) => shell.resizeTerminal(cols, rows));
 ```
+
+`runtime.onPortChange(({ port, type, url }) => …)` reports every port opening
+and closing, for a host that lists running servers.
 
 * **Processes.** Each process runs in its own Web Worker (`dist/node/worker.js`,
   found beside the module like the check worker; or pass `node: { workerUrl }`),
@@ -145,7 +149,7 @@ term.onResize(({ cols, rows }) => shell.resize({ cols, rows }));
   `child_process`, `readline` and the rest. It reports itself as Node 20 on Linux.
 * **Servers.** `http.createServer().listen(port)` registers a virtual port; the
   preview service worker routes `/__bfwc/<id>/__port/<port>/…` to it (any method,
-  with its body) and `server-ready` fires. Absolute URLs (`/style.css`,
+  with its body) and `onServerListening` fires. Absolute URLs (`/style.css`,
   `fetch('/api')`) from such a page are mapped back to its server. `localhost`
   requests between processes stay inside the runtime; anything else goes through
   the browser's `fetch`, so CORS applies.
@@ -156,9 +160,9 @@ term.onResize(({ cols, rows }) => shell.resize({ cols, rows }));
   always build native addons, which cannot run in a browser.
 * **Dev servers.** `npm run dev` running `vite`, and `npm start` running
   `react-scripts start`, hand off to the built-in preview: they print its URL,
-  fire `server-ready` and run until Ctrl-C. (Real Vite needs esbuild's native
+  fire `onServerListening` and run until Ctrl-C. (Real Vite needs esbuild's native
   binary.)
-* **Shell (`jsh`).** Line editing, history, Tab completion, Ctrl-C/Ctrl-D; quotes,
+* **Shell (`bfsh`).** Line editing, history, Tab completion, Ctrl-C/Ctrl-D; quotes,
   `$VAR`, `$(…)`, globs, `&&`/`||`/`;`/`&`, pipes and redirects; `cd`, `ls -la`,
   `cat`, `mkdir -p`, `rm -rf`, `cp -r`, `mv`, `grep`, `head`, `tail` and friends.
   Unknown commands print `command not found`.
@@ -167,7 +171,7 @@ Not supported yet (see the [ROADMAP](ROADMAP.md)): native addons, streaming
 responses and WebSockets, `execSync`/`spawnSync`, cookies set by a virtual server,
 and the Next.js/Nuxt dev servers. Outside the browser (tests, a CLI), the core's
 `Kernel` runs the same programs in-process:
-`new Kernel({ programs: defaultPrograms() }).spawn('npm', ['install'])`.
+`new Kernel({ programs: defaultPrograms() }).run('npm', ['install'])`.
 
 ### Isolating the preview (relay mode)
 
@@ -181,12 +185,12 @@ previews from a separate origin instead:
 // from '@seanhogg/builderforce-webcontainers/assets'):
 //   /__bfwc/relay.html  with  Content-Security-Policy: frame-ancestors https://app.example.com
 //   /__bfwc/sw.js
-//   /__bfwc/process-worker.js   (only if you use spawn: node, npm, the shell)
-const runtime = await bootPreviewRuntime({ relayUrl: 'https://preview.example.com/__bfwc/relay.html' });
+//   /__bfwc/process-worker.js   (only if you use run: node, npm, the shell)
+const runtime = await startPreviewRuntime({ relayUrl: 'https://preview.example.com/__bfwc/relay.html' });
 ```
 
 The host frames `relay.html` hidden; it registers the worker on the preview
-origin and relays ports and reloads. Processes started with `spawn` run there
+origin and relays ports and reloads. Processes started with `run` run there
 too: the relay starts each process worker from `process-worker.js` on the preview
 origin, so npm packages and the user's own server never share your app's
 storage or session. `frame-ancestors` is what stops other sites from driving
@@ -219,7 +223,7 @@ bottom-right corner. It sits in a shadow root, so it never collides with the app
 styles, and it follows the system light/dark theme.
 
 It is on by default and **not** a licence condition: the project is MIT, and you
-can turn it off with `bootPreviewRuntime({ ..., attribution: false })`. If this
+can turn it off with `startPreviewRuntime({ ..., attribution: false })`. If this
 runtime saves you money, please leave it on. That link is how the project is
 funded.
 

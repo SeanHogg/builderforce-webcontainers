@@ -48,7 +48,7 @@ export function checkInputs(files: VirtualFileSystem | FlatFiles): Record<string
   if (files instanceof VirtualFileSystem) fs = files;
   else {
     fs = new VirtualFileSystem();
-    fs.mount(files);
+    fs.writeTree(files);
   }
   const out: Record<string, string> = {};
   for (const path of fs.list()) if (isCheckInput(path)) out[path.slice(1)] = fs.readText(path) ?? '';

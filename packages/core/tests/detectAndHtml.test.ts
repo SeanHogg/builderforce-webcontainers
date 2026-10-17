@@ -5,7 +5,7 @@ import { transformHtml, reloadChannelName, ERROR_MESSAGE_TYPE } from '../src/htm
 
 function project(files: Record<string, string>): VirtualFileSystem {
   const fs = new VirtualFileSystem();
-  fs.mount(files);
+  fs.writeTree(files);
   return fs;
 }
 

@@ -1,9 +1,9 @@
-export { bootPreviewRuntime } from './host.js';
+export { startPreviewRuntime } from './host.js';
 export type {
-  BootOptions,
+  PreviewRuntimeOptions,
   SameOriginOptions,
   RelayOptions,
-  CommonBootOptions,
+  CommonRuntimeOptions,
   PreviewRuntime,
   PreviewError,
   RuntimeBuildOptions,

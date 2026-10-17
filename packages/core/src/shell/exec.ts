@@ -73,7 +73,7 @@ export class Shell implements ShellState {
       script = parse(source);
     } catch (error) {
       if (!(error instanceof ShellSyntaxError)) throw error;
-      io.stderr(`jsh: ${error.message}\n`);
+      io.stderr(`bfsh: ${error.message}\n`);
       this.lastStatus = 2;
       return 2;
     }
@@ -176,7 +176,7 @@ export class Shell implements ShellState {
       if (redirect.op === '<') {
         const text = this.system.fs.readText(path);
         if (text === undefined) {
-          io.stderr(`jsh: ${target}: No such file or directory\n`);
+          io.stderr(`bfsh: ${target}: No such file or directory\n`);
           return 1;
         }
         const queue = new InputQueue();
@@ -186,7 +186,7 @@ export class Shell implements ShellState {
         continue;
       }
       if (this.system.fs.isDirectory(path)) {
-        io.stderr(`jsh: ${target}: Is a directory\n`);
+        io.stderr(`bfsh: ${target}: Is a directory\n`);
         return 1;
       }
       const append = redirect.op === '>>' || redirect.op === '2>>';
@@ -240,7 +240,7 @@ export class Shell implements ShellState {
       child = this.system.spawn(name, args, { cwd: this.cwd, env, terminal: size });
     } catch (error) {
       if ((error as { code?: string }).code !== 'ENOENT') throw error;
-      io.stderr(`jsh: command not found: ${name}\n`);
+      io.stderr(`bfsh: command not found: ${name}\n`);
       return 127;
     }
     child.onStdout(io.stdout);

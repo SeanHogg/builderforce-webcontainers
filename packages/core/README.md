@@ -11,7 +11,7 @@ import * as esbuild from 'esbuild';
 import { VirtualFileSystem, DevServer, createEsbuildTransformer } from '@seanhogg/builderforce-webcontainers-core';
 
 const fs = new VirtualFileSystem();
-fs.mount({ 'index.html': '...', 'src/main.tsx': '...' });
+fs.writeTree({ 'index.html': '...', 'src/main.tsx': '...' });
 const server = new DevServer({ fs, transformer: createEsbuildTransformer(esbuild), base: '/preview/' });
 const res = await server.handle('/src/main.tsx'); // { status, headers, body }
 ```

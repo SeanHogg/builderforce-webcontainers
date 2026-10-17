@@ -9,7 +9,7 @@ const version = (fs: VirtualFileSystem, location: string) => JSON.parse(fs.readT
 
 function project(pkg: object, extra: Record<string, string> = {}): VirtualFileSystem {
   const fs = new VirtualFileSystem();
-  fs.mount({ 'package.json': JSON.stringify(pkg), ...extra });
+  fs.writeTree({ 'package.json': JSON.stringify(pkg), ...extra });
   return fs;
 }
 

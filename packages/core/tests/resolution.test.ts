@@ -7,7 +7,7 @@ import { rewriteImports } from '../src/rewriteImports.js';
 
 describe('resolveLocal', () => {
   const fs = new VirtualFileSystem();
-  fs.mount({
+  fs.writeTree({
     'src/App.tsx': '',
     'src/util.ts': '',
     'src/components/index.tsx': '',
@@ -47,7 +47,7 @@ describe('project config', () => {
 
   it('reads aliases, JSX mode, dependencies and .env', () => {
     const fs = new VirtualFileSystem();
-    fs.mount({
+    fs.writeTree({
       'package.json': JSON.stringify({ dependencies: { react: '^18.3.1' }, devDependencies: { vite: '^5.0.0' } }),
       'tsconfig.json': '{ "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./src/*"], "~ui": ["./src/ui/index.ts"] }, "jsx": "react-jsx", }, }',
       '.env': 'VITE_API=https://api.dev\n# note\nSECRET="x"',

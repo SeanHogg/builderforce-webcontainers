@@ -24,14 +24,14 @@ export interface ProgramIO {
   terminal?: TerminalPort;
 }
 
-export interface SpawnOptions {
+export interface ProcessOptions {
   cwd?: string;
   env?: Record<string, string>;
   /** Attach to a terminal of this size (`isTTY`, line discipline, `\r\n` output). */
   terminal?: { cols: number; rows: number };
 }
 
-/** A child as its parent sees it (separate stdout/stderr, unlike the public API). */
+/** A child as its parent sees it (separate stdout/stderr listeners, unlike the streams of the public `RuntimeProcess`). */
 export interface ChildHandle {
   readonly pid: number;
   onStdout(listener: (chunk: string) => void): () => void;
@@ -64,14 +64,14 @@ export interface System {
   fs: VirtualFileSystem;
   /** Outbound network (registry, `http.request`, `fetch`). */
   fetch(input: string, init?: RequestInit): Promise<Response>;
-  spawn(command: string, args: string[], options?: SpawnOptions): ChildHandle;
+  spawn(command: string, args: string[], options?: ProcessOptions): ChildHandle;
   /** Register a virtual server; throws `EADDRINUSE`. Port 0 picks a free one. Returns the port and an unlisten. */
   listen(port: number, handler: HttpHandler): { port: number; close(): void };
   /** Send a request to a virtual server in this runtime (`http.get('http://localhost:3000')`); undefined when nothing listens. */
   loopback(port: number, request: HttpRequestData): Promise<HttpResponseData | undefined>;
   /** Where a browser reaches a server on `port` (the preview URL), if known. */
   serverUrl(port: number): string | undefined;
-  /** Tell the host a server is ready (`server-ready`); used by the dev-server handoff. */
+  /** Tell the host a server is reachable without opening a port; used by the dev-server handoff. */
   announceServer(port: number, url: string): void;
   /** The in-browser dev server's preview URL, for `vite`/`react-scripts start` handoff. */
   previewUrl?: string;

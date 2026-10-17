@@ -1,5 +1,5 @@
 import type * as TS from 'typescript';
-import { VirtualFileSystem, type FileSystemTree, type FlatFiles } from '../vfs.js';
+import { VirtualFileSystem, type FileTree } from '../vfs.js';
 import { readProjectConfig } from '../projectConfig.js';
 import { isBareSpecifier, resolveAlias, splitPackageSpecifier } from '../resolve.js';
 import { acquireExtendedConfigs, acquireTypes, type FetchLike } from './acquire.js';
@@ -46,10 +46,10 @@ interface Reach {
   libFiles: Set<string>;
 }
 
-function toFileSystem(files: VirtualFileSystem | FlatFiles | FileSystemTree): VirtualFileSystem {
+function toFileSystem(files: VirtualFileSystem | FileTree): VirtualFileSystem {
   if (files instanceof VirtualFileSystem) return files;
   const fs = new VirtualFileSystem();
-  fs.mount(files);
+  fs.writeTree(files);
   return fs;
 }
 
@@ -78,7 +78,7 @@ function collectReach(ts: typeof TS, fs: VirtualFileSystem, projects: CheckProje
 
 export async function typecheckProject(
   ts: typeof TS,
-  files: VirtualFileSystem | FlatFiles | FileSystemTree,
+  files: VirtualFileSystem | FileTree,
   options: TypecheckOptions,
 ): Promise<TypecheckResult> {
   const fs = toFileSystem(files);

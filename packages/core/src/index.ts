@@ -1,5 +1,5 @@
 export { VirtualFileSystem } from './vfs.js';
-export type { FileContent, FileSystemTree, FlatFiles, FsChange } from './vfs.js';
+export type { FileContent, FileTree, FlatFiles, FsChange } from './vfs.js';
 export { normalizePath, dirname, basename, join, extname } from './paths.js';
 export { DevServer } from './devServer.js';
 export type { DevServerOptions, ServedFile } from './devServer.js';

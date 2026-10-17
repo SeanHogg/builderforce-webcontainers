@@ -2,10 +2,10 @@
  * Running one program in-process: its stdin queue, TTY line discipline,
  * output listeners and kill signal, packaged as a {@link ChildHandle}. The core
  * kernel uses it for every process; the browser worker uses it for the one
- * program it hosts. Also the WebContainer-shaped wrapper (`output`/`input`
- * streams) that public `spawn` returns.
+ * program it hosts. Also {@link RuntimeProcess}, the stream-based handle the
+ * public `run()` returns.
  */
-import type { ChildHandle, Program, ProgramIO, SpawnOptions, System } from './types.js';
+import type { ChildHandle, Program, ProgramIO, ProcessOptions, System } from './types.js';
 import { InputQueue, LineDiscipline, toTerminal } from './terminal.js';
 
 let nextPid = 1000;
@@ -14,7 +14,7 @@ export function allocatePid(): number {
   return nextPid++;
 }
 
-export interface RunProgramOptions extends SpawnOptions {
+export interface RunProgramOptions extends ProcessOptions {
   program: Program;
   args: string[];
   system: System;
@@ -122,18 +122,28 @@ export function runProgram(options: RunProgramOptions): ChildHandle {
   };
 }
 
-/** The public process shape, deliberately the same as `@webcontainer/api`'s `WebContainerProcess`. */
-export interface WebContainerProcess {
+/** A running process as a host page sees it: streams for xterm.js or a log, and its exit code. */
+export interface RuntimeProcess {
+  readonly pid: number;
   /** stdout and stderr, interleaved as written (`\r\n` line endings when attached to a terminal). */
-  readonly output: ReadableStream<string>;
-  readonly input: WritableStream<string>;
-  readonly exit: Promise<number>;
+  readonly combinedOutput: ReadableStream<string>;
+  /** Keystrokes or piped input; closing it is end-of-file. */
+  readonly stdin: WritableStream<string>;
+  /** Resolves with the exit code (128 + signal number when killed). */
+  wait(): Promise<number>;
+  /** Default `SIGTERM`; `SIGKILL` cannot be caught. */
   kill(signal?: string): void;
-  resize(dimensions: { cols: number; rows: number } | number, rows?: number): void;
+  /** Resize the attached terminal. A no-op for a process started without one. */
+  resizeTerminal(cols: number, rows: number): void;
 }
 
-export function toWebContainerProcess(child: ChildHandle, terminal: boolean): WebContainerProcess {
-  const output = new ReadableStream<string>({
+/** `run(command, args?, options?)` and `run(command, options)` — the same call either way. */
+export function runArguments(args: string[] | ProcessOptions = [], options: ProcessOptions = {}): [string[], ProcessOptions] {
+  return Array.isArray(args) ? [args, options] : [[], args];
+}
+
+export function toRuntimeProcess(child: ChildHandle, terminal: boolean): RuntimeProcess {
+  const combinedOutput = new ReadableStream<string>({
     start(controller) {
       const push = (chunk: string) => controller.enqueue(terminal ? toTerminal(chunk) : chunk);
       child.onStdout(push);
@@ -141,18 +151,16 @@ export function toWebContainerProcess(child: ChildHandle, terminal: boolean): We
       void child.exit.then(() => controller.close());
     },
   });
-  const input = new WritableStream<string>({
+  const stdin = new WritableStream<string>({
     write: (chunk) => child.write(chunk),
     close: () => child.closeStdin(),
   });
   return {
-    output,
-    input,
-    exit: child.exit,
+    pid: child.pid,
+    combinedOutput,
+    stdin,
+    wait: () => child.exit,
     kill: (signal) => child.kill(signal),
-    resize(dimensions, rows) {
-      const size = typeof dimensions === 'number' ? { cols: dimensions, rows: rows ?? 24 } : dimensions;
-      child.resize?.(size.cols, size.rows);
-    },
+    resizeTerminal: (cols, rows) => child.resize?.(cols, rows),
   };
 }
