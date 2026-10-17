@@ -1,5 +1,8 @@
 export { VirtualFileSystem } from './vfs.js';
 export type { FileContent, FileTree, FlatFiles, FsChange } from './vfs.js';
+export type { DirectoryEntry } from './vfs.js';
+export { exportZip, importZip } from './archive.js';
+export type { ZipExportOptions } from './archive.js';
 export { normalizePath, dirname, basename, join, extname } from './paths.js';
 export { DevServer } from './devServer.js';
 export type { DevServerOptions, ServedFile } from './devServer.js';
@@ -41,7 +44,7 @@ export { rewriteImports } from './rewriteImports.js';
 export { resolveLocal, resolveAlias, isBareSpecifier, splitPackageSpecifier, resolvePackage, RESOLVE_EXTENSIONS } from './resolve.js';
 export { compileScript, compileModule, isScriptPath, mapSpecifier, moduleUrl, buildDefine } from './compileScript.js';
 export { compileComponent } from './compileComponent.js';
-export { transformHtml, errorBridgeScript, liveReloadScript, reloadChannelName, ERROR_MESSAGE_TYPE } from './html.js';
+export { transformHtml, errorBridgeScript, liveReloadScript, reloadChannelName, ERROR_MESSAGE_TYPE, CONSOLE_MESSAGE_TYPE, CONSOLE_MESSAGE_LIMIT } from './html.js';
 export { mimeFor } from './mime.js';
 export { attributionScript, injectAttribution, ATTRIBUTION_URL, ATTRIBUTION_LABEL } from './attribution.js';
 export type { AttributionOptions } from './attribution.js';

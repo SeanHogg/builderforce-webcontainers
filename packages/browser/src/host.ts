@@ -1,8 +1,9 @@
 import {
   DevServer,
-  ERROR_MESSAGE_TYPE,
   VirtualFileSystem,
   buildProject,
+  exportZip,
+  importZip,
   type BuildResult,
   type Bundler,
   type ComponentCompilers,
@@ -14,9 +15,11 @@ import {
   type RuntimeProcess,
   type ServerAddress,
   type Transformer,
+  type ZipExportOptions,
 } from '@seanhogg/builderforce-webcontainers-core';
 import { PREVIEW_ID, isPortPath, isWireRequest, previewBase, type WireRequest, type WireResponse } from './protocol.js';
-import { createProcessHost, servePortRequest, type NodeRuntimeOptions } from './node/index.js';
+import { createProcessHost, servePortRequest, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
+import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from './previewMessages.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
 import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
 import { createCdnComponentCompilers } from './componentCompilers.js';
@@ -59,18 +62,14 @@ export interface CommonRuntimeOptions {
   attribution?: boolean;
   /** Reload open previews when files change. Default true. */
   liveReload?: boolean;
+  /** Your scripts (JavaScript source), run in every preview page before the app — analytics, test hooks, a mock `fetch`. */
+  previewScripts?: string[];
   /** The Node runtime behind `run` (process workers, npm registry). */
   node?: NodeRuntimeOptions;
 }
 
 /** Edits arrive in bursts (a save, an agent writing several files): reload once per burst. */
 const RELOAD_DEBOUNCE_MS = 120;
-
-export interface PreviewError {
-  message: string;
-  stack?: string;
-  href: string;
-}
 
 export interface RuntimeBuildOptions {
   /** Where the site will be served from. Default `./` (works from any directory). */
@@ -85,8 +84,14 @@ export interface PreviewRuntime {
   readonly url: string;
   readonly fs: VirtualFileSystem;
   readonly server: DevServer;
-  /** Write files into the runtime (nested or flat; see `FileTree`). Open previews reload. */
-  writeTree(files: FileTree): void;
+  /** Write files into the runtime (nested or flat; see `FileTree`), under `at` (default `/`). Open previews reload. */
+  writeTree(files: FileTree, at?: string): void;
+  /** The project as a zip — "Download project" with `exclude: ['node_modules']`, or a full snapshot to restore later. */
+  exportZip(options?: ZipExportOptions): Uint8Array;
+  /** Write a zip's contents (an `exportZip` snapshot, a downloaded template) into the runtime, under `at`. */
+  importZip(zip: Uint8Array, at?: string): void;
+  /** Reload every frame showing this preview now (live reload does this on edits by itself). */
+  reload(): void;
   /** Whether this runtime can serve the mounted project, and why not. */
   profile(): ProjectProfile;
   /**
@@ -97,6 +102,10 @@ export interface PreviewRuntime {
   build(options?: RuntimeBuildOptions): Promise<BuildResult>;
   /** Uncaught errors and rejections raised inside the preview. */
   onError(listener: (error: PreviewError) => void): () => void;
+  /** The preview's `console.log/info/warn/error/debug` output (first 1,000 messages per page load). */
+  onPreviewConsole(listener: (message: PreviewConsoleMessage) => void): () => void;
+  /** Replace the scripts run in preview pages; open previews reload to pick them up. */
+  setPreviewScripts(scripts: string[]): void;
   /**
    * Run a command — `node server.js`, `npm install`, `npm run dev`, `bfsh` for a
    * terminal — in its own Web Worker. Pass `{ terminal: { cols, rows } }` when
@@ -108,6 +117,8 @@ export interface PreviewRuntime {
   onServerListening(listener: (server: ServerAddress) => void): () => void;
   /** A virtual server opened or closed its port. */
   onPortChange(listener: (change: PortChange) => void): () => void;
+  /** Processes still running, with the ports their servers listen on. */
+  listProcesses(): ProcessInfo[];
   dispose(): void;
 }
 
@@ -145,7 +156,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   let server: DevServer;
   try {
     const transformer = options.transformer ?? (await createEsbuildWasmTransformer());
-    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, attribution: options.attribution });
+    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, attribution: options.attribution, previewScripts: options.previewScripts });
   } catch (error) {
     transport.dispose();
     throw error;
@@ -182,38 +193,35 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
       reloadTimer = setTimeout(() => transport.reload(base), RELOAD_DEBOUNCE_MS);
     });
 
-  const errorListeners = new Set<(error: PreviewError) => void>();
-  const onWindowMessage = (event: MessageEvent) => {
-    const data = event.data as Partial<PreviewError> & { type?: string };
-    if (data?.type !== ERROR_MESSAGE_TYPE || typeof data.href !== 'string') return;
-    if (event.origin !== transport.origin || !new URL(data.href).pathname.startsWith(base)) return; // another runtime's preview
-    const error: PreviewError = { message: String(data.message ?? ''), stack: data.stack, href: data.href };
-    for (const listener of errorListeners) listener(error);
-  };
-  window.addEventListener('message', onWindowMessage);
+  const previewMessages = listenToPreview(window, transport.origin, base);
 
   return {
     id,
     url: previewUrl,
     fs,
     server,
-    writeTree: (files) => fs.writeTree(files),
+    writeTree: (files, at) => fs.writeTree(files, at),
+    exportZip: (zipOptions) => exportZip(fs, zipOptions),
+    importZip: (zip, at) => importZip(fs, zip, at),
+    reload: () => transport.reload(base),
     profile: () => server.profile(),
     async build(buildOptions = {}) {
       const bundler = options.bundler ?? (await createEsbuildWasmBundler());
       return buildProject({ files: fs, bundler, cdn: options.cdn, components, base: buildOptions.base, minify: buildOptions.minify });
     },
-    onError(listener) {
-      errorListeners.add(listener);
-      return () => errorListeners.delete(listener);
+    onError: (listener) => previewMessages.onError(listener),
+    onPreviewConsole: (listener) => previewMessages.onConsole(listener),
+    setPreviewScripts(scripts) {
+      server.setPreviewScripts(scripts);
+      transport.reload(base);
     },
     run: (command: string, args?: string[] | ProcessOptions, runOptions?: ProcessOptions) => processes.run(command, args as string[], runOptions),
     onServerListening: (listener) => processes.servers.onListening(listener),
     onPortChange: (listener) => processes.servers.onPortChange(listener),
+    listProcesses: () => processes.list(),
     dispose() {
       processes.dispose();
-      window.removeEventListener('message', onWindowMessage);
-      errorListeners.clear();
+      previewMessages.dispose();
       clearTimeout(reloadTimer);
       stopWatching?.();
       stopReattach();

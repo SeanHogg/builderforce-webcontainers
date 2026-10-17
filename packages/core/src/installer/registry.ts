@@ -5,6 +5,8 @@
  * caller injects one, which is what keeps this testable against a fake registry.
  */
 
+import { authHeaders, registryFor, type NpmConfig } from './npmrc.js';
+
 export type FetchLike = (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }) => Promise<{
   ok: boolean;
   status: number;
@@ -60,6 +62,8 @@ export interface RegistryOptions {
   fetch: FetchLike;
   registry?: string;
   cache?: PackageCache;
+  /** `.npmrc` settings: scoped registries and auth tokens. */
+  npmrc?: NpmConfig;
   /** How long a cached packument is trusted. Default 10 minutes. */
   packumentMaxAgeMs?: number;
   signal?: AbortSignal;
@@ -136,7 +140,8 @@ export class RegistryClient {
   }
 
   private async loadPackument(name: string): Promise<Packument> {
-    const key = `packument:${this.registry}/${name}`;
+    const registry = registryFor(this.options.npmrc, name, this.registry);
+    const key = `packument:${registry}/${name}`;
     const maxAge = this.options.packumentMaxAgeMs ?? 10 * 60_000;
     const cached = await this.options.cache?.get(key);
     if (cached) {
@@ -147,15 +152,16 @@ export class RegistryClient {
         // a corrupt entry is just a miss
       }
     }
-    const url = `${this.registry}/${name.startsWith('@') ? '@' + encodeURIComponent(name.slice(1)) : encodeURIComponent(name)}`;
-    const bytes = await this.get(url, { accept: ABBREVIATED }, name);
+    const url = `${registry}/${name.startsWith('@') ? '@' + encodeURIComponent(name.slice(1)) : encodeURIComponent(name)}`;
+    const bytes = await this.get(url, { accept: ABBREVIATED }, name, registry);
     const packument = JSON.parse(decoder.decode(bytes)) as Packument;
     if (!packument.versions) throw new Error(`The registry returned no versions for "${name}".`);
     await this.options.cache?.put(key, encoder.encode(JSON.stringify({ t: Date.now(), p: packument })));
     return packument;
   }
 
-  private async get(url: string, headers: Record<string, string>, packageName?: string): Promise<Uint8Array> {
+  private async get(url: string, headers: Record<string, string>, packageName?: string, registry = this.registry): Promise<Uint8Array> {
+    headers = { ...headers, ...authHeaders(this.options.npmrc, url) };
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       let response: Awaited<ReturnType<FetchLike>>;
@@ -166,7 +172,8 @@ export class RegistryClient {
         lastError = error; // network blip: retry once
         continue;
       }
-      if (response.status === 404 && packageName) throw new Error(`Package "${packageName}" was not found in ${this.registry}.`);
+      if (response.status === 404 && packageName) throw new Error(`Package "${packageName}" was not found in ${registry}.`);
+      if ((response.status === 401 || response.status === 403) && packageName) throw new Error(`${registry} refused "${packageName}" (HTTP ${response.status}). Add an auth token to .npmrc.`);
       if (!response.ok) throw new Error(`GET ${url} failed with HTTP ${response.status}.`);
       return new Uint8Array(await response.arrayBuffer());
     }

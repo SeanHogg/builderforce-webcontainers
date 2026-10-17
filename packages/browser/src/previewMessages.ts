@@ -1,0 +1,71 @@
+/**
+ * What a preview reports to the host page: uncaught errors and console output,
+ * posted by the bridge script every served page starts with. One window
+ * listener per runtime, accepting only messages from the preview origin whose
+ * page sits under this runtime's base, so two runtimes on one page never hear
+ * each other's previews.
+ */
+import { CONSOLE_MESSAGE_TYPE, ERROR_MESSAGE_TYPE } from '@seanhogg/builderforce-webcontainers-core';
+
+export interface PreviewError {
+  message: string;
+  stack?: string;
+  href: string;
+}
+
+export type ConsoleLevel = 'log' | 'info' | 'warn' | 'error' | 'debug';
+
+export interface PreviewConsoleMessage {
+  level: ConsoleLevel;
+  /** The arguments flattened to text, capped at 4,000 characters. */
+  text: string;
+  href: string;
+}
+
+export interface PreviewMessages {
+  onError(listener: (error: PreviewError) => void): () => void;
+  onConsole(listener: (message: PreviewConsoleMessage) => void): () => void;
+  dispose(): void;
+}
+
+const LEVELS = new Set<string>(['log', 'info', 'warn', 'error', 'debug']);
+
+function subscribe<T>(set: Set<(value: T) => void>, listener: (value: T) => void): () => void {
+  set.add(listener);
+  return () => set.delete(listener);
+}
+
+export function listenToPreview(target: Pick<Window, 'addEventListener' | 'removeEventListener'>, origin: string, base: string): PreviewMessages {
+  const errors = new Set<(error: PreviewError) => void>();
+  const consoles = new Set<(message: PreviewConsoleMessage) => void>();
+
+  const onMessage = (event: MessageEvent) => {
+    const data = event.data as { type?: unknown; href?: unknown; message?: unknown; stack?: unknown; level?: unknown; text?: unknown } | null;
+    if (!data || typeof data.href !== 'string' || event.origin !== origin) return;
+    let path: string;
+    try {
+      path = new URL(data.href).pathname;
+    } catch {
+      return;
+    }
+    if (!path.startsWith(base)) return; // another runtime's preview
+    if (data.type === ERROR_MESSAGE_TYPE) {
+      const error: PreviewError = { message: String(data.message ?? ''), stack: typeof data.stack === 'string' ? data.stack : undefined, href: data.href };
+      for (const listener of errors) listener(error);
+    } else if (data.type === CONSOLE_MESSAGE_TYPE && typeof data.level === 'string' && LEVELS.has(data.level)) {
+      const message: PreviewConsoleMessage = { level: data.level as ConsoleLevel, text: String(data.text ?? ''), href: data.href };
+      for (const listener of consoles) listener(message);
+    }
+  };
+  target.addEventListener('message', onMessage as EventListener);
+
+  return {
+    onError: (listener) => subscribe(errors, listener),
+    onConsole: (listener) => subscribe(consoles, listener),
+    dispose() {
+      target.removeEventListener('message', onMessage as EventListener);
+      errors.clear();
+      consoles.clear();
+    },
+  };
+}

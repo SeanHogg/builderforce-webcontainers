@@ -8,7 +8,7 @@ import type { WireRequest, WireResponse } from '../protocol.js';
 import { ProcessHost, type WorkerLike } from './processHost.js';
 
 export { ProcessHost } from './processHost.js';
-export type { ProcessHostOptions, WorkerLike } from './processHost.js';
+export type { ProcessHostOptions, ProcessInfo, WorkerLike } from './processHost.js';
 export { createWorkerProcess } from './workerProcess.js';
 
 export interface NodeRuntimeOptions {

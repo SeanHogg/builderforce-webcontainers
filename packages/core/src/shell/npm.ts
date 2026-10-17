@@ -7,6 +7,7 @@
  */
 import { join } from '../paths.js';
 import { installPackages, type InstallOptions } from '../installer/install.js';
+import { readNpmConfig } from '../installer/npmrc.js';
 import type { PackageJson } from '../installer/spec.js';
 import { binDirectories, findExecutable } from '../system/commands.js';
 import { findPackageScope } from '../node/resolve.js';
@@ -34,10 +35,13 @@ async function install(ctx: CommandContext, options: Partial<InstallOptions>, di
   const started = performance.now();
   const progress = ctx.io.isTerminal;
   try {
+    // User file first, then the project's: later files win, as with npm.
+    const npmrc = readNpmConfig(ctx.fs, [join(ctx.env.HOME ?? '/home/user', '.npmrc'), join(dir, '.npmrc')], ctx.env);
     const result = await installPackages({
       fs: ctx.fs,
       fetch: (url, init) => ctx.system.fetch(url, init as RequestInit),
-      registry: ctx.env.npm_config_registry ?? ctx.system.registry,
+      registry: ctx.env.npm_config_registry ?? npmrc.registry ?? ctx.system.registry,
+      npmrc,
       cache: ctx.system.packageCache,
       cwd: dir,
       signal: ctx.signal,

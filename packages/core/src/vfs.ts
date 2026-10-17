@@ -14,6 +14,11 @@ export interface FileTree {
   [name: string]: FileContent | FileTree;
 }
 
+export interface DirectoryEntry {
+  name: string;
+  kind: 'file' | 'directory';
+}
+
 export interface FsChange {
   /** `mkdir` is an explicitly created (possibly empty) directory. */
   type: 'write' | 'remove' | 'mkdir';
@@ -98,6 +103,39 @@ export class VirtualFileSystem {
     return [...(this.children.get(normalizePath(path)) ?? [])].sort();
   }
 
+  /** Direct children with their kind, sorted by name — `readdir` for callers that render a tree. */
+  entries(path: string): DirectoryEntry[] {
+    const dir = normalizePath(path);
+    return this.readdir(dir).map((name) => ({ name, kind: this.children.has(join(dir, name)) ? 'directory' : 'file' }));
+  }
+
+  /**
+   * Move a file or a directory (with everything under it). Throws when `from` is
+   * missing or `to` already exists. Watchers see the old paths removed and the
+   * new ones written, which is what every consumer (dev server, process sync) needs.
+   */
+  rename(from: string, to: string): void {
+    const source = normalizePath(from);
+    const target = normalizePath(to);
+    if (source === target) return;
+    if (!this.exists(source)) throw new Error(`ENOENT: no such file or directory, rename '${source}' -> '${target}'`);
+    if (this.exists(target)) throw new Error(`EEXIST: file already exists, rename '${source}' -> '${target}'`);
+    if (target.startsWith(source + '/')) throw new Error(`EINVAL: cannot move '${source}' into itself`);
+    if (this.files.has(source)) {
+      const contents = this.files.get(source)!;
+      this.removeFile(source);
+      this.writeFile(target, contents);
+      return;
+    }
+    const prefix = source + '/';
+    const moved = [...this.files].filter(([path]) => path.startsWith(prefix));
+    const dirs = [...this.explicit].filter((dir) => dir === source || dir.startsWith(prefix));
+    this.rm(source);
+    this.mkdir(target);
+    for (const dir of dirs) this.mkdir(target + dir.slice(source.length));
+    for (const [path, contents] of moved) this.writeFile(target + path.slice(source.length), contents);
+  }
+
   /** Every file path, sorted. */
   list(): string[] {
     return [...this.files.keys()].sort();
@@ -152,9 +190,14 @@ export class VirtualFileSystem {
     return out;
   }
 
-  watch(listener: (change: FsChange) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+  /** Every change, or with `under` only changes at or below that path. */
+  watch(listener: (change: FsChange) => void, options: { under?: string } = {}): () => void {
+    const root = options.under === undefined ? undefined : normalizePath(options.under);
+    const filtered = root === undefined || root === '/'
+      ? listener
+      : (change: FsChange) => (change.path === root || change.path.startsWith(root + '/')) && listener(change);
+    this.listeners.add(filtered);
+    return () => this.listeners.delete(filtered);
   }
 
   private removeFile(key: string): void {

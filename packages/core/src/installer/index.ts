@@ -1,5 +1,7 @@
 export { installPackages, chooseVersion } from './install.js';
 export type { InstallOptions, InstallResult, InstallProgress } from './install.js';
+export { parseNpmrc, readNpmConfig, registryFor, authHeaders, emptyNpmConfig } from './npmrc.js';
+export type { NpmConfig } from './npmrc.js';
 export { RegistryClient, createMemoryCache, verifyIntegrity, DEFAULT_REGISTRY } from './registry.js';
 export type { FetchLike, PackageCache, PackageManifest, Packument, RegistryOptions, BinField } from './registry.js';
 export { resolveTree, childLocation, parentLocation, PLATFORM } from './tree.js';

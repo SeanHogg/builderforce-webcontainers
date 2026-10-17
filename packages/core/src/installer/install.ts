@@ -13,6 +13,7 @@ import { gunzipSync } from 'fflate';
 import type { VirtualFileSystem } from '../vfs.js';
 import { join } from '../paths.js';
 import { RegistryClient, type FetchLike, type PackageCache, type PackageManifest, type Packument } from './registry.js';
+import type { NpmConfig } from './npmrc.js';
 import { parseInstallSpec, sortObject, type PackageJson, type ParsedSpec } from './spec.js';
 import { childLocation, parentLocation, resolveTree, type ResolvedPackage } from './tree.js';
 import { buildLockfile, lockMatchesPackage, lockedManifests, parseLockfile, pickLocked, type Lockfile } from './lockfile.js';
@@ -32,6 +33,8 @@ export interface InstallOptions {
   fs: VirtualFileSystem;
   fetch: FetchLike;
   registry?: string;
+  /** `.npmrc` settings: scoped registries and auth tokens. */
+  npmrc?: NpmConfig;
   cache?: PackageCache;
   /** The project directory holding package.json. Default `/`. */
   cwd?: string;
@@ -158,7 +161,7 @@ export async function installPackages(options: InstallOptions): Promise<InstallR
   const pkgPath = join(base, 'package.json');
   const lockPath = join(base, 'package-lock.json');
   const warnings: string[] = [];
-  const client = new RegistryClient({ fetch: options.fetch, registry: options.registry, cache: options.cache, signal });
+  const client = new RegistryClient({ fetch: options.fetch, registry: options.registry ?? options.npmrc?.registry, npmrc: options.npmrc, cache: options.cache, signal });
   const progress = (p: InstallProgress) => options.onProgress?.(p);
 
   let pkg = readJson<PackageJson>(fs, pkgPath);

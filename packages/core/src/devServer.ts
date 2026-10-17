@@ -30,6 +30,8 @@ export interface DevServerOptions {
   components?: ComponentCompilers;
   /** The "Built with Builderforce.ai" badge in served pages. Default true. */
   attribution?: boolean;
+  /** Host scripts (JavaScript source) run in every preview page before the app. */
+  previewScripts?: readonly string[];
 }
 
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -81,15 +83,23 @@ export class DevServer {
   private profileCache?: ProjectProfile;
   private readonly cache = new Map<string, { version: number; file: ServedFile }>();
   private readonly unwatch: () => void;
+  private previewScripts: readonly string[];
 
   constructor(private readonly options: DevServerOptions) {
     if (!options.base.endsWith('/')) throw new Error('DevServer base must end with "/"');
+    this.previewScripts = options.previewScripts ?? [];
     this.unwatch = options.fs.watch((change) => this.onChange(change));
   }
 
   dispose(): void {
     this.unwatch();
     this.cache.clear();
+  }
+
+  /** Replace the host scripts injected into preview pages; takes effect on the next page load. */
+  setPreviewScripts(scripts: readonly string[]): void {
+    this.previewScripts = [...scripts];
+    for (const key of [...this.cache.keys()]) if (/\.html?\?/.test(key)) this.cache.delete(key);
   }
 
   profile(): ProjectProfile {
@@ -136,7 +146,7 @@ export class DevServer {
       if (loaderFor(ext)) return reply(200, JS_MIME, await compileScript(await this.context(), file));
       if (isScriptPath(file)) return reply(200, JS_MIME, await compileComponent(await this.context(), file));
       if (ext === '.html' || ext === '.htm') {
-        return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: this.options.attribution }));
+        return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: this.options.attribution, scripts: this.previewScripts }));
       }
       return reply(200, mimeFor(ext), fs.readFile(file) ?? '');
     } catch (error) {
@@ -151,7 +161,7 @@ export class DevServer {
     }
     const html = this.options.fs.readText(profile.htmlPath) ?? '';
     const { base, attribution } = this.options;
-    return reply(200, 'text/html; charset=utf-8', transformHtml(html, { base, entry: profile.entry, attribution }));
+    return reply(200, 'text/html; charset=utf-8', transformHtml(html, { base, entry: profile.entry, attribution, scripts: this.previewScripts }));
   }
 
   private async context(): Promise<CompileContext> {

@@ -157,7 +157,10 @@ and closing, for a host that lists running servers.
   registry.npmjs.org (`node: { registry }` changes it): semver resolution,
   npm-style hoisting, `.bin` links, `package-lock.json` v3 written and reused,
   tarballs cached in Cache Storage. **Install scripts are skipped**: they nearly
-  always build native addons, which cannot run in a browser.
+  always build native addons, which cannot run in a browser. `.npmrc` (the
+  project's, then `~/.npmrc`) sets the registry, per-scope registries
+  (`@acme:registry=…`) and auth tokens (`//npm.acme.dev/:_authToken=${NPM_TOKEN}`);
+  a private registry must allow CORS requests with an `Authorization` header.
 * **Dev servers.** `npm run dev` running `vite`, and `npm start` running
   `react-scripts start`, hand off to the built-in preview: they print its URL,
   fire `onServerListening` and run until Ctrl-C. (Real Vite needs esbuild's native
@@ -172,6 +175,32 @@ responses and WebSockets, `execSync`/`spawnSync`, cookies set by a virtual serve
 and the Next.js/Nuxt dev servers. Outside the browser (tests, a CLI), the core's
 `Kernel` runs the same programs in-process:
 `new Kernel({ programs: defaultPrograms() }).run('npm', ['install'])`.
+
+### Files, snapshots and the preview channel
+
+```ts
+// Write into a folder, move things, list a directory with kinds.
+runtime.writeTree({ 'App.tsx': '…', components: { 'Button.tsx': '…' } }, '/src');
+runtime.fs.rename('/src/components', '/src/ui');
+runtime.fs.entries('/src'); // [{ name: 'App.tsx', kind: 'file' }, { name: 'ui', kind: 'directory' }]
+runtime.fs.watch((change) => console.log(change), { under: '/src' });
+
+// "Download project", or a full snapshot (node_modules included) to restore later.
+const download = runtime.exportZip({ exclude: ['node_modules'] });
+const snapshot = runtime.exportZip({ level: 1 });
+runtime.importZip(snapshot); // a restored project needs no reinstall
+
+// What the preview says, and scripts you run inside it.
+runtime.onPreviewConsole(({ level, text }) => console.log(`[preview ${level}]`, text));
+runtime.setPreviewScripts(['window.__TEST_HOOK__ = true;']); // or `previewScripts` at start
+runtime.reload();
+
+runtime.listProcesses(); // [{ pid, command: 'node', args: ['server.js'], cwd: '/', startedAt, ports: [3000] }]
+```
+
+The zip is plain zip (any unzip tool opens it). The host decides where a
+snapshot lives (IndexedDB, OPFS, your server). Console forwarding stops after
+1,000 messages per page load, so a logging loop cannot flood the host.
 
 ### Isolating the preview (relay mode)
 

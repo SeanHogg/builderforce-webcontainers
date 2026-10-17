@@ -19,6 +19,7 @@ ships on its own.
 - 2026.10.1: documents opt into COEP (`credentialless`), so a cross-origin-isolated host can frame the preview.
 - 2026.10.2: live reload — editing any file reloads every frame showing the preview (`liveReload: false` turns it off); relay mode serves the preview from its own origin, isolated from the host's session (`relayUrl`).
 - 2026.10.6: the public API uses its own vocabulary, not another runtime's: `startPreviewRuntime`, `writeTree` (one `FileTree` shape: contents or a nested tree, flat paths allowed), `run()` returning a `RuntimeProcess` (`pid`, `combinedOutput`, `stdin`, `wait()`, `kill()`, `resizeTerminal()`), `onServerListening` / `onPortChange`, and the `bfsh` shell.
+- 2026.10.7: `fs.rename`, `fs.entries` (with kinds), `fs.watch(…, { under })`; `exportZip` / `importZip` (download a project, or snapshot and restore it with `node_modules`); `writeTree(files, at)`; `reload()`; `onPreviewConsole` and `previewScripts` / `setPreviewScripts`; `listProcesses()`; `.npmrc` scoped registries and auth tokens.
 
 ## Shipped in 2026.10.3
 

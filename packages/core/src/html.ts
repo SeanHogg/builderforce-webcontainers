@@ -4,18 +4,24 @@
  *     base, since the preview is served from a sub-path, not the origin root;
  *   • CRA's `%PUBLIC_URL%` placeholder is filled;
  *   • a page with no module script (CRA) gets its entry injected;
- *   • the error bridge is prepended, so runtime errors reach the host;
+ *   • the error bridge is prepended, so runtime errors and console output reach the host;
+ *   • the host's preview scripts run next, before the app;
  *   • the live-reload listener is prepended, so an edit re-renders the preview;
  *   • the attribution badge is appended unless the host turned it off.
  */
 import { injectAttribution } from './attribution.js';
 
 export const ERROR_MESSAGE_TYPE = 'bfwc:error';
+export const CONSOLE_MESSAGE_TYPE = 'bfwc:console';
+/** Console messages forwarded per page load; past this the bridge goes quiet (a log loop must not flood the host). */
+export const CONSOLE_MESSAGE_LIMIT = 1000;
 
 /**
- * Runs first in the preview. Forwards uncaught errors and rejections to the host
- * page (`window.parent`), which is how an editor — or an agent — learns the app
- * crashed without scraping the iframe.
+ * Runs first in the preview. Forwards uncaught errors and rejections, and the
+ * app's console output, to the host page (`window.parent`): how an editor — or
+ * an agent — learns what the app did without scraping the iframe. Console
+ * arguments are flattened to text (errors with their stack, objects as JSON),
+ * each message capped at 4,000 characters.
  */
 export function errorBridgeScript(): string {
   return `<script>(function(){
@@ -24,6 +30,22 @@ export function errorBridgeScript(): string {
   };
   addEventListener('error', function (e) { send(e.message, e.error && e.error.stack); });
   addEventListener('unhandledrejection', function (e) { var r = e.reason; send(r && r.message ? r.message : r, r && r.stack); });
+  var sent = 0;
+  var text = function (value) {
+    if (typeof value === 'string') return value;
+    if (value instanceof Error) return value.stack || String(value);
+    try { var json = JSON.stringify(value); return json === undefined ? String(value) : json; } catch (_) { return String(value); }
+  };
+  ['log', 'info', 'warn', 'error', 'debug'].forEach(function (level) {
+    var original = console[level];
+    console[level] = function () {
+      if (sent < ${CONSOLE_MESSAGE_LIMIT}) {
+        sent++;
+        try { parent.postMessage({ type: ${JSON.stringify(CONSOLE_MESSAGE_TYPE)}, level: level, text: Array.prototype.map.call(arguments, text).join(' ').slice(0, 4000), href: location.href }, '*'); } catch (_) {}
+      }
+      return original.apply(console, arguments);
+    };
+  });
   window.process = window.process || { env: { NODE_ENV: 'development' } };
 })();</script>`;
 }
@@ -55,7 +77,12 @@ export interface HtmlOptions {
   entry?: string;
   /** The "Built with Builderforce.ai" badge. On unless explicitly `false`. */
   attribution?: boolean;
+  /** Host scripts (JavaScript source) run in every preview page before the app. */
+  scripts?: readonly string[];
 }
+
+/** `</script>` inside a script body would end the tag early. */
+const scriptTag = (source: string) => `<script>${source.replace(/<\/script/gi, '<\\/script')}</script>`;
 
 export function transformHtml(html: string, options: HtmlOptions): string {
   const { base } = options;
@@ -70,7 +97,7 @@ export function transformHtml(html: string, options: HtmlOptions): string {
   }
   if (options.attribution !== false) out = injectAttribution(out);
 
-  const bridge = `${errorBridgeScript()}\n${liveReloadScript(base)}`;
+  const bridge = [errorBridgeScript(), liveReloadScript(base), ...(options.scripts ?? []).map(scriptTag)].join('\n');
   if (/<head[^>]*>/i.test(out)) return out.replace(/<head[^>]*>/i, (head) => `${head}\n${bridge}`);
   return bridge + out;
 }

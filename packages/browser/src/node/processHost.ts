@@ -50,8 +50,21 @@ export interface ProcessHostOptions {
 
 const SIGNAL_CODES: Record<string, number> = { SIGINT: 130, SIGTERM: 143, SIGKILL: 137, SIGHUP: 129 };
 
+/** A running process, as `listProcesses()` reports it. */
+export interface ProcessInfo {
+  pid: number;
+  command: string;
+  args: string[];
+  cwd: string;
+  /** Epoch ms. */
+  startedAt: number;
+  /** Ports its servers listen on. */
+  ports: number[];
+}
+
 interface Proc {
   pid: number;
+  info: Omit<ProcessInfo, 'ports'>;
   worker: WorkerLike;
   stdout: Set<(chunk: string) => void>;
   stderr: Set<(chunk: string) => void>;
@@ -102,6 +115,7 @@ export class ProcessHost {
     const exit = new Promise<number>((resolve) => (resolveExit = resolve));
     const proc: Proc = {
       pid,
+      info: { pid, command, args: [...args], cwd: options.cwd ?? '/', startedAt: Date.now() },
       worker,
       stdout: new Set(),
       stderr: new Set(),
@@ -152,6 +166,11 @@ export class ProcessHost {
       resize: (cols, rows) => this.post(proc, { type: 'resize', cols, rows }),
       exit,
     };
+  }
+
+  /** Every process still running, oldest first — children started by a shell included. */
+  list(): ProcessInfo[] {
+    return [...this.procs].map((proc) => ({ ...proc.info, args: [...proc.info.args], ports: [...proc.registrations.keys()] }));
   }
 
   /** Dispatch an HTTP request to the server on `port` (the preview service worker's `/__port/<port>/` path). */

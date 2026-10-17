@@ -62,6 +62,7 @@ describe('ProcessHost (worker per process)', () => {
     const ready = new Promise<[number, string]>((resolve) => processes.servers.onListening(({ port, url }) => resolve([port, url])));
     const proc = processes.run('node', ['server.js']);
     expect(await ready).toEqual([3000, 'https://app.test/__bfwc/p1/__port/3000/']);
+    expect(processes.list()).toMatchObject([{ pid: proc.pid, command: 'node', args: ['server.js'], cwd: '/', ports: [3000] }]);
     const { message } = await servePortRequest(processes, { type: 'request', reqId: 7, path: '/__port/3000/api', search: '?q=1', method: 'POST', headers: {}, body: new TextEncoder().encode('data').buffer as ArrayBuffer });
     expect(message.status).toBe(200);
     expect(new TextDecoder().decode(message.body as ArrayBuffer)).toBe('POST /api?q=1 data');
