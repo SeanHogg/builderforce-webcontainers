@@ -4,7 +4,8 @@
  * `path` and `process` close over that process's cwd, IO and event loop.
  */
 import type { VirtualFileSystem } from '../vfs.js';
-import type { ProgramIO, System } from '../system/types.js';
+import type { ProgramIO, System, ThreadInfo } from '../system/types.js';
+import type { IpcEndpoint } from '../system/ipc.js';
 import type { EventLoop } from './loop.js';
 import type { NodeProcess } from './process.js';
 import { createEventsModule } from './events.js';
@@ -20,6 +21,7 @@ import { createAssertModule } from './assert.js';
 import { createZlibModule } from './zlib.js';
 import { createHttpModule, createNetModule, createFetch } from './http/index.js';
 import { createChildProcessModule } from './childProcess.js';
+import { createWorkerThreadsModule } from './workerThreads.js';
 import { createReadlineModule } from './readline.js';
 import { createAsyncHooksModule, createDiagnosticsChannelModule, createOsModule, createStringDecoderModule, createStubModules, createTimersModule, createTtyModule, createVmModule } from './misc.js';
 
@@ -31,6 +33,10 @@ export interface BuiltinDeps {
   system: System;
   io: ProgramIO;
   console: Console;
+  /** Set when this process is a worker thread (`worker_threads.isMainThread` false). */
+  thread?: ThreadInfo;
+  /** The process's channel to its parent: a worker thread's `parentPort`. */
+  ipc?: IpcEndpoint;
 }
 
 type Factory = (get: (name: string) => any) => unknown;
@@ -40,21 +46,23 @@ export function createBuiltins(deps: BuiltinDeps) {
   const env = () => proc.env as Record<string, string | undefined>;
   const stubs = createStubModules();
   const clientDeps = { system, loop };
+  /** What starting other processes needs: child_process and worker_threads alike. */
+  const spawnDeps = {
+    system,
+    loop,
+    cwd: () => proc.cwd() as string,
+    env,
+    stdout: (c: string) => void proc.stdout.write(c),
+    stderr: (c: string) => void proc.stderr.write(c),
+  };
 
   const factories: Record<string, Factory> = {
     assert: () => createAssertModule(false),
     'assert/strict': () => createAssertModule(true),
     async_hooks: () => createAsyncHooksModule(),
     buffer: () => createBufferModule(),
-    child_process: () =>
-      createChildProcessModule({
-        system,
-        loop,
-        cwd: () => proc.cwd(),
-        env,
-        stdout: (c) => proc.stdout.write(c),
-        stderr: (c) => proc.stderr.write(c),
-      }),
+    child_process: () => createChildProcessModule(spawnDeps),
+    worker_threads: () => createWorkerThreadsModule({ ...spawnDeps, thread: deps.thread, ipc: deps.ipc }),
     console: () => Object.assign(Object.create(deps.console), { Console: function Console() { return deps.console; } }),
     constants: (get) => ({ ...fsConstants, ...(get('os').constants.signals as object) }),
     crypto: () => createCryptoModule(),

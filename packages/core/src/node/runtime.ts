@@ -4,7 +4,10 @@
  * entry and resolves `exit` with the code once the process exits — by
  * `process.exit()`, an uncaught exception, being killed, or the loop going idle.
  */
-import type { ProgramIO, System } from '../system/types.js';
+import type { ProgramIO, System, ThreadInfo } from '../system/types.js';
+import type { IpcEndpoint } from '../system/ipc.js';
+import { attachProcessChannel } from './ipc.js';
+import { threadErrorEnvelope } from './workerThreads.js';
 import { Buffer } from './buffer.js';
 import { createBuiltins } from './builtins.js';
 import { createModuleSystem, type ModuleSystem } from './loader.js';
@@ -27,6 +30,10 @@ export interface NodeOptions {
    * share one realm.
    */
   installGlobals?: boolean;
+  /** The channel to the parent: `process.send` in a forked child, `parentPort` in a worker thread. */
+  ipc?: IpcEndpoint;
+  /** Set when this process is a worker thread. */
+  thread?: ThreadInfo;
 }
 
 export interface NodeInstance {
@@ -48,7 +55,14 @@ const SIGNAL_CODES: Record<string, number> = { SIGINT: 130, SIGTERM: 143, SIGKIL
 
 export async function startNode(options: NodeOptions): Promise<NodeInstance> {
   await esmReady;
-  const { system, io } = options;
+  const { system } = options;
+  // Once the process has finished it prints nothing — a host promise settling late
+  // must not write past the exit the parent already saw.
+  const io: ProgramIO = {
+    ...options.io,
+    stdout: (chunk) => finished || options.io.stdout(chunk),
+    stderr: (chunk) => finished || options.io.stderr(chunk),
+  };
   let resolveExit!: (code: number) => void;
   const exit = new Promise<number>((resolve) => (resolveExit = resolve));
   let finished = false;
@@ -89,8 +103,12 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
         error = nested;
       }
     }
-    const text = error instanceof Error ? error.stack ?? `${error.name}: ${error.message}` : `Uncaught ${inspect(error)}`;
-    io.stderr(`${text}\n\nNode.js v${proc.versions.node}\n`);
+    // A worker thread's fatal error is the parent's 'error' event, not output.
+    if (options.thread && options.ipc?.connected) options.ipc.send(threadErrorEnvelope(error));
+    else {
+      const text = error instanceof Error ? error.stack ?? `${error.name}: ${error.message}` : `Uncaught ${inspect(error)}`;
+      io.stderr(`${text}\n\nNode.js v${proc.versions.node}\n`);
+    }
     exitQuietly(proc.exitCode && proc.exitCode !== 0 ? proc.exitCode : 1);
   };
 
@@ -125,8 +143,9 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
     loop,
     onExit: finish,
   });
+  if (options.ipc && !options.thread) attachProcessChannel(proc, options.ipc, loop);
   const console = createConsole(proc);
-  const builtins = createBuiltins({ fs: system.fs, process: proc, loop, system: processSystem, io, console });
+  const builtins = createBuiltins({ fs: system.fs, process: proc, loop, system: processSystem, io, console, thread: options.thread, ipc: options.ipc });
 
   const globals: Record<string, unknown> = {
     process: proc,
@@ -144,9 +163,13 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
     Object.assign(globalThis, globals, { global: globalThis });
     globals.global = globalThis;
   } else {
-    // A per-process view of the global object: reads fall through to the real
-    // one, Node's own names resolve to this process's.
-    globals.global = Object.assign(Object.create(globalThis), globals);
+    // A per-process view of the global object: Node's own names resolve to this
+    // process's, everything else reads from the real one — WITH the real one as
+    // receiver, because host getters (`crypto`, `navigator`) check what `this` is.
+    const own = Object.assign(Object.create(globalThis), globals) as Record<PropertyKey, unknown>;
+    globals.global = new Proxy(own, {
+      get: (target, key) => (Object.hasOwn(target, key) ? target[key] : Reflect.get(globalThis, key)),
+    });
   }
   globals.globalThis = globals.global;
 

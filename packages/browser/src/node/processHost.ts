@@ -15,6 +15,7 @@ import {
   PortRegistry,
   ServerEvents,
   allocatePid,
+  createIpcEndpoint,
   runArguments,
   textResponse,
   toRuntimeProcess,
@@ -31,6 +32,7 @@ import {
 import type { FsOp, HostToWorker, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
 import { ResponseReceiver, sendResponse } from './responseWire.js';
+import { ChildRelay, isChildMessage } from './childRelay.js';
 
 /** The part of `Worker` the host uses — a real Worker, or an in-thread fake in tests. */
 export interface WorkerLike {
@@ -79,7 +81,10 @@ interface Proc {
   exited: boolean;
   resolveExit(code: number): void;
   registrations: Map<number, { close(): void }>;
-  children: Map<number, ChildHandle>;
+  /** The children its Worker spawned, relayed back to it. */
+  children: ChildRelay;
+  /** Its message channel to whoever spawned it with `ipc`: the parent's side. */
+  ipc?: ReturnType<typeof createIpcEndpoint>;
   /** Responses its servers are streaming back to requests forwarded here. */
   responses: ResponseReceiver;
   /** Its loopback requests being answered, by the worker's request id: cancel functions. */
@@ -143,12 +148,16 @@ export class ProcessHost {
         resolveExit(code);
       },
       registrations: new Map(),
-      children: new Map(),
+      children: new ChildRelay((childCommand, childArgs, childOptions) => {
+        this.flushOutboxes(); // the child must see every write made so far
+        return this.spawnChild(childCommand, childArgs, childOptions);
+      }, (message) => this.post(proc, message)),
       responses: new ResponseReceiver(),
       loopbacks: new Map(),
       sockets: new Map(),
       outbox: [],
     };
+    if (options.ipc) proc.ipc = createIpcEndpoint((data) => this.post(proc, { type: 'ipc', data }), () => this.post(proc, { type: 'ipc-disconnect' }));
     this.procs.add(proc);
     worker.onmessage = (event) => this.onWorkerMessage(proc, event.data as WorkerToHost);
     worker.onerror = (event) => {
@@ -164,6 +173,8 @@ export class ProcessHost {
       cwd: options.cwd ?? '/',
       env: { ...DEFAULT_ENV, ...this.options.env, ...options.env },
       terminal: options.terminal,
+      ipc: options.ipc,
+      thread: options.thread,
       files: fs.list().map((path) => [path, fs.readFile(path)!]),
       dirs: fs.explicitDirectories(),
       ports: this.ports.ports(),
@@ -183,6 +194,7 @@ export class ProcessHost {
       kill: (signal = 'SIGTERM') => this.kill(proc, signal),
       resize: (cols, rows) => this.post(proc, { type: 'resize', cols, rows }),
       exit,
+      ipc: proc.ipc?.endpoint,
     };
   }
 
@@ -239,6 +251,7 @@ export class ProcessHost {
     proc.loopbacks.clear();
     for (const socket of proc.sockets.values()) socket.close();
     proc.sockets.clear();
+    proc.ipc?.closed();
     this.procs.delete(proc);
     queueMicrotask(() => proc.worker.terminate());
   }
@@ -266,6 +279,7 @@ export class ProcessHost {
   }
 
   private onWorkerMessage(proc: Proc, message: WorkerToHost): void {
+    if (isChildMessage(message)) return proc.children.receive(message);
     switch (message.type) {
       case 'stdout':
         for (const l of proc.stdout) l(message.data);
@@ -289,33 +303,10 @@ export class ProcessHost {
         }
         return;
       }
-      case 'spawn': {
-        this.flushOutboxes();
-        let child: ChildHandle;
-        try {
-          child = this.spawnChild(message.command, message.args, { cwd: message.cwd, env: message.env, terminal: message.terminal });
-        } catch (error) {
-          return this.post(proc, { type: 'child-error', childId: message.childId, code: (error as { code?: string }).code ?? 'EFAIL', message: (error as Error).message });
-        }
-        proc.children.set(message.childId, child);
-        child.onStdout((data) => this.post(proc, { type: 'child-out', childId: message.childId, stream: 'stdout', data }));
-        child.onStderr((data) => this.post(proc, { type: 'child-out', childId: message.childId, stream: 'stderr', data }));
-        void child.exit.then((code) => {
-          proc.children.delete(message.childId);
-          this.post(proc, { type: 'child-exit', childId: message.childId, code });
-        });
-        return;
-      }
-      case 'child-stdin': {
-        const child = proc.children.get(message.childId);
-        if (message.data === null) child?.closeStdin();
-        else child?.write(message.data);
-        return;
-      }
-      case 'child-kill':
-        return proc.children.get(message.childId)?.kill(message.signal);
-      case 'child-resize':
-        return proc.children.get(message.childId)?.resize?.(message.cols, message.rows);
+      case 'ipc':
+        return proc.ipc?.receive(message.data);
+      case 'ipc-disconnect':
+        return proc.ipc?.closed();
       case 'listen': {
         try {
           const registration = this.ports.listen(

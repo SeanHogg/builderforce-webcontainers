@@ -7,6 +7,7 @@
  */
 import type { ChildHandle, Program, ProgramIO, ProcessOptions, System } from './types.js';
 import { InputQueue, LineDiscipline, toTerminal } from './terminal.js';
+import type { IpcEndpoint } from './ipc.js';
 
 let nextPid = 1000;
 
@@ -21,6 +22,8 @@ export interface RunProgramOptions extends ProcessOptions {
   cwd: string;
   env: Record<string, string>;
   pid?: number;
+  /** The child's end of its message channel to the parent (`ipc`); closed when the program exits. */
+  channel?: IpcEndpoint;
 }
 
 /** Decode byte chunks without splitting multi-byte characters across writes. */
@@ -39,8 +42,9 @@ export function runProgram(options: RunProgramOptions): ChildHandle {
   const stderrListeners = new Set<(chunk: string) => void>();
   const resizeListeners = new Set<(cols: number, rows: number) => void>();
   const controller = new AbortController();
-  const emitOut = (text: string) => stdoutListeners.forEach((l) => l(text));
-  const emitErr = (text: string) => stderrListeners.forEach((l) => l(text));
+  // A dead process prints nothing: a straggling callback that writes after exit is dropped.
+  const emitOut = (text: string) => settled || stdoutListeners.forEach((l) => l(text));
+  const emitErr = (text: string) => settled || stderrListeners.forEach((l) => l(text));
   let settled = false;
   let forceExit: (code: number) => void = () => undefined;
 
@@ -80,17 +84,28 @@ export function runProgram(options: RunProgramOptions): ChildHandle {
 
   const exit = new Promise<number>((resolve) => {
     forceExit = (code) => {
+      options.channel?.disconnect();
       settled = true;
       resolve(code);
     };
     queueMicrotask(async () => {
       let code: number;
       try {
-        code = await options.program({ args: options.args, cwd: options.cwd, env: options.env, io, system: options.system, signal: controller.signal });
+        code = await options.program({
+          args: options.args,
+          cwd: options.cwd,
+          env: options.env,
+          io,
+          system: options.system,
+          signal: controller.signal,
+          ipc: options.channel,
+          thread: options.thread,
+        });
       } catch (error) {
         io.stderr(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
         code = 1;
       }
+      options.channel?.disconnect();
       settled = true;
       resolve(code);
     });
@@ -145,10 +160,14 @@ export function runArguments(args: string[] | ProcessOptions = [], options: Proc
 export function toRuntimeProcess(child: ChildHandle, terminal: boolean): RuntimeProcess {
   const combinedOutput = new ReadableStream<string>({
     start(controller) {
-      const push = (chunk: string) => controller.enqueue(terminal ? toTerminal(chunk) : chunk);
+      let open = true;
+      const push = (chunk: string) => open && controller.enqueue(terminal ? toTerminal(chunk) : chunk);
       child.onStdout(push);
       child.onStderr(push);
-      void child.exit.then(() => controller.close());
+      void child.exit.then(() => {
+        open = false;
+        controller.close();
+      });
     },
   });
   const stdin = new WritableStream<string>({

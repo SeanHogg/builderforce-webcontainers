@@ -98,6 +98,30 @@ function exportKeywordBefore(source: string, pos: number): number {
   return -1;
 }
 
+/**
+ * `import(x)` inside a CommonJS module. Left alone it would be the HOST's native
+ * `import()`, resolving against the runtime's own files instead of the project's
+ * (Next.js's CLI loads its commands this way); pointed at `__bfwc_dynamic` it goes
+ * through this runtime's loader like everything else.
+ */
+export function rewriteDynamicImports(source: string): string {
+  if (!/\bimport\s*\(/.test(source)) return source;
+  let imports: ReturnType<typeof parse>[0];
+  try {
+    [imports] = parse(source);
+  } catch {
+    return source; // not lexable as a module; leave it to fail (or not) as written
+  }
+  let out = '';
+  let cursor = 0;
+  for (const imp of imports) {
+    if (imp.t !== 2) continue;
+    out += source.slice(cursor, imp.ss) + '__bfwc_dynamic';
+    cursor = imp.d;
+  }
+  return cursor ? out + source.slice(cursor) : source;
+}
+
 export function esmToCjs(source: string): string {
   const [imports, exports] = parse(source);
   const edits: Edit[] = [];

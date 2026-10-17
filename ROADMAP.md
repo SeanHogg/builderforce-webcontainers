@@ -23,6 +23,8 @@ ships on its own.
 - 2026.10.8: streaming HTTP — a virtual server's head leaves on `writeHead` and each `res.write()` reaches the preview (page → service worker `ReadableStream`) and loopback clients as its own chunk, so Server-Sent Events, long-polling and chunked progress arrive live, and a client hanging up is seen by the server; WebSockets — `upgrade` listeners get a socket over a raw connection, so `ws`/socket.io run their own framing, and preview pages get a `WebSocket` shim that tunnels virtual-server URLs over a MessageChannel to the host page; cookies from virtual servers — a per-port jar in the host stores `Set-Cookie` (Path, Max-Age/Expires, HttpOnly kept from script), sends it back on requests and handshakes, and mirrors `document.cookie` on pages those servers served.
 - 2026.10.8 (also): shell control flow — `if`/`while`/`until`/`for`/`case`, functions with `local`/`return`, groups and subshells, here-documents, `test`/`[`, `read`, `shift`, `break`/`continue`, `jobs`/`wait`; `pnpm` and `yarn` front ends; `createSnapshotStore()` keeps `exportZip` snapshots in IndexedDB across reloads; `exportZip({ include })`; virtual-server pages get the same error/console bridge and host scripts as dev-server pages.
 
+- 2026.10.9: hot updates — an edit swaps stylesheets in place and, in React apps, re-renders the changed components keeping their state (Fast Refresh through the official `react-refresh` runtime, with the module graph deciding what to re-run and when a reload is needed); Sass (`.scss`/`.sass`) and Less, in files, CSS Modules and component `<style lang>` blocks, with `@use`/`@import` resolved from the project, `node_modules` or the package CDN; real CSS Modules scoping in the dev server (`:global`, `composes`, keyframes); package stylesheets imported from JS in the preview; `child_process.fork` message channels and `worker_threads` Workers (each its own process Worker).
+
 ## Shipped in 2026.10.3
 
 - **Process isolation in relay mode.** Process workers (node, npm, the shell) start inside the relay frame, on the preview origin, from `process-worker.js`, so the code a project runs never shares the host's storage or session.
@@ -71,14 +73,6 @@ ships on its own.
    before it can be relied on.
 2. **Type-check inside components.** `.vue` / `.svelte` imports are typed `any`
    today; checking their scripts needs `vue-tsc`/`svelte2tsx`-style transforms.
-3. **Style preprocessors.** `<style lang="scss">`, `.scss`/`.less` imports
-   (sass's pure-JS build from the CDN).
-4. **Hot module replacement.** Push a change event to the preview over a
-   BroadcastChannel; React Fast Refresh via `react-refresh` from the CDN.
-5. **Real CSS Modules in the dev server.** The build scopes them; the dev server
-   still exports an identity map, so class names must not collide in preview.
-6. **Package stylesheets in the dev server.** `import 'bootstrap/dist/css/x.css'`
-   works in builds (it becomes a CSS `@import`), not yet in the preview.
 7. **Multi-page builds.** Only the main `index.html` is built; Vite's extra HTML
    entries and inline module scripts are left as written.
 8. **Svelte rune modules.** `.svelte.js` / `.svelte.ts` files (`compileModule`).

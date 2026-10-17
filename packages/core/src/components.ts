@@ -24,6 +24,11 @@ export interface ComponentRequest {
   path: string;
   /** Development output (dev warnings, readable names) vs production. */
   dev: boolean;
+  /**
+   * Compiles a `<style lang="scss|sass|less">` block to CSS (its imports resolve
+   * beside the component). Without it, such a block is an error.
+   */
+  preprocessStyle?: (lang: string, source: string) => Promise<string>;
 }
 
 export interface CompiledComponent {

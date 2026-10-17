@@ -8,6 +8,9 @@ import { loaderFor } from './transformer.js';
 import { dirname, extname } from './paths.js';
 import { isBareSpecifier, resolveAlias, resolveLocal, resolvePackage } from './resolve.js';
 import { rewriteImports } from './rewriteImports.js';
+import { isStylesheet } from './styles/languages.js';
+import { packageStylePath } from './styles/packageStyles.js';
+import type { StylesheetContext } from './styles/compile.js';
 
 export interface CompileContext {
   fs: VirtualFileSystem;
@@ -18,6 +21,12 @@ export interface CompileContext {
   base: string;
   /** `.vue` / `.svelte` compilers. */
   components: ComponentCompilers;
+  /** Sass/Less, for `<style lang>` blocks in components. */
+  styles?: StylesheetContext;
+  /** Told about every local file a module imports — the hot-update graph's edges. */
+  track?: (path: string) => void;
+  /** A file's hot-update stamp, written into the URLs importing it. */
+  stampOf?: (path: string) => number | undefined;
 }
 
 /** Vite-style import queries this runtime honours. */
@@ -30,17 +39,25 @@ export function isScriptPath(path: string): boolean {
 }
 
 /**
- * The URL a resolved VFS file is imported by. Scripts are served as-is; CSS and
- * JSON need the `?import` JS wrapper; anything else imported from JS (images,
- * fonts) exports its URL, as in Vite.
+ * The URL a resolved VFS file is imported by. Scripts are served as-is;
+ * stylesheets and JSON need the `?import` JS wrapper; anything else imported
+ * from JS (images, fonts) exports its URL, as in Vite. A hot-update `stamp`
+ * rides along as `t`, so a re-run module imports a fresh copy.
  */
-export function moduleUrl(base: string, path: string, query?: ImportQuery): string {
+export function moduleUrl(base: string, path: string, query?: ImportQuery, stamp?: number): string {
   const url = base + path.slice(1);
-  if (query === 'raw' || query === 'url') return `${url}?${query}`;
-  const ext = extname(path);
-  if (isScriptPath(path)) return url;
-  if (ext === '.css' || ext === '.json') return `${url}?import`;
-  return `${url}?url`;
+  const params: string[] = [];
+  if (query === 'raw' || query === 'url') params.push(query);
+  else if (isStylesheet(path) || extname(path) === '.json') params.push('import');
+  else if (!isScriptPath(path)) params.push('url');
+  if (stamp !== undefined) params.push(`t=${stamp}`);
+  return params.length ? `${url}?${params.join('&')}` : url;
+}
+
+/** A resolved local import: recorded for hot updates, and stamped. */
+function localUrl(ctx: CompileContext, path: string, query: ImportQuery | undefined): string {
+  ctx.track?.(path);
+  return moduleUrl(ctx.base, path, query, ctx.stampOf?.(path));
 }
 
 /** Split `./notes.md?raw` into the path and the query this runtime honours (if any). */
@@ -62,12 +79,14 @@ export function mapSpecifier(ctx: CompileContext, fromDir: string, specifier: st
 
   if (isBareSpecifier(path)) {
     const aliased = resolveAlias(ctx.fs, ctx.config.aliases, path);
-    if (aliased) return moduleUrl(ctx.base, aliased, query);
+    if (aliased) return localUrl(ctx, aliased, query);
     const { name, subpath } = resolvePackage(ctx.config.packageAliases, path);
+    // A package stylesheet is served by the dev server, which links or compiles it.
+    if (isStylesheet(subpath) && !query) return ctx.base + packageStylePath(path).slice(1);
     return ctx.cdn.urlFor(name, subpath);
   }
   const resolved = resolveLocal(ctx.fs, fromDir, path);
-  return resolved ? moduleUrl(ctx.base, resolved, query) : undefined;
+  return resolved ? localUrl(ctx, resolved, query) : undefined;
 }
 
 /**

@@ -1,7 +1,7 @@
 /**
  * Small helpers shared by the page-side transports and the relay page.
  */
-import { reloadChannelName } from '@seanhogg/builderforce-webcontainers-core';
+import { updateChannelName, type PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 
 /** Resolve once the registration has an active worker. */
 export function waitForActive(registration: ServiceWorkerRegistration): Promise<ServiceWorker> {
@@ -16,10 +16,10 @@ export function waitForActive(registration: ServiceWorkerRegistration): Promise<
   });
 }
 
-/** Reload every frame (on this origin) showing the preview served at `base`. */
-export function broadcastReload(base: string): void {
+/** Tell every frame (on this origin) showing the preview served at `base` what changed. */
+export function broadcastUpdate(base: string, update: PreviewUpdate): void {
   if (typeof BroadcastChannel === 'undefined') return;
-  const channel = new BroadcastChannel(reloadChannelName(base));
-  channel.postMessage('reload');
+  const channel = new BroadcastChannel(updateChannelName(base));
+  channel.postMessage(update);
   channel.close();
 }

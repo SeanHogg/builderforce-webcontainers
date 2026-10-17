@@ -41,6 +41,24 @@ describe('node builtins', () => {
     expect(output).toContain('100000 abc');
   });
 
+  it('fs: vectored writev/readv in sync and callback forms', async () => {
+    const { output, code } = await runNode(
+      script(`
+        const fs = require('fs');
+        const fd = fs.openSync('/v.txt', 'w');
+        const n = fs.writevSync(fd, [Buffer.from('ab'), Buffer.from('cd')]);
+        fs.writev(fd, [Buffer.from('ef')], (err, written) => {
+          fs.closeSync(fd);
+          const rd = fs.openSync('/v.txt', 'r');
+          const a = Buffer.alloc(3), b = Buffer.alloc(5);
+          console.log(n, err, written, fs.readvSync(rd, [a, b]), a.toString(), b.toString('utf8', 0, 3));
+        });
+      `),
+    );
+    expect(output).toBe('4 null 2 6 abc def\n');
+    expect(code).toBe(0);
+  });
+
   it('path, url, querystring, util, os', async () => {
     const { output } = await runNode(
       script(`

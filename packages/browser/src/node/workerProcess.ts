@@ -11,6 +11,7 @@ import {
   VirtualFileSystem,
   commandNotFound,
   createChannelPair,
+  createIpcEndpoint,
   defaultPrograms,
   resolveCommand,
   runProgram,
@@ -20,6 +21,7 @@ import {
   type FsChange,
   type HttpHandler,
   type PackageCache,
+  type ProcessOptions,
   type System,
   type UpgradeHandler,
 } from '@seanhogg/builderforce-webcontainers-core';
@@ -43,7 +45,9 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
   const fs = new VirtualFileSystem();
   const handlers = new Map<number, { handler: HttpHandler; upgrade?: UpgradeHandler }>();
   const knownPorts = new Set<number>();
-  const children = new Map<number, { stdout: Set<(s: string) => void>; stderr: Set<(s: string) => void>; exit: (code: number) => void }>();
+  const children = new Map<number, { stdout: Set<(s: string) => void>; stderr: Set<(s: string) => void>; exit: (code: number) => void; ipc?: ReturnType<typeof createIpcEndpoint> }>();
+  /** This process's channel to its parent, when it was spawned with `ipc`. */
+  let parentChannel: ReturnType<typeof createIpcEndpoint> | undefined;
   /** Responses to this process's loopback requests, streaming in from the page. */
   const loopbacks = new ResponseReceiver();
   /** Responses this process's servers are streaming to the page, by the page's request id. */
@@ -89,15 +93,18 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
     }
   };
 
-  function remoteChild(command: string, args: string[], options: { cwd?: string; env?: Record<string, string>; terminal?: { cols: number; rows: number } } = {}): ChildHandle {
+  function remoteChild(command: string, args: string[], options: ProcessOptions = {}): ChildHandle {
     flush(); // the child must see every write made so far
     const childId = nextChild++;
     const stdout = new Set<(s: string) => void>();
     const stderr = new Set<(s: string) => void>();
     let resolveExit!: (code: number) => void;
     const exit = new Promise<number>((resolve) => (resolveExit = resolve));
-    children.set(childId, { stdout, stderr, exit: resolveExit });
-    deps.post({ type: 'spawn', childId, command, args, cwd: options.cwd, env: options.env, terminal: options.terminal });
+    const ipc = options.ipc
+      ? createIpcEndpoint((data) => deps.post({ type: 'child-ipc', childId, data }), () => deps.post({ type: 'child-ipc-disconnect', childId }))
+      : undefined;
+    children.set(childId, { stdout, stderr, exit: resolveExit, ipc });
+    deps.post({ type: 'spawn', childId, command, args, cwd: options.cwd, env: options.env, terminal: options.terminal, ipc: options.ipc, thread: options.thread });
     return {
       pid: childId,
       onStdout: (l) => (stdout.add(l), () => stdout.delete(l)),
@@ -107,6 +114,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
       kill: (signal = 'SIGTERM') => deps.post({ type: 'child-kill', childId, signal }),
       resize: (cols, rows) => deps.post({ type: 'child-resize', childId, cols, rows }),
       exit,
+      ipc: ipc?.endpoint,
     };
   }
 
@@ -169,7 +177,18 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
       deps.post({ type: 'exit', code: 127 });
       return;
     }
-    process = runProgram({ program: resolved.program, args: resolved.args, system, cwd: message.cwd, env: message.env, terminal: message.terminal, pid: message.pid });
+    if (message.ipc) parentChannel = createIpcEndpoint((data) => deps.post({ type: 'ipc', data }), () => deps.post({ type: 'ipc-disconnect' }));
+    process = runProgram({
+      program: resolved.program,
+      args: resolved.args,
+      system,
+      cwd: message.cwd,
+      env: message.env,
+      terminal: message.terminal,
+      pid: message.pid,
+      thread: message.thread,
+      channel: parentChannel?.endpoint,
+    });
     process.onStdout((data) => deps.post({ type: 'stdout', data }));
     process.onStderr((data) => deps.post({ type: 'stderr', data }));
     void process.exit.then((code) => {
@@ -201,9 +220,18 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
           for (const l of children.get(message.childId)?.[message.stream] ?? []) l(message.data);
           return;
         case 'child-exit':
+          children.get(message.childId)?.ipc?.closed();
           children.get(message.childId)?.exit(message.code);
           children.delete(message.childId);
           return;
+        case 'child-ipc':
+          return children.get(message.childId)?.ipc?.receive(message.data);
+        case 'child-ipc-disconnect':
+          return children.get(message.childId)?.ipc?.closed();
+        case 'ipc':
+          return parentChannel?.receive(message.data);
+        case 'ipc-disconnect':
+          return parentChannel?.closed();
         case 'child-error': {
           const child = children.get(message.childId);
           for (const l of child?.stderr ?? []) l(`${message.message}\n`);

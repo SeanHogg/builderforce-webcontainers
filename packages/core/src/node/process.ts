@@ -167,11 +167,15 @@ export function createProcess(options: ProcessOptions): NodeProcess {
   const { io, loop, fs } = options;
   let cwd = normalizePath(options.cwd);
   let exited = false;
+  let gone = false;
   const started = performance.now();
   const proc = new EventEmitterBase() as NodeProcess;
   const pid = nextPid++;
 
   const exit = (code?: number) => {
+    // Already gone: a straggling callback (a host promise settling late) has no stack
+    // left to unwind, and throwing would surface as the HOST's unhandled rejection.
+    if (gone) return undefined as never;
     if (code !== undefined) proc.exitCode = code;
     if (!exited) {
       exited = true;
@@ -181,6 +185,7 @@ export function createProcess(options: ProcessOptions): NodeProcess {
       } catch {
         // an 'exit' listener that throws must not stop the exit
       }
+      gone = true;
       options.onExit(Number(proc.exitCode ?? final) || 0);
     }
     throw new ProcessExit(Number(proc.exitCode ?? 0) || 0);

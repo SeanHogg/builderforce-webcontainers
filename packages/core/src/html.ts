@@ -7,11 +7,14 @@
  *   • the error bridge is prepended, so runtime errors and console output reach the host;
  *   • the WebSocket bridge follows, so `new WebSocket('ws://localhost:3000')` reaches a virtual server;
  *   • the host's preview scripts run next, before the app;
- *   • the live-reload listener is prepended, so an edit re-renders the preview;
+ *   • the hot-update listener is prepended, so an edit swaps styles, re-renders
+ *     components or reloads — and, for React, the Fast Refresh runtime before the app;
  *   • the attribution badge is appended unless the host turned it off.
  */
 import { injectAttribution } from './attribution.js';
 import { previewSocketScript } from './previewBridge.js';
+import { hotUpdateScript } from './hot/client.js';
+import { refreshPreambleScript } from './hot/reactRefresh.js';
 
 export const ERROR_MESSAGE_TYPE = 'bfwc:error';
 export const CONSOLE_MESSAGE_TYPE = 'bfwc:console';
@@ -52,23 +55,6 @@ export function errorBridgeScript(): string {
 })();</script>`;
 }
 
-/**
- * The channel a preview listens on for "files changed, reload". Keyed by the
- * preview base, so two runtimes on one origin never reload each other's frames.
- * A BroadcastChannel rather than `postMessage` because the host does not hold a
- * reference to the frame — any number of frames (or tabs) may show one preview.
- */
-export function reloadChannelName(base: string): string {
-  return `bfwc:reload:${base}`;
-}
-
-export function liveReloadScript(base: string): string {
-  return `<script>(function(){
-  if (typeof BroadcastChannel === 'undefined') return;
-  new BroadcastChannel(${JSON.stringify(reloadChannelName(base))}).onmessage = function () { location.reload(); };
-})();</script>`;
-}
-
 const ABSOLUTE_ATTR = /(\s(?:src|href)\s*=\s*)(["'])\/(?!\/)([^"']*)\2/gi;
 const MODULE_SCRIPT = /<script\b[^>]*type\s*=\s*["']module["'][^>]*>/i;
 
@@ -81,6 +67,8 @@ export interface HtmlOptions {
   attribution?: boolean;
   /** Host scripts (JavaScript source) run in every preview page before the app. */
   scripts?: readonly string[];
+  /** URL of `react-refresh/runtime`; installed before the app so components re-render in place on edits. */
+  refreshRuntime?: string;
 }
 
 /** A host script as a tag. `</script>` inside the body would end the tag early, so it is escaped. */
@@ -99,7 +87,13 @@ export function transformHtml(html: string, options: HtmlOptions): string {
   }
   if (options.attribution !== false) out = injectAttribution(out);
 
-  const bridge = [errorBridgeScript(), previewSocketScript(), liveReloadScript(base), ...(options.scripts ?? []).map(scriptTag)].join('\n');
+  const bridge = [
+    errorBridgeScript(),
+    previewSocketScript(),
+    hotUpdateScript(base),
+    ...(options.scripts ?? []).map(scriptTag),
+    ...(options.refreshRuntime ? [refreshPreambleScript(options.refreshRuntime)] : []),
+  ].join('\n');
   if (/<head[^>]*>/i.test(out)) return out.replace(/<head[^>]*>/i, (head) => `${head}\n${bridge}`);
   return bridge + out;
 }

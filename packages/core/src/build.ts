@@ -8,6 +8,8 @@ import { readProjectConfig } from './projectConfig.js';
 import { buildDefine } from './compileScript.js';
 import { createBuildHost } from './buildHost.js';
 import { findHtmlEntries, rewriteBuiltHtml } from './buildHtml.js';
+import { noStyleCompilers, type StyleCompilers } from './styles/compilers.js';
+import { createStyleImportHost, type StyleImportHostOptions } from './styles/imports.js';
 
 /**
  * `npm run build`, in the browser: the project in, a deployable static site out.
@@ -25,6 +27,10 @@ export interface BuildOptions {
   cdn?: PackageCdnFactory;
   /** `.vue` / `.svelte` compilers, needed when the project has components. */
   components?: ComponentCompilers;
+  /** Sass / Less compilers, needed when the project has `.scss`, `.sass` or `.less` files. */
+  styles?: StyleCompilers;
+  /** Where Sass/Less package imports are fetched from when not installed (default jsDelivr). */
+  styleImports?: Pick<StyleImportHostOptions, 'fetchText' | 'packageFileUrl'>;
   /**
    * Where the site will be served from. `./` (default) works from any directory;
    * an absolute base (`/app/`, `https://cdn.example.com/site/`) is used verbatim.
@@ -78,7 +84,13 @@ export async function buildProject(options: BuildOptions): Promise<BuildResult> 
   const inject = profile.entry && !entries.some((entry) => entry.tag === 'script') ? profile.entry : undefined;
   const entryPoints = [...new Set([...entries.map((entry) => entry.path), ...(inject ? [inject] : [])])];
 
-  const host = createBuildHost({ fs, config, cdn, components: options.components ?? noComponentCompilers, publicDir: profile.publicDir, base });
+  const styles = {
+    fs,
+    dependencies: config.dependencies,
+    styles: options.styles ?? noStyleCompilers,
+    imports: createStyleImportHost({ fs, dependencies: config.dependencies, ...options.styleImports }),
+  };
+  const host = createBuildHost({ fs, config, cdn, components: options.components ?? noComponentCompilers, styles, publicDir: profile.publicDir, base });
   const bundled: BundleOutput = entryPoints.length
     ? await options.bundler.bundle({
       entryPoints,

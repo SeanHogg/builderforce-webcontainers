@@ -218,8 +218,8 @@ export function createFsModule(ctx: FsModuleContext): Record<string, any> {
     const base = name.slice(0, -4);
     const fn = (sync as unknown as Record<string, Fn>)[name]!;
     if (base === 'exists') fs.exists = (p: string, cb: Fn) => queueMicrotask(() => cb(sync.existsSync(p)));
-    else if (base === 'read') fs.read = toCallback(fn, (n, args) => [n, args[1]]);
-    else if (base === 'write') fs.write = toCallback(fn, (n, args) => [n, args[1]]);
+    // (err, bytes, buffer|buffers), as Node's callbacks report them.
+    else if (['read', 'write', 'readv', 'writev'].includes(base)) fs[base] = toCallback(fn, (n, args) => [n, args[1]]);
     else fs[base] = toCallback(fn);
   }
   fs.realpath.native = fs.realpath;
@@ -248,6 +248,8 @@ function fileHandle(sync: SyncFs, fd: number, path: string) {
     appendFile: async (data: string | Uint8Array) => void sync.appendFileSync(path, data),
     read: async (buffer: Uint8Array, offset?: number, length?: number, position?: number | null) => ({ bytesRead: sync.readSync(fd, buffer, offset, length, position), buffer }),
     write: async (data: string | Uint8Array, ...rest: any[]) => ({ bytesWritten: sync.writeSync(fd, data, ...rest), buffer: data }),
+    writev: async (buffers: Uint8Array[], position?: number | null) => ({ bytesWritten: sync.writevSync(fd, buffers, position), buffers }),
+    readv: async (buffers: Uint8Array[], position?: number | null) => ({ bytesRead: sync.readvSync(fd, buffers, position), buffers }),
     stat: async () => sync.fstatSync(fd),
     truncate: async (length?: number) => sync.ftruncateSync(fd, length),
     sync: async () => undefined,

@@ -136,7 +136,7 @@ export const nodeProgram: Program = async (ctx) => {
   }
   const source = cli.evaluate ?? (cli.entry === '-' || (!entry && !ctx.io.terminal) ? await readAllStdin(ctx) : undefined);
   const scriptPath = entry ?? (source !== undefined ? '[eval]' : undefined);
-  const instance = await startNode({ system: ctx.system, io: ctx.io, cwd: ctx.cwd, env, installGlobals: ctx.system.ownsRealm, argv: scriptPath && scriptPath !== '[eval]' ? [scriptPath, ...cli.args] : cli.args });
+  const instance = await startNode({ system: ctx.system, io: ctx.io, cwd: ctx.cwd, env, installGlobals: ctx.system.ownsRealm, ipc: ctx.ipc, thread: ctx.thread, argv: scriptPath && scriptPath !== '[eval]' ? [scriptPath, ...cli.args] : cli.args });
   const onAbort = () => instance.kill(typeof ctx.signal.reason === 'string' ? ctx.signal.reason : 'SIGTERM');
   if (ctx.signal.aborted) onAbort();
   ctx.signal.addEventListener('abort', onAbort);

@@ -16,12 +16,13 @@ import {
   RELAY_ATTACH,
   RELAY_READY,
   RELAY_REATTACH,
-  RELAY_RELOAD,
   RELAY_SPAWN,
+  RELAY_UPDATE,
 } from './protocol.js';
+import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerLike } from './node/processHost.js';
 import { workerOverPort } from './relayWorker.js';
-import { broadcastReload, waitForActive } from './worker.js';
+import { broadcastUpdate, waitForActive } from './worker.js';
 
 export interface PreviewTransport {
   /** The origin previews are served from. */
@@ -32,8 +33,8 @@ export interface PreviewTransport {
   attach(id: string, port: MessagePort): void;
   /** The worker restarted and wants `id` again. */
   onReattach(listener: (id: string) => void): () => void;
-  /** Reload every frame showing the preview at `base`. */
-  reload(base: string): void;
+  /** Tell every frame showing the preview at `base` what changed: a hot update, or reload. */
+  send(base: string, update: PreviewUpdate): void;
   /**
    * Start a process worker on the preview origin. Only the relay has one to
    * offer; same-origin mode runs processes on the host's origin, which is the
@@ -69,7 +70,7 @@ export async function sameOriginTransport(serviceWorkerUrl: string, scopeOption?
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    reload: broadcastReload,
+    send: broadcastUpdate,
     dispose() {
       container.removeEventListener('message', onWorkerMessage);
       listeners.clear();
@@ -126,7 +127,7 @@ export async function relayTransport(relayUrl: string): Promise<PreviewTransport
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    reload: (base) => post({ type: RELAY_RELOAD, base }),
+    send: (base, update) => post({ type: RELAY_UPDATE, base, update }),
     createWorker() {
       const channel = new MessageChannel();
       post({ type: RELAY_SPAWN }, [channel.port2]);

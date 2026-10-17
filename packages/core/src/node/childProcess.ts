@@ -10,6 +10,7 @@ import { Readable } from './stream/readable.js';
 import { Writable } from './stream/writable.js';
 import type { EventLoop } from './loop.js';
 import type { ChildHandle, System } from '../system/types.js';
+import type { IpcEndpoint } from '../system/ipc.js';
 
 interface SpawnOptions {
   cwd?: string;
@@ -19,6 +20,10 @@ interface SpawnOptions {
   signal?: AbortSignal;
   encoding?: string;
   maxBuffer?: number;
+  /** `fork`: open a message channel (`child.send` ↔ `process.send`). */
+  ipc?: boolean;
+  /** `fork`: pipe the child's stdout/stderr to `child.stdout`/`stderr` instead of the parent's. */
+  silent?: boolean;
 }
 
 export interface ChildProcessDeps {
@@ -46,6 +51,7 @@ class ChildProcess extends EventEmitterBase {
   stderr: Readable;
   stdio: [Writable, Readable, Readable];
   private handle?: ChildHandle;
+  private ipc?: IpcEndpoint;
 
   constructor(deps: ChildProcessDeps, command: string, args: string[], options: SpawnOptions) {
     super();
@@ -71,7 +77,7 @@ class ChildProcess extends EventEmitterBase {
     const [file, argv] = options.shell ? ['bfsh', ['-c', [command, ...args].join(' ')]] : [command, args];
     const release = deps.loop.hold();
     try {
-      this.handle = deps.system.spawn(file, argv, { cwd: options.cwd ?? deps.cwd(), env });
+      this.handle = deps.system.spawn(file, argv, { cwd: options.cwd ?? deps.cwd(), env, ipc: options.ipc });
     } catch (error) {
       release();
       const code = (error as { code?: string }).code ?? 'ENOENT';
@@ -83,6 +89,16 @@ class ChildProcess extends EventEmitterBase {
       return;
     }
     this.pid = this.handle.pid;
+    const ipc = this.handle.ipc;
+    if (ipc) {
+      this.ipc = ipc;
+      this.connected = true;
+      ipc.onMessage((message) => deps.loop._run(() => this.emit('message', message, undefined)));
+      ipc.onDisconnect(() => {
+        this.connected = false;
+        deps.loop._run(() => this.emit('disconnect'));
+      });
+    }
     this.handle.onStdout((chunk) => (inherit ? deps.stdout(chunk) : this.stdout.push(chunk)));
     this.handle.onStderr((chunk) => (inherit ? deps.stderr(chunk) : this.stderr.push(chunk)));
     options.signal?.addEventListener('abort', () => this.kill());
@@ -107,10 +123,25 @@ class ChildProcess extends EventEmitterBase {
     return true;
   }
 
-  send(): boolean {
-    throw Object.assign(new Error('IPC channels are not supported in the browser runtime'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' });
+  send(message: unknown, ...rest: unknown[]): boolean {
+    const callback = rest.find((arg): arg is (error: Error | null) => void => typeof arg === 'function');
+    const fail = (error: Error) => {
+      if (callback) queueMicrotask(() => callback(error));
+      else queueMicrotask(() => this.emit('error', error));
+      return false;
+    };
+    if (!this.ipc) return fail(Object.assign(new Error('Channel closed'), { code: 'ERR_IPC_CHANNEL_CLOSED' }));
+    try {
+      this.ipc.send(message);
+    } catch (error) {
+      return fail(error as Error);
+    }
+    if (callback) queueMicrotask(() => callback(null));
+    return true;
   }
-  disconnect(): void {}
+  disconnect(): void {
+    this.ipc?.disconnect();
+  }
   ref(): void {}
   unref(): void {}
 }
@@ -152,9 +183,12 @@ export function createChildProcessModule(deps: ChildProcessDeps): Record<string,
       if (typeof options === 'function') [callback, options] = [options, {}];
       return collect(new ChildProcess(deps, file, args, options ?? {}), [file, ...args].map(quote).join(' '), callback);
     },
-    fork(modulePath: string, args?: string[] | SpawnOptions, options?: SpawnOptions) {
+    fork(modulePath: string, args?: string[] | SpawnOptions, options?: SpawnOptions & { execArgv?: string[] }) {
       if (!Array.isArray(args)) [options, args] = [args, []];
-      return new ChildProcess(deps, 'node', [modulePath, ...args], options ?? {});
+      const opts = options ?? {};
+      // A forked child shares the parent's stdout/stderr unless `silent`, as in Node.
+      const stdio = opts.stdio ?? (opts.silent ? 'pipe' : 'inherit');
+      return new ChildProcess(deps, 'node', [...(opts.execArgv ?? []), modulePath, ...args.map(String)], { ...opts, stdio, ipc: true });
     },
     execSync: noSync('execSync'),
     execFileSync: noSync('execFileSync'),

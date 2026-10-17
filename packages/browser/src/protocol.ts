@@ -28,8 +28,8 @@ export const RELAY_READY = 'bfwc:relay-ready';
 export const RELAY_ATTACH = 'bfwc:relay-attach';
 /** relay → host: the worker asked for `id` again. */
 export const RELAY_REATTACH = 'bfwc:relay-reattach';
-/** host → relay: reload every frame showing the preview at `base`. */
-export const RELAY_RELOAD = 'bfwc:relay-reload';
+/** host → relay: tell every frame showing the preview at `base` what changed (`update`; absent = reload). */
+export const RELAY_UPDATE = 'bfwc:relay-reload';
 /** host → relay, with a MessagePort: start a process worker on the preview origin, bridged over the port. */
 export const RELAY_SPAWN = 'bfwc:relay-spawn';
 

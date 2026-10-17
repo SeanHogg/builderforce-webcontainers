@@ -8,6 +8,10 @@ import { loaderFor } from './transformer.js';
 import { basename, dirname, extname, join } from './paths.js';
 import { isBareSpecifier, resolveAlias, resolveLocal, resolvePackage } from './resolve.js';
 import { contentHash } from './hash.js';
+import { compileStylesheet, preprocessStyleBlock, type StylesheetContext } from './styles/compile.js';
+import { lessCandidates, sassCandidates } from './styles/compilers.js';
+import { isCssModule, isStylesheet, styleLanguageOf } from './styles/languages.js';
+import { PACKAGE_STYLE_DIR, packageStylePath, packageStyleSpecifier } from './styles/packageStyles.js';
 
 /**
  * The project side of a production build: the same resolution rules the dev
@@ -25,6 +29,8 @@ export interface BuildHostOptions {
   config: ProjectConfig;
   cdn: PackageCdn;
   components: ComponentCompilers;
+  /** Sass / Less, and where their imports are found. */
+  styles: StylesheetContext;
   publicDir: string;
   /** The URL the site is served under: `./` (relative) or absolute, ending in `/`. */
   base: string;
@@ -37,8 +43,6 @@ export interface BuildHost extends BundleHost {
 
 /** The query a compiled component's own CSS is imported under. */
 const COMPONENT_CSS = 'bfwc-component-css';
-/** The query (and virtual directory) of a package stylesheet imported from JS. */
-const PACKAGE_CSS = 'bfwc-package-css';
 const encoder = new TextEncoder();
 
 function splitAnyQuery(specifier: string): { path: string; query?: string } {
@@ -94,6 +98,17 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
     return undefined;
   }
 
+  /** A plain package stylesheet stays on the CDN as an `@import`; a Sass/Less one is compiled in. */
+  async function loadPackageStyle(specifier: string): Promise<BundleLoad> {
+    const { name, subpath } = resolvePackage(config.packageAliases, specifier);
+    const language = styleLanguageOf(subpath);
+    if (language === 'css') return { contents: `@import ${JSON.stringify(cdn.urlFor(name, subpath))};`, loader: 'css' };
+    const id = await options.styles.imports.resolve(`~${name}${subpath}`, undefined, language === 'less' ? lessCandidates : sassCandidates);
+    if (!id) throw new Error(`Cannot find the stylesheet ${specifier}`);
+    const file = await options.styles.imports.load(id);
+    return { contents: (await compileStylesheet(options.styles, id, file.contents)).css, loader: 'css' };
+  }
+
   return {
     assets,
 
@@ -112,8 +127,8 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
         if (!file) {
           const { name, subpath } = resolvePackage(config.packageAliases, path);
           // A package stylesheet imported from JS (`import 'bootstrap/dist/css/bootstrap.css'`)
-          // can't stay a JS import of a CSS URL; it joins the CSS bundle as an @import.
-          if (!css && extname(subpath) === '.css') return { path: `/${PACKAGE_CSS}/${path}`, query: PACKAGE_CSS };
+          // can't stay a JS import of a CSS URL; it joins the CSS bundle (see `load`).
+          if (!css && isStylesheet(subpath)) return { path: packageStylePath(path), query: PACKAGE_STYLE_DIR };
           return { external: cdn.urlFor(name, subpath) };
         }
       } else {
@@ -127,22 +142,20 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
     async load(path, query): Promise<BundleLoad> {
       if (query === 'raw') return { contents: fs.readText(path) ?? '', loader: 'text' };
       if (query === COMPONENT_CSS) return { contents: componentCss.get(path) ?? '', loader: 'css' };
-      if (query === PACKAGE_CSS) {
-        const { name, subpath } = resolvePackage(config.packageAliases, path.slice(PACKAGE_CSS.length + 2));
-        return { contents: `@import ${JSON.stringify(cdn.urlFor(name, subpath))};`, loader: 'css' };
-      }
+      if (query === PACKAGE_STYLE_DIR) return loadPackageStyle(packageStyleSpecifier(path)!);
 
       const ext = extname(path);
       if (query === 'url') return { contents: assetModule(path), loader: 'js' };
       const loader = loaderFor(ext);
       if (loader) return { contents: fs.readFile(path) ?? '', loader };
-      if (ext === '.css') return { contents: fs.readFile(path) ?? '', loader: /\.module\.css$/i.test(path) ? 'local-css' : 'css' };
+      if (isStylesheet(path)) return { contents: (await compileStylesheet(options.styles, path)).css, loader: isCssModule(path) ? 'local-css' : 'css' };
       if (ext === '.json') return { contents: fs.readFile(path) ?? '', loader: 'json' };
 
       const extension = componentExtension(ext);
       if (extension) {
         const compiler = await options.components(extension, config.dependencies);
-        const compiled = await compiler.compile(fs.readText(path) ?? '', { path, dev: false });
+        const preprocessStyle = (lang: string, source: string) => preprocessStyleBlock(options.styles, lang, source, path);
+        const compiled = await compiler.compile(fs.readText(path) ?? '', { path, dev: false, preprocessStyle });
         if (!compiled.css) return { contents: compiled.code, loader: compiled.loader };
         componentCss.set(path, compiled.css);
         // Importing its own CSS puts the component's styles in the entry's CSS bundle.

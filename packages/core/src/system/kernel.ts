@@ -10,8 +10,9 @@ import type { PackageCache } from '../installer/registry.js';
 import type { ByteChannel, ChildHandle, HttpRequestData, HttpResponseData, HttpStreamResponse, Program, ProcessOptions, System } from './types.js';
 import { PortRegistry } from './ports.js';
 import { ServerEvents } from './serverEvents.js';
-import { commandNotFound, resolveCommand } from './commands.js';
+import { commandNotFound, resolveCommand, SYSTEM_BIN_DIRS } from './commands.js';
 import { runArguments, runProgram, toRuntimeProcess, type RuntimeProcess } from './process.js';
+import { createIpcPair } from './ipc.js';
 
 export interface KernelOptions {
   fs?: VirtualFileSystem;
@@ -28,7 +29,7 @@ export interface KernelOptions {
 }
 
 export const DEFAULT_ENV: Record<string, string> = {
-  PATH: '/usr/local/bin:/usr/bin:/bin',
+  PATH: SYSTEM_BIN_DIRS.join(':'),
   HOME: '/home/user',
   USER: 'user',
   SHELL: '/bin/bfsh',
@@ -79,7 +80,9 @@ export class Kernel {
     const env = { ...this.env, ...options.env };
     const resolved = resolveCommand(this.fs, this.options.programs, command, args, cwd, env);
     if (!resolved) throw commandNotFound(command);
-    return runProgram({ program: resolved.program, args: resolved.args, system: this.system, cwd, env, terminal: options.terminal });
+    const [parentEnd, childEnd] = options.ipc ? createIpcPair() : [];
+    const child = runProgram({ program: resolved.program, args: resolved.args, system: this.system, cwd, env, terminal: options.terminal, thread: options.thread, channel: childEnd });
+    return parentEnd ? { ...child, ipc: parentEnd } : child;
   }
 
   /** Send an HTTP request to a virtual server (what the preview service worker does in the browser); resolves with the whole response. */

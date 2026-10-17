@@ -7,9 +7,10 @@
  * Whoever may frame this page may drive it, so the server that hosts relay.html
  * must restrict that with `Content-Security-Policy: frame-ancestors <host origins>`.
  */
-import { ATTACH, REATTACH, RELAY_ATTACH, RELAY_READY, RELAY_REATTACH, RELAY_RELOAD, RELAY_SPAWN } from './protocol.js';
+import { ATTACH, REATTACH, RELAY_ATTACH, RELAY_READY, RELAY_REATTACH, RELAY_SPAWN, RELAY_UPDATE } from './protocol.js';
 import { bridgeWorker, RELAY_PROCESS_WORKER } from './relayWorker.js';
-import { broadcastReload, waitForActive } from './worker.js';
+import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
+import { broadcastUpdate, waitForActive } from './worker.js';
 
 const host = window.parent;
 
@@ -25,11 +26,11 @@ async function start(): Promise<void> {
 
   addEventListener('message', (event) => {
     if (event.source !== host) return;
-    const data = event.data as { type?: string; id?: unknown; base?: unknown } | null;
+    const data = event.data as { type?: string; id?: unknown; base?: unknown; update?: PreviewUpdate } | null;
     if (data?.type === RELAY_ATTACH && typeof data.id === 'string' && event.ports[0]) {
       registration.active?.postMessage({ type: ATTACH, id: data.id }, [event.ports[0]]);
-    } else if (data?.type === RELAY_RELOAD && typeof data.base === 'string') {
-      broadcastReload(data.base);
+    } else if (data?.type === RELAY_UPDATE && typeof data.base === 'string') {
+      broadcastUpdate(data.base, data.update ?? { type: 'reload' });
     } else if (data?.type === RELAY_SPAWN && event.ports[0]) {
       // Process code runs HERE, on the preview origin, never on the host's.
       bridgeWorker(event.ports[0], new Worker(new URL(`./${RELAY_PROCESS_WORKER}`, location.href), { name: 'bfwc-process' }));

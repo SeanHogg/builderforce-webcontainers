@@ -62,15 +62,18 @@ function fail(path: string, problems: Problem[]): never {
 
 export function createVueCompiler(sfc: VueCompilerSfcLike): ComponentCompiler {
   return {
-    compile(source, { path, dev }) {
+    async compile(source, { path, dev, preprocessStyle }) {
       const { descriptor, errors } = sfc.parse(source, { filename: path, sourceMap: false });
       if (errors.length) fail(path, errors);
 
-      for (const style of descriptor.styles) {
-        if (style.lang && style.lang !== 'css') {
-          throw new Error(`${path}: <style lang="${style.lang}"> needs a CSS preprocessor this runtime does not have yet.`);
-        }
-      }
+      // Sass/Less blocks become CSS first; scoping then works on plain CSS.
+      const styleSources = await Promise.all(
+        descriptor.styles.map((style) => {
+          if (!style.lang || style.lang === 'css') return style.content;
+          if (!preprocessStyle) throw new Error(`${path}: <style lang="${style.lang}"> needs a CSS preprocessor, and none is configured.`);
+          return preprocessStyle(style.lang, style.content);
+        }),
+      );
 
       // Stable per file, so the scope attribute does not change between reloads.
       const id = contentHash(path);
@@ -108,8 +111,8 @@ export function createVueCompiler(sfc: VueCompilerSfcLike): ComponentCompiler {
       parts.push('export default _sfc_main;');
 
       const css = descriptor.styles
-        .map((style) => {
-          const out = sfc.compileStyle({ source: style.content, filename: path, id: `data-v-${id}`, scoped: !!style.scoped, isProd: !dev });
+        .map((style, index) => {
+          const out = sfc.compileStyle({ source: styleSources[index]!, filename: path, id: `data-v-${id}`, scoped: !!style.scoped, isProd: !dev });
           if (out.errors.length) fail(path, out.errors);
           return out.code;
         })

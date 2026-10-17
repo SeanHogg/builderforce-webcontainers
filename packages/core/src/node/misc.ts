@@ -1,6 +1,6 @@
 /**
  * The small builtins: os, tty, timers (+promises), string_decoder, perf_hooks,
- * async_hooks, worker_threads, vm, dns, v8, diagnostics_channel and stubs for
+ * async_hooks, vm, dns, v8, diagnostics_channel and stubs for
  * the ones with nothing to offer in a browser (cluster, inspector). Each exists
  * so `require` succeeds and the common calls behave plausibly.
  */
@@ -231,7 +231,6 @@ const unavailable = (name: string) => () => {
 export function createStubModules(): Record<string, Record<string, unknown>> {
   return {
     perf_hooks: { performance: globalThis.performance, PerformanceObserver: class { observe() {} disconnect() {} }, monitorEventLoopDelay: () => ({ enable() {}, disable() {}, percentile: () => 0, mean: 0, max: 0, min: 0 }), constants: {} },
-    worker_threads: { isMainThread: true, parentPort: null, workerData: null, threadId: 0, resourceLimits: {}, Worker: unavailable('worker_threads.Worker'), MessageChannel, MessagePort: globalThis.MessagePort, BroadcastChannel: globalThis.BroadcastChannel, markAsUntransferable: () => undefined, SHARE_ENV: Symbol('SHARE_ENV') },
     dns: { lookup: (host: string, options: unknown, cb?: (e: Error | null, address: string, family: number) => void) => queueMicrotask(() => ((typeof options === 'function' ? options : cb) as NonNullable<typeof cb>)(null, host === 'localhost' ? '127.0.0.1' : host, 4)), resolve: unavailable('dns.resolve'), promises: { lookup: async (host: string) => ({ address: host === 'localhost' ? '127.0.0.1' : host, family: 4 }) }, setDefaultResultOrder: () => undefined },
     v8: { getHeapStatistics: () => ({ total_heap_size: 30e6, used_heap_size: 20e6, heap_size_limit: 2e9 }), getHeapSpaceStatistics: () => [], serialize: (v: unknown) => new TextEncoder().encode(JSON.stringify(v)), deserialize: (b: Uint8Array) => JSON.parse(new TextDecoder().decode(b)), setFlagsFromString: () => undefined, cachedDataVersionTag: () => 0 },
     cluster: { isMaster: true, isPrimary: true, isWorker: false, workers: {}, fork: unavailable('cluster.fork'), on: () => undefined, settings: {} },

@@ -15,6 +15,7 @@ import {
   type ProjectProfile,
   type RuntimeProcess,
   type ServerAddress,
+  type StyleCompilers,
   type Transformer,
   type ZipExportOptions,
 } from '@seanhogg/builderforce-webcontainers-core';
@@ -25,6 +26,8 @@ import { listenToPreviewBridge } from './previewBridge.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
 import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
 import { createCdnComponentCompilers } from './componentCompilers.js';
+import { createCdnStyleCompilers } from './styleCompilers.js';
+import { watchForPreviewUpdates } from './previewUpdates.js';
 
 /** Serve previews on THIS page's origin. Only for code the page's own user trusts. */
 export interface SameOriginOptions {
@@ -56,22 +59,27 @@ export interface CommonRuntimeOptions {
   cdn?: PackageCdnFactory;
   /** `.vue` / `.svelte` compilers. Default: the official ones, fetched from a CDN on first use. */
   components?: ComponentCompilers;
+  /** Sass / Less compilers. Default: the official pure-JS builds, fetched from a CDN on first use. */
+  styles?: StyleCompilers;
   /** Bundler for `build()`. Default: esbuild-wasm (the same instance as the compiler). */
   bundler?: Bundler;
   /** Stable id (e.g. the project id; `[A-Za-z0-9_-]`) — keeps the preview URL stable across reloads. */
   id?: string;
   /** The "Built with Builderforce.ai" badge in the preview. Default true — please keep it. */
   attribution?: boolean;
-  /** Reload open previews when files change. Default true. */
+  /** Update open previews when files change. Default true. */
   liveReload?: boolean;
+  /**
+   * Apply edits in place where possible: stylesheets swap and React components
+   * re-render keeping their state (Fast Refresh); anything else reloads. `false`
+   * reloads on every edit. Default true.
+   */
+  hot?: boolean;
   /** Your scripts (JavaScript source), run in every preview page before the app — analytics, test hooks, a mock `fetch`. */
   previewScripts?: string[];
   /** The Node runtime behind `run` (process workers, npm registry). */
   node?: NodeRuntimeOptions;
 }
-
-/** Edits arrive in bursts (a save, an agent writing several files): reload once per burst. */
-const RELOAD_DEBOUNCE_MS = 120;
 
 export interface RuntimeBuildOptions {
   /** Where the site will be served from. Default `./` (works from any directory). */
@@ -86,7 +94,7 @@ export interface PreviewRuntime {
   readonly url: string;
   readonly fs: VirtualFileSystem;
   readonly server: DevServer;
-  /** Write files into the runtime (nested or flat; see `FileTree`), under `at` (default `/`). Open previews reload. */
+  /** Write files into the runtime (nested or flat; see `FileTree`), under `at` (default `/`). Open previews update. */
   writeTree(files: FileTree, at?: string): void;
   /** The project as a zip — "Download project" with `exclude: ['node_modules']`, or a full snapshot to restore later. */
   exportZip(options?: ZipExportOptions): Uint8Array;
@@ -161,12 +169,13 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const base = previewBase(transport.scope, id);
   const fs = new VirtualFileSystem();
   const components = options.components ?? createCdnComponentCompilers();
+  const styles = options.styles ?? createCdnStyleCompilers();
   /** Run in every preview page: dev-server documents and pages virtual servers serve alike. */
   let previewScripts: string[] = [...(options.previewScripts ?? [])];
   let server: DevServer;
   try {
     const transformer = options.transformer ?? (await createEsbuildWasmTransformer());
-    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, attribution: options.attribution, previewScripts });
+    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, styles, attribution: options.attribution, previewScripts, hot: options.hot });
   } catch (error) {
     transport.dispose();
     throw error;
@@ -201,14 +210,9 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     if (wanted === id) attach();
   });
 
-  // Live reload: any change to the files reloads every frame showing this preview.
-  let reloadTimer: ReturnType<typeof setTimeout> | undefined;
-  const stopWatching = options.liveReload === false
-    ? undefined
-    : fs.watch(() => {
-      clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => transport.reload(base), RELOAD_DEBOUNCE_MS);
-    });
+  // Every frame showing this preview hears what each burst of edits changed.
+  const reload = () => transport.send(base, { type: 'reload' });
+  const stopWatching = options.liveReload === false ? undefined : watchForPreviewUpdates(fs, server, (update) => transport.send(base, update));
 
   const previewMessages = listenToPreview(window, transport.origin, base);
   // WebSockets and document.cookie for virtual servers, which a service worker cannot carry.
@@ -222,18 +226,18 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     writeTree: (files, at) => fs.writeTree(files, at),
     exportZip: (zipOptions) => exportZip(fs, zipOptions),
     importZip: (zip, at) => importZip(fs, zip, at),
-    reload: () => transport.reload(base),
+    reload,
     profile: () => server.profile(),
     async build(buildOptions = {}) {
       const bundler = options.bundler ?? (await createEsbuildWasmBundler());
-      return buildProject({ files: fs, bundler, cdn: options.cdn, components, base: buildOptions.base, minify: buildOptions.minify });
+      return buildProject({ files: fs, bundler, cdn: options.cdn, components, styles, base: buildOptions.base, minify: buildOptions.minify });
     },
     onError: (listener) => previewMessages.onError(listener),
     onPreviewConsole: (listener) => previewMessages.onConsole(listener),
     setPreviewScripts(scripts) {
       previewScripts = [...scripts];
       server.setPreviewScripts(previewScripts);
-      transport.reload(base);
+      reload();
     },
     run: (command: string, args?: string[] | ProcessOptions, runOptions?: ProcessOptions) => processes.run(command, args as string[], runOptions),
     onServerListening: (listener) => processes.servers.onListening(listener),
@@ -245,7 +249,6 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
       responder?.dispose();
       processes.dispose();
       previewMessages.dispose();
-      clearTimeout(reloadTimer);
       stopWatching?.();
       stopReattach();
       transport.dispose();

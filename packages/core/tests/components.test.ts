@@ -40,7 +40,7 @@ describe('Vue compiler', () => {
     expect(out.code).toContain('_sfc_main.render');
   });
 
-  it('declines style preprocessors with a clear reason', async () => {
+  it('declines a <style lang="scss"> block with a clear reason when no preprocessor is configured', async () => {
     await expect(Promise.resolve().then(() => vue.compile('<template><p/></template><style lang="scss">a{}</style>', { path: '/src/S.vue', dev: true })))
       .rejects.toThrow(/preprocessor/);
   });

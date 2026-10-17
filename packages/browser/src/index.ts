@@ -18,6 +18,9 @@ export { createEsbuildWasmTransformer, createEsbuildWasmBundler, loadEsbuildWasm
 export type { EsbuildWasmOptions } from './esbuildWasm.js';
 export { createCdnComponentCompilers, defaultVueCompilerUrl, defaultSvelteCompilerUrl } from './componentCompilers.js';
 export type { CdnComponentCompilerOptions } from './componentCompilers.js';
+export { createCdnStyleCompilers, defaultSassUrl, defaultLessUrl } from './styleCompilers.js';
+export type { CdnStyleCompilerOptions } from './styleCompilers.js';
+export { watchForPreviewUpdates } from './previewUpdates.js';
 export { createCacheStoragePackageCache } from './packageCache.js';
 export { ProcessHost, createWorkerProcess, servePortRequest, createPortResponder, openPortResponse, injectBridge } from './node/index.js';
 export type { NodeRuntimeOptions, ProcessHostOptions, ProcessInfo, WorkerLike, PortResponder, PortResponderOptions, OpenedPortResponse } from './node/index.js';

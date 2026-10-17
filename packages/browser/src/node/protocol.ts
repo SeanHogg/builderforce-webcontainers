@@ -9,8 +9,12 @@
  * worker they answer a `loopback` (ids the worker allocated). `request-cancel`
  * goes the other way: the reader hung up. Upgraded connections (WebSockets)
  * are opened by the page (`socket-open`) and carry raw bytes both ways.
+ *
+ * A message channel (fork, worker threads) is `ipc` / `ipc-disconnect` between a
+ * process and the page (its parent's side), and `child-ipc` /
+ * `child-ipc-disconnect` between a parent process and the page (its child's side).
  */
-import type { FileContent, HttpRequestData, HttpResponseHead } from '@seanhogg/builderforce-webcontainers-core';
+import type { FileContent, HttpRequestData, HttpResponseHead, ThreadInfo } from '@seanhogg/builderforce-webcontainers-core';
 
 export type FsOp = { op: 'write'; path: string; content: FileContent } | { op: 'remove'; path: string } | { op: 'mkdir'; path: string };
 
@@ -22,6 +26,9 @@ export interface StartMessage {
   cwd: string;
   env: Record<string, string>;
   terminal?: { cols: number; rows: number };
+  /** A message channel to the parent is open (`process.send`, a thread's `parentPort`). */
+  ipc?: boolean;
+  thread?: ThreadInfo;
   files: Array<[string, FileContent]>;
   dirs: string[];
   /** Ports already listening anywhere in the runtime (so `listen` can fail fast with EADDRINUSE). */
@@ -44,6 +51,13 @@ export type ResponseMessage =
 /** Raw bytes of an upgraded connection, either way; ids allocated by the page. */
 export type SocketMessage = { type: 'socket-data'; connId: number; data: Uint8Array } | { type: 'socket-close'; connId: number };
 
+/** Message-channel traffic: to/from this process's parent (`ipc`), or one of its children (`child-ipc`). */
+export type IpcMessage =
+  | { type: 'ipc'; data: unknown }
+  | { type: 'ipc-disconnect' }
+  | { type: 'child-ipc'; childId: number; data: unknown }
+  | { type: 'child-ipc-disconnect'; childId: number };
+
 /** page → worker */
 export type HostToWorker =
   | StartMessage
@@ -59,14 +73,15 @@ export type HostToWorker =
   | { type: 'request-cancel'; reqId: number }
   | { type: 'socket-open'; connId: number; port: number; request: HttpRequestData }
   | ResponseMessage
-  | SocketMessage;
+  | SocketMessage
+  | IpcMessage;
 
 /** worker → page */
 export type WorkerToHost =
   | { type: 'stdout' | 'stderr'; data: string }
   | { type: 'exit'; code: number }
   | { type: 'fs'; ops: FsOp[] }
-  | { type: 'spawn'; childId: number; command: string; args: string[]; cwd?: string; env?: Record<string, string>; terminal?: { cols: number; rows: number } }
+  | { type: 'spawn'; childId: number; command: string; args: string[]; cwd?: string; env?: Record<string, string>; terminal?: { cols: number; rows: number }; ipc?: boolean; thread?: ThreadInfo }
   | { type: 'child-stdin'; childId: number; data: string | null }
   | { type: 'child-kill'; childId: number; signal: string }
   | { type: 'child-resize'; childId: number; cols: number; rows: number }
@@ -76,7 +91,8 @@ export type WorkerToHost =
   | { type: 'request-cancel'; reqId: number }
   | { type: 'listening'; port: number; url: string }
   | ResponseMessage
-  | SocketMessage;
+  | SocketMessage
+  | IpcMessage;
 
 /** The preview-relative URL a virtual server on `port` is reachable at. */
 export function portPath(previewBase: string, port: number): string {

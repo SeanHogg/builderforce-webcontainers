@@ -1,6 +1,6 @@
 import type { VirtualFileSystem } from './vfs.js';
 import { dirname } from './paths.js';
-import { resolveLocal } from './resolve.js';
+import { isBareSpecifier, resolveLocal } from './resolve.js';
 
 /**
  * CSS handling. A stylesheet imported from JS is served as a JS module that
@@ -24,6 +24,33 @@ export function rewriteCssUrls(fs: VirtualFileSystem, cssPath: string, css: stri
 }
 
 /**
+ * A stylesheet's `@import`s, once its text sits in a <style> tag: a relative one
+ * (`@import './base.css'`) resolves against the DOCUMENT there, so it becomes the
+ * file's preview URL; a package one (`'bootstrap/dist/css/bootstrap.css'`, or
+ * `~bootstrap/…`) is fetched from the package CDN, as the build's CSS bundle does.
+ */
+const CSS_IMPORT = /@import\s+(?:url\(\s*)?(['"]?)([^'")\s;]+)\1\s*\)?/g;
+
+export function rewriteCssImports(
+  fs: VirtualFileSystem,
+  cssPath: string,
+  css: string,
+  base: string,
+  packageUrl: (specifier: string) => string,
+): string {
+  return css.replace(CSS_IMPORT, (match, _quote: string, ref: string) => {
+    if (/^(data|https?):|^\/\//i.test(ref)) return match;
+    const specifier = ref.startsWith('~') ? ref.slice(1) : ref;
+    if (isBareSpecifier(specifier)) {
+      const local = !ref.startsWith('~') && resolveLocal(fs, dirname(cssPath), `./${specifier}`);
+      return `@import url(${JSON.stringify(local ? base + local.slice(1) : packageUrl(specifier))})`;
+    }
+    const resolved = resolveLocal(fs, dirname(cssPath), specifier);
+    return resolved ? `@import url(${JSON.stringify(base + resolved.slice(1))})` : match;
+  });
+}
+
+/**
  * A statement that puts `cssExpression` (JS source evaluating to a string) in a
  * <style> tag keyed by `path`: re-evaluating the module replaces the tag's text
  * instead of adding a second tag. Shared by stylesheets and component styles.
@@ -37,20 +64,9 @@ export function injectStyleStatement(path: string, cssExpression: string): strin
   ].join('\n');
 }
 
-/**
- * The JS module for an imported stylesheet. `.module.css` exports an identity map
- * (class name → itself): real scoping needs the build API, so for now CSS Modules
- * render correctly as long as class names don't collide.
- */
+/** The JS module for an imported (plain) stylesheet: inject it, export its text. CSS Modules: `styles/cssModules.ts`. */
 export function cssToModule(path: string, css: string): string {
-  const exportsCssModule = /\.module\.css$/i.test(path);
-  return [
-    `const css = ${JSON.stringify(css)};`,
-    injectStyleStatement(path, 'css'),
-    exportsCssModule
-      ? `export default new Proxy({}, { get: (_, key) => typeof key === 'string' ? key : undefined });`
-      : `export default css;`,
-  ].join('\n');
+  return [`const css = ${JSON.stringify(css)};`, injectStyleStatement(path, 'css'), `export default css;`].join('\n');
 }
 
 export function jsonToModule(text: string): string {

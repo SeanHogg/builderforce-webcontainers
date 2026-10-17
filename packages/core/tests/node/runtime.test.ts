@@ -91,6 +91,12 @@ describe('node runtime: modules', () => {
     expect(output).toBe('cjs esm-only\n');
   });
 
+  it('ignores a straggling callback that writes or exits again after the process exited', async () => {
+    const { output, code } = await runNode({ 'index.js': 'require("fs").promises.readFile("/index.js").then(() => { console.error("late"); process.exit(2); }); console.log("early"); process.exit(0);' });
+    expect(code).toBe(0);
+    expect(output).toBe('early\n');
+  });
+
   it('handles uncaught errors: stack to stderr, exit 1; uncaughtException listeners recover', async () => {
     const crash = await runNode({ 'index.js': 'setTimeout(() => { throw new Error("boom") }, 1)' });
     expect(crash.code).toBe(1);
@@ -128,5 +134,30 @@ describe('node runtime: event loop', () => {
     expect((await exec(kernel, 'node', ['-p', '6 * 7'])).output).toBe('42\n');
     expect((await exec(kernel, 'node', ['-e', 'console.log(process.argv.slice(1).join(","))', 'a', 'b'])).output).toBe('a,b\n');
     expect((await exec(kernel, 'node', ['-v'])).output).toMatch(/^v20\./);
+  });
+});
+
+describe('spawning process.execPath', () => {
+  it('runs the node program, as tools that re-launch node expect', async () => {
+    const { output, code } = await runNode({
+      'index.js': `require('child_process').spawn(process.execPath, ['child.js'], { stdio: 'inherit' }).on('exit', (c) => console.log('child exited', c));`,
+      'child.js': `console.log('in child', process.execPath);`,
+    });
+    expect(code).toBe(0);
+    expect(output).toBe('in child /usr/local/bin/node\nchild exited 0\n');
+  });
+});
+
+describe('dynamic import() in CommonJS', () => {
+  it("loads the project's module, not the host's", async () => {
+    const { output, code } = await runNode({
+      'index.js': `const name = './cli/run.js';\nimport(name).then((m) => m.start('ok'));\nimport('./esm.mjs').then((m) => console.log(m.default));\nimport(require('url').pathToFileURL('/esm.mjs').href).then((m) => console.log('by url', m.default));`,
+      'cli/run.js': `exports.start = (word) => console.log('started', word);`,
+      'esm.mjs': `export default 'from esm';`,
+    });
+    expect(code).toBe(0);
+    expect(output).toContain('started ok');
+    expect(output).toContain('from esm');
+    expect(output).toContain('by url from esm');
   });
 });

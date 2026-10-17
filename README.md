@@ -53,7 +53,8 @@ createRoot(document.getElementById('root')!).render(<h1>Hello</h1>);`,
 if (runtime.profile().supported) iframe.src = runtime.url;
 runtime.onError((e) => console.warn('preview crashed:', e.message));
 
-// Edits reload every open preview of this project; nothing to restart.
+// Edits reach every open preview: styles swap in place, React components
+// re-render keeping their state (Fast Refresh), anything else reloads.
 runtime.fs.writeFile('/src/main.tsx', '...');
 ```
 
@@ -66,9 +67,33 @@ is all.
 the runtime loads the official compiler from a CDN (`@vue/compiler-sfc`'s browser
 build from jsDelivr, `svelte/compiler` from esm.sh), pinned to the project's own
 `vue` / `svelte` range so compiler and runtime agree. Vue `<style scoped>` and
-Svelte's component CSS are scoped as usual. Pass `components` to
-`startPreviewRuntime` to supply compilers yourself. Not yet: `<style lang="scss">`
-and other preprocessors, and TypeScript in Svelte 4 (Svelte 5 handles it).
+Svelte's component CSS are scoped as usual, and `<style lang="scss|sass|less">`
+blocks are compiled first. Pass `components` to `startPreviewRuntime` to supply
+compilers yourself. Not yet: TypeScript in Svelte 4 (Svelte 5 handles it).
+
+### Styles and hot updates
+
+* **Sass and Less.** `.scss`, `.sass` and `.less` files — imported from code,
+  linked from HTML, or as component `<style lang>` — compile with the official
+  pure-JS Sass and Less, loaded from a CDN the first time a project needs them and
+  pinned to its `sass` / `less` range. `@use` / `@import` find partials in the
+  project, an installed `node_modules`, or the package on jsDelivr
+  (`@use 'bootstrap/scss/functions'` works before `npm install`). `styles` swaps
+  the compilers.
+* **CSS Modules** (`*.module.css|scss|sass|less`) are scoped in the preview as in
+  the build: per-file class names, `:global` / `:local`, `composes` (local, from
+  another module, from global), local `@keyframes`; the default export is the
+  class map, plus a named export per class.
+* **Package stylesheets** imported from code (`import 'bootstrap/dist/css/bootstrap.css'`)
+  load in the preview from the package CDN, and `@import 'pkg/x.css'` in your own
+  CSS does too.
+* **Hot updates** (`hot`, on by default). An edit to a stylesheet swaps it without
+  reloading. In a React app, an edit to a component re-renders it in place with
+  its state kept, through the official `react-refresh` runtime; an edit to a
+  module that is not a component re-runs the components that import it. The page
+  reloads when that cannot be done safely: the entry changed, a component's hooks
+  changed, or files were added or removed. `server.planUpdate(changes)` is the
+  decision, if you drive the dev server yourself.
 
 ### Building for deployment
 
@@ -200,6 +225,12 @@ and closing, for a host that lists running servers.
   `shift`, `break`/`continue`, `jobs` and `wait`; `cd`, `ls -la`, `cat`,
   `mkdir -p`, `rm -rf`, `cp -r`, `mv`, `grep`, `head`, `tail` and friends.
   Unknown commands print `command not found`.
+* **Processes talking to each other.** `child_process.fork()` opens a message
+  channel (`child.send` ↔ `process.on('message')`, `disconnect`), and
+  `worker_threads` Workers run as processes of their own — in the browser, their
+  own Web Worker, so in parallel — with `workerData`, `parentPort` and a worker's
+  uncaught error arriving as the parent's `'error'` event. Messages are copied
+  (there is no shared memory without cross-origin isolation).
 
 Not supported yet (see the [ROADMAP](ROADMAP.md)): native addons,
 `execSync`/`spawnSync`, WebSocket clients inside Node programs (the `ws` client,

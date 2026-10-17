@@ -16,6 +16,21 @@ export interface ResolvedCommand {
   args: string[];
 }
 
+/** Where registered programs live (`which node` → `/usr/local/bin/node`); the default `PATH`. */
+export const SYSTEM_BIN_DIRS = ['/usr/local/bin', '/usr/bin', '/bin'] as const;
+
+/**
+ * `/usr/local/bin/node` → `node`: an absolute path into a system bin directory
+ * names the registered program, unless a real file sits there. Tools spawn
+ * `process.execPath` this way (Next.js's telemetry flush, worker pools).
+ */
+function systemProgramName(fs: VirtualFileSystem, command: string): string | undefined {
+  if (!command.startsWith('/')) return undefined;
+  const path = normalizePath(command);
+  if (!(SYSTEM_BIN_DIRS as readonly string[]).includes(dirname(path)) || fs.isFile(path)) return undefined;
+  return path.slice(dirname(path).length + 1);
+}
+
 /** Every `node_modules/.bin` from `cwd` up to the root, nearest first. */
 export function binDirectories(cwd: string): string[] {
   const out: string[] = [];
@@ -60,6 +75,8 @@ export function resolveCommand(
   if (!command.includes('/') && Object.prototype.hasOwnProperty.call(programs, command)) {
     return { name: command, program: programs[command]!, args };
   }
+  const system = systemProgramName(fs, command);
+  if (system && Object.prototype.hasOwnProperty.call(programs, system)) return { name: system, program: programs[system]!, args };
   const file = findExecutable(fs, command, cwd, env);
   if (!file) return undefined;
   const { name, args: lead } = interpreterFor(fs, file);

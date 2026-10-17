@@ -311,6 +311,21 @@ export function createSyncFs(ctx: FsContext) {
       return chunk.length;
     },
     writeSync: writeFd,
+    // Vectored IO. Without `fs.writev`, tar/fs-minipass fall back to process.binding('fs').
+    writevSync(fd: number, buffers: readonly ArrayBufferView[], position?: number | null): number {
+      let total = 0;
+      for (const buffer of buffers) total += writeFd(fd, buffer, 0, buffer.byteLength, position == null ? null : position + total);
+      return total;
+    },
+    readvSync(fd: number, buffers: readonly ArrayBufferView[], position?: number | null): number {
+      let total = 0;
+      for (const buffer of buffers) {
+        const read = api.readSync(fd, buffer, 0, buffer.byteLength, position == null ? null : position + total);
+        total += read;
+        if (read < buffer.byteLength) break;
+      }
+      return total;
+    },
     opendirSync(p: PathLike) {
       const path = resolve(p);
       const entries = api.readdirSync(path, { withFileTypes: true }) as Dirent[];

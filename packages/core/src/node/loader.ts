@@ -11,7 +11,7 @@
  */
 import type { VirtualFileSystem } from '../vfs.js';
 import { dirname, extname } from '../paths.js';
-import { esmToCjs, ESM_MARK, hasModuleSyntax, mayBeEsm } from './esm.js';
+import { esmToCjs, ESM_MARK, hasModuleSyntax, mayBeEsm, rewriteDynamicImports } from './esm.js';
 import { findPackageScope, IMPORT_CONDITIONS, nodeModulePaths, REQUIRE_CONDITIONS, resolveNodeModule, type Resolution } from './resolve.js';
 
 export interface LoaderOptions {
@@ -162,11 +162,15 @@ export function createModuleSystem(options: LoaderOptions) {
       const dir = dirname(filename);
       const names = ['exports', 'require', 'module', '__filename', '__dirname', ...globalNames];
       const values: unknown[] = [this.exports, require, this, filename, dir, ...globalValues];
+      let source = content;
       if (esm) {
         names.push('__bfwc_import', '__bfwc_dynamic', '__bfwc_meta', '__bfwc_esm', '__bfwc_star', '__bfwc_get');
         values.push(...esmHelpers(this, filename));
+      } else if ((source = rewriteDynamicImports(content)) !== content) {
+        names.push('__bfwc_dynamic');
+        values.push(esmHelpers(this, filename)[1]);
       }
-      const code = `${stripShebang(content)}\n//# sourceURL=${encodeURI('file://' + filename)}`;
+      const code = `${stripShebang(source)}\n//# sourceURL=${encodeURI('file://' + filename)}`;
       let fn: (...args: unknown[]) => unknown;
       try {
         fn = new Function(...names, code) as typeof fn;
@@ -184,7 +188,9 @@ export function createModuleSystem(options: LoaderOptions) {
   }
 
   function esmHelpers(module: Module, filename: string): unknown[] {
-    const load = (specifier: string): { exports: any; __tla?: Promise<unknown> } => {
+    const load = (rawSpecifier: string): { exports: any; __tla?: Promise<unknown> } => {
+      // `import()` takes file URLs (`import(pathToFileURL(configPath).href)`); `require` does not.
+      const specifier = rawSpecifier.startsWith('file:') ? decodeURIComponent(new URL(rawSpecifier).pathname) : rawSpecifier;
       let target: string;
       try {
         target = Module._resolveFilename(specifier, module, false, { conditions: REQUIRE_CONDITIONS });

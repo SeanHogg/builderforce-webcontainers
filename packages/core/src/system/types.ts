@@ -6,6 +6,7 @@
  */
 import type { VirtualFileSystem } from '../vfs.js';
 import type { PackageCache } from '../installer/registry.js';
+import type { IpcEndpoint } from './ipc.js';
 
 export interface TerminalPort {
   cols: number;
@@ -29,6 +30,17 @@ export interface ProcessOptions {
   env?: Record<string, string>;
   /** Attach to a terminal of this size (`isTTY`, line discipline, `\r\n` output). */
   terminal?: { cols: number; rows: number };
+  /** Open a message channel to the child (`child_process.fork`); the handle's `ipc` is the parent's end. */
+  ipc?: boolean;
+  /** Run as a `worker_threads` Worker: the child's `worker_threads` reports this, over the `ipc` channel. */
+  thread?: ThreadInfo;
+}
+
+/** What a process started as a worker thread sees in `worker_threads`. */
+export interface ThreadInfo {
+  threadId: number;
+  /** Structured-cloned from the parent's `new Worker(file, { workerData })`. */
+  workerData: unknown;
 }
 
 /** A child as its parent sees it (separate stdout/stderr listeners, unlike the streams of the public `RuntimeProcess`). */
@@ -41,6 +53,8 @@ export interface ChildHandle {
   kill(signal?: string): void;
   resize?(cols: number, rows: number): void;
   readonly exit: Promise<number>;
+  /** The parent's end of the message channel, when spawned with `ipc`. */
+  readonly ipc?: IpcEndpoint;
 }
 
 export interface HttpRequestData {
@@ -131,6 +145,10 @@ export interface ProgramContext {
   system: System;
   /** Aborted by kill(): in-process programs stop at their next await. */
   signal: AbortSignal;
+  /** The channel to the parent, when it spawned this process with `ipc` (`process.send`). */
+  ipc?: IpcEndpoint;
+  /** Set when this process is a worker thread. */
+  thread?: ThreadInfo;
 }
 
 /** A program resolves with its exit code. */
