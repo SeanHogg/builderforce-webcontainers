@@ -15,10 +15,13 @@ import { createSyncFs, type FsContext, type SyncFs } from './sync.js';
 import { Dirent, Stats, constants } from './stats.js';
 import { normalizePath } from '../../paths.js';
 import { queueCallback } from '../processExit.js';
+import type { StdinRead } from './stdinFd.js';
 
 export interface FsModuleContext extends FsContext {
   /** Keep the process alive (a watcher is open); call the result to let go. */
   hold(): () => void;
+  /** fd 0 for `fs.read`: this process's stdin (stdinFd.ts). */
+  readStdin?: StdinRead;
 }
 
 type Fn = (...args: any[]) => any;
@@ -223,6 +226,20 @@ export function createFsModule(ctx: FsModuleContext): Record<string, any> {
     else if (['read', 'write', 'readv', 'writev'].includes(base)) fs[base] = toCallback(fn, (n, args) => [n, args[1]]);
     else fs[base] = toCallback(fn);
   }
+  const readFile = fs.read;
+  // `fs.read(0, …)` reads stdin: it waits for input instead of failing with EBADF.
+  fs.read = (fd: number, ...args: any[]) => {
+    if (fd !== 0 || !ctx.readStdin) return readFile(fd, ...args);
+    const cb = lastCallback(args);
+    const options = args[0] && !ArrayBuffer.isView(args[0]) ? args[0] : typeof args[1] === 'object' && args[1] ? { buffer: args[0], ...args[1] } : { buffer: args[0], offset: args[1], length: args[2] };
+    const buffer = options.buffer as ArrayBufferView;
+    const offset = Number(options.offset ?? 0);
+    const length = Number(options.length ?? buffer.byteLength - offset);
+    void ctx.readStdin(new Uint8Array(buffer.buffer, buffer.byteOffset + offset, length)).then(
+      (count) => queueCallback(() => cb?.(null, count, buffer)),
+      (error: unknown) => queueCallback(() => cb?.(error, 0, buffer)),
+    );
+  };
   fs.realpath.native = fs.realpath;
   fs.createReadStream = (path: string, options?: object | string) => new ReadStream(path, options as object);
   fs.createWriteStream = (path: string, options?: object | string) => new WriteStream(path, options as object);

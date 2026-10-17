@@ -189,6 +189,18 @@ describe('binary stdio', () => {
   });
 });
 
+describe('fd 0 as a file', () => {
+  it('fs.read(0, …) waits for stdin and reports end of input as 0 bytes (how Go wasm reads)', async () => {
+    const { output } = await runNode(
+      { 'index.js': `const fs = require('fs'); const buf = Buffer.alloc(4); let all = ''; const next = () => fs.read(0, buf, 0, 4, null, (err, n) => { if (err || n === 0) return console.log('read', JSON.stringify(all), err); all += buf.toString('utf8', 0, n); next(); }); next();` },
+      'index.js',
+      [],
+      { input: 'hello stdin' },
+    );
+    expect(output).toBe('read "hello stdin" null\n');
+  });
+});
+
 describe('children die with their parent', () => {
   it('kills a still-running child (and frees its port) when the parent exits, unless detached', async () => {
     const { kernel, output, code } = await runNode({

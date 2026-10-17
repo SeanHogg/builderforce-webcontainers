@@ -61,6 +61,21 @@ describe('installPackages', () => {
     expect(fs.readText('/node_modules/vite/node_modules/rollup/index.js')).toBe('module.exports = "@rollup/wasm-node@4.20.0";');
   });
 
+  it("adds a napi-rs package's unlisted -wasm32-wasi binding beside its per-platform ones", async () => {
+    const { fs, run } = await setup(
+      {
+        parser: { versions: { '1.2.0': { optionalDependencies: { '@p/binding-linux-x64-gnu': '1.2.0', '@p/binding-darwin-arm64': '1.2.0' } } } },
+        '@p/binding-linux-x64-gnu': { versions: { '1.2.0': { cpu: ['x64'], os: ['linux'] } } },
+        '@p/binding-darwin-arm64': { versions: { '1.2.0': { cpu: ['arm64'], os: ['darwin'] } } },
+        '@p/binding-wasm32-wasi': { versions: { '1.2.0': { cpu: ['wasm32'] } } },
+      },
+      { dependencies: { parser: '1.2.0' } },
+    );
+    await run();
+    expect(version(fs, 'node_modules/@p/binding-wasm32-wasi')).toBe('1.2.0');
+    expect(fs.exists('/node_modules/@p/binding-linux-x64-gnu')).toBe(false);
+  });
+
   it('nests deeper rather than shadow a version a sibling already resolves to', async () => {
     const { fs, run } = await setup(
       {

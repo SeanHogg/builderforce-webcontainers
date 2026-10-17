@@ -13,7 +13,7 @@
 import type { PackageManifest } from './registry.js';
 import { parseDependency, type PackageJson, type ParsedSpec } from './spec.js';
 import { satisfies, validRange } from './semver.js';
-import { wasmBuildOf } from './wasmBuilds.js';
+import { napiWasmSibling, wasmBuildOf } from './wasmBuilds.js';
 
 export type EdgeType = 'prod' | 'dev' | 'optional' | 'peer';
 
@@ -97,6 +97,8 @@ function dependenciesOf(m: PackageJson | PackageManifest, isRoot: boolean, produ
   if (isRoot && !production) add((m as PackageJson).devDependencies, 'dev');
   add(m.dependencies, 'prod');
   add(m.optionalDependencies, 'optional');
+  const sibling = napiWasmSibling(m.optionalDependencies);
+  if (sibling) add({ [sibling[0]]: sibling[1] }, 'optional');
   if (!isRoot) {
     const meta = (m as PackageManifest).peerDependenciesMeta ?? {};
     for (const [name, range] of Object.entries(m.peerDependencies ?? {})) {

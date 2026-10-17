@@ -14,6 +14,7 @@ import { createPathModule } from './path.js';
 import { createUtilModule, types as utilTypes } from './util.js';
 import { createStreamModule } from './stream/index.js';
 import { createFsModule } from './fs/index.js';
+import { createStdinRead } from './fs/stdinFd.js';
 import { constants as fsConstants } from './fs/stats.js';
 import { createCryptoModule } from './crypto.js';
 import { createQuerystringModule, createUrlModule } from './urlqs.js';
@@ -69,7 +70,7 @@ export function createBuiltins(deps: BuiltinDeps) {
     diagnostics_channel: () => createDiagnosticsChannelModule(),
     'dns/promises': (get) => get('dns').promises,
     events: () => createEventsModule(),
-    fs: () => createFsModule({ vfs: deps.fs, cwd: () => proc.cwd(), stdout: deps.io.stdout, stderr: deps.io.stderr, hold: () => loop.hold() }),
+    fs: () => createFsModule({ vfs: deps.fs, cwd: () => proc.cwd(), stdout: deps.io.stdout, stderr: deps.io.stderr, hold: () => loop.hold(), readStdin: createStdinRead(deps.io, () => loop.hold()) }),
     'fs/promises': (get) => get('fs').promises,
     http: () => createHttpModule(clientDeps, 'http:'),
     https: () => createHttpModule(clientDeps, 'https:'),
