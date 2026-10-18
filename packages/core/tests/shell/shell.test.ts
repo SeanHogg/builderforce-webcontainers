@@ -29,6 +29,22 @@ describe('shell execution', () => {
     expect(output).toBe('a b a  b $X dflt\nfallback\nyes\n0\n');
   });
 
+  it('fails a pipeline when any stage exits non-zero (pipefail)', async () => {
+    const kernel = kernelWith();
+    // A later success must not hide an earlier failure; every stage 0 stays 0.
+    expect(await sh(kernel, 'false | true')).toMatchObject({ code: 1 });
+    expect(await sh(kernel, 'true | false | true')).toMatchObject({ code: 1 });
+    expect(await sh(kernel, 'true | true')).toMatchObject({ code: 0 });
+    expect(await sh(kernel, 'echo hi | cat')).toEqual({ output: 'hi\n', code: 0 });
+    // Rightmost non-zero wins, and && must see the pipeline failure.
+    expect((await sh(kernel, `node -e 'process.exit(3)' | true`)).code).toBe(3);
+    expect((await sh(kernel, `node -e 'process.exit(3)' | node -e 'process.exit(4)'`)).code).toBe(4);
+    expect(await sh(kernel, 'false | true && echo leaked; echo after')).toEqual({ output: 'after\n', code: 0 });
+    // A command that is not a pipeline is unchanged.
+    expect(await sh(kernel, 'false')).toMatchObject({ code: 1 });
+    expect(await sh(kernel, 'true')).toMatchObject({ code: 0 });
+  });
+
   it('pipes, redirects and command substitution', async () => {
     const kernel = kernelWith();
     const { output } = await sh(kernel, `printf 'b\\na\\nc\\n' | grep -v c | head -n 1; echo hi > out.txt; echo there >> out.txt; cat out.txt; cat < out.txt | wc -l; echo "[$(echo inner)]"; nosuch 2> err.txt; cat err.txt`);

@@ -1,8 +1,10 @@
 /**
  * The executor: runs a parsed script. Lists honour `&&`/`||`/`;`/`&`; pipeline
- * stages run concurrently, joined by in-memory pipes; redirects (here-documents
- * included) swap a stage's stdin/stdout/stderr. Compound commands run through
- * compound.ts. Dispatch order per simple command: shell functions, builtins,
+ * stages run concurrently, joined by in-memory pipes, and a pipeline's status is
+ * the rightmost non-zero stage (pipefail) — not only the last stage. Redirects
+ * (here-documents included) swap a stage's stdin/stdout/stderr. Compound
+ * commands run through compound.ts. Dispatch order per simple command: shell
+ * functions, builtins,
  * extra in-process commands (npm, npx), the dev-server handoff, coreutils, and
  * finally `system.spawn` (node, scripts on PATH, `.bin` entries) — which in the
  * browser is a separate Web Worker.
@@ -180,7 +182,11 @@ export class Shell implements ShellState, ScriptRunner {
         }
       }),
     );
-    const status = statuses[statuses.length - 1]!;
+    // pipefail: any non-zero stage fails the pipeline. The status is the rightmost
+    // non-zero, so `build 2>&1 | tail` reports the build rather than tail's 0.
+    // A one-stage pipeline (a non-pipeline command) is unchanged.
+    let status = 0;
+    for (const stage of statuses) if (stage !== 0) status = stage;
     return pipeline.negate ? (status === 0 ? 1 : 0) : status;
   }
 
