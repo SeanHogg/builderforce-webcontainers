@@ -13,7 +13,7 @@
 import type { PackageManifest } from './registry.js';
 import { parseDependency, type PackageJson, type ParsedSpec } from './spec.js';
 import { satisfies, validRange } from './semver.js';
-import { napiWasmSibling, wasmBuildOf } from './wasmBuilds.js';
+import { napiWasmSiblings, wasmBuildOf } from './wasmBuilds.js';
 
 export type EdgeType = 'prod' | 'dev' | 'optional' | 'peer';
 
@@ -34,6 +34,8 @@ interface Dependency {
   type: EdgeType;
   /** Added by this installer (a napi-rs wasm binding), not declared: missing is silent. */
   implied?: boolean;
+  /** Installed only when this preferred package did not resolve (the threaded wasm binding stands in for the single-threaded one). */
+  fallbackFor?: string;
 }
 
 interface Edge extends Dependency {
@@ -99,8 +101,7 @@ function dependenciesOf(m: PackageJson | PackageManifest, isRoot: boolean, produ
   if (isRoot && !production) add((m as PackageJson).devDependencies, 'dev');
   add(m.dependencies, 'prod');
   add(m.optionalDependencies, 'optional');
-  const sibling = napiWasmSibling(m.optionalDependencies);
-  if (sibling) add({ [sibling[0]]: sibling[1] }, 'optional', true);
+  for (const sibling of napiWasmSiblings(m.optionalDependencies)) out.set(sibling.name, { name: sibling.name, range: sibling.range, type: 'optional', implied: true, fallbackFor: sibling.fallbackFor });
   if (!isRoot) {
     const meta = (m as PackageManifest).peerDependenciesMeta ?? {};
     for (const [name, range] of Object.entries(m.peerDependencies ?? {})) {
@@ -108,7 +109,8 @@ function dependenciesOf(m: PackageJson | PackageManifest, isRoot: boolean, produ
     }
   }
   const bundled = bundledNames(m as PackageManifest);
-  return [...out.values()].filter((d) => !bundled.has(d.name)).sort((a, b) => (a.name < b.name ? -1 : 1));
+  // A fallback resolves after the flavor it stands in for, so it can see whether that one landed.
+  return [...out.values()].filter((d) => !bundled.has(d.name)).sort((a, b) => Number(!!a.fallbackFor) - Number(!!b.fallbackFor) || (a.name < b.name ? -1 : 1));
 }
 
 /** A native-binary package's wasm twin when one fits the range (`wasmBuilds.ts`), else the package itself. */
@@ -183,6 +185,7 @@ export async function resolveTree(options: ResolveTreeOptions): Promise<Map<stri
     for (const dep of deps) {
       const spec = specs.get(dep.name);
       if (!spec) continue;
+      if (dep.fallbackFor && lookup(location, dep.fallbackFor)) continue;
       const from = dep.type === 'peer' ? parentLocation(location) : location;
       const existing = lookup(from, dep.name);
       const edge = { ...dep, range: spec.range, owner: location, from };

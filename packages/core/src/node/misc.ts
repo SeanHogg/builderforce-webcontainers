@@ -257,7 +257,6 @@ export function createStubModules(): Record<string, Record<string, unknown>> {
     trace_events: { createTracing: () => ({ enable() {}, disable() {} }), getEnabledCategories: () => '' },
     sqlite: { DatabaseSync: unavailable('sqlite.DatabaseSync') },
     test: { test: unavailable('node:test'), describe: unavailable('node:test'), it: unavailable('node:test') },
-    wasi: { WASI: unavailable('wasi.WASI') },
     repl: { start: unavailable('repl.start') },
     domain: { create: () => Object.assign(new EventEmitterBase(), { run: (fn: () => unknown) => fn(), add() {}, remove() {}, bind: <F>(fn: F) => fn, intercept: <F>(fn: F) => fn, enter() {}, exit() {}, dispose() {} }) },
   };

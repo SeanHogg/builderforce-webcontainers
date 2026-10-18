@@ -197,6 +197,49 @@ describe('node builtins', () => {
     expect(output).toBe('é true\ndata x\n');
   });
 
+  it('wasi: preview1 stdio, environ, files under a preopen, and proc_exit through start()', async () => {
+    // napi-rs wasm32-wasip1 bindings (oxc-parser, under Nuxt) instantiate against this import object.
+    const { output } = await runNode(
+      script(`
+        const { WASI } = require('node:wasi');
+        const fs = require('fs');
+        fs.mkdirSync('/data');
+        const wasi = new WASI({ version: 'preview1', env: { A: '1' }, preopens: { '/': '/' } });
+        const memory = new WebAssembly.Memory({ initial: 1 });
+        wasi.initialize({ exports: { memory } });
+        const w = wasi.getImportObject().wasi_snapshot_preview1;
+        const bytes = new Uint8Array(memory.buffer);
+        const view = new DataView(memory.buffer);
+        const put = (at, text) => { const b = new TextEncoder().encode(text); bytes.set(b, at); return b.length; };
+        const iov = (at, buf, len) => { view.setUint32(at, buf, true); view.setUint32(at + 4, len, true); };
+        iov(0, 100, put(100, 'to stdout\\n'));
+        console.log('fd_write', w.fd_write(1, 0, 1, 50), view.getUint32(50, true));
+        console.log('environ', w.environ_sizes_get(60, 64), view.getUint32(60, true), view.getUint32(64, true));
+        console.log('prestat', w.fd_prestat_get(3, 70), view.getUint32(74, true));
+        const pathLen = put(200, 'data/out.txt');
+        console.log('open', w.path_open(3, 0, 200, pathLen, 1 | 8, 0n, 0n, 0, 80));
+        const fd = view.getUint32(80, true);
+        iov(8, 300, put(300, 'written by wasi'));
+        console.log('write', w.fd_write(fd, 8, 1, 50), fs.readFileSync('/data/out.txt', 'utf8'));
+        console.log('seek+read', w.fd_seek(fd, 8n, 0, 90), (iov(16, 400, 7), w.fd_read(fd, 16, 1, 50)), new TextDecoder().decode(bytes.subarray(400, 407)));
+        console.log('missing', w.path_open(3, 0, 500, put(500, 'nope'), 0, 0n, 0n, 0, 80), 'socket', w.sock_accept(0, 0, 0));
+        const runner = new WASI({ version: 'preview1' });
+        console.log('exit', runner.start({ exports: { memory: new WebAssembly.Memory({ initial: 1 }), _start: () => runner.wasiImport.proc_exit(7) } }));
+      `),
+    );
+    expect(output.split('\n').filter(Boolean)).toEqual([
+      'to stdout',
+      'fd_write 0 10',
+      'environ 0 1 4',
+      'prestat 0 1',
+      'open 0',
+      'write 0 written by wasi',
+      'seek+read 0 0 by wasi',
+      'missing 44 socket 52',
+      'exit 7',
+    ]);
+  });
+
   it("fs streams can be subclassed graceful-fs's way (apply on its own object, its own open)", async () => {
     // webpack's persistent cache writes through graceful-fs, which wraps fs.WriteStream like this.
     const { output } = await runNode(

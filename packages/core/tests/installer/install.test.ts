@@ -76,6 +76,22 @@ describe('installPackages', () => {
     expect(fs.exists('/node_modules/@p/binding-linux-x64-gnu')).toBe(false);
   });
 
+  it('prefers the single-threaded -wasm32-wasip1 binding when one is published (no shared memory needed)', async () => {
+    const { fs, run } = await setup(
+      {
+        parser: { versions: { '1.2.0': { optionalDependencies: { '@p/binding-linux-x64-gnu': '1.2.0', '@p/binding-darwin-arm64': '1.2.0' } } } },
+        '@p/binding-linux-x64-gnu': { versions: { '1.2.0': { cpu: ['x64'], os: ['linux'] } } },
+        '@p/binding-darwin-arm64': { versions: { '1.2.0': { cpu: ['arm64'], os: ['darwin'] } } },
+        '@p/binding-wasm32-wasi': { versions: { '1.2.0': { cpu: ['wasm32'] } } },
+        '@p/binding-wasm32-wasip1': { versions: { '1.2.0': { cpu: ['wasm32'] } } },
+      },
+      { dependencies: { parser: '1.2.0' } },
+    );
+    await run();
+    expect(version(fs, 'node_modules/@p/binding-wasm32-wasip1')).toBe('1.2.0');
+    expect(fs.exists('/node_modules/@p/binding-wasm32-wasi')).toBe(false);
+  });
+
   it('nests deeper rather than shadow a version a sibling already resolves to', async () => {
     const { fs, run } = await setup(
       {

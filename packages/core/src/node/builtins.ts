@@ -18,6 +18,7 @@ import { createStdinRead } from './fs/stdinFd.js';
 import { constants as fsConstants } from './fs/stats.js';
 import { createCryptoModule } from './crypto.js';
 import { createQuerystringModule, createUrlModule } from './urlqs.js';
+import { createWasiModule } from './wasi/index.js';
 import { createAssertModule } from './assert.js';
 import { createZlibModule } from './zlib.js';
 import { createHttpModule, createNetModule, createFetch } from './http/index.js';
@@ -107,6 +108,7 @@ export function createBuiltins(deps: BuiltinDeps) {
     util: () => createUtilModule(env, (message) => proc.stderr.write(message + '\n')),
     'util/types': () => utilTypes,
     vm: () => createVmModule(),
+    wasi: (get) => createWasiModule({ fs: get('fs'), stdout: (bytes) => void proc.stdout.write(bytes), stderr: (bytes) => void proc.stderr.write(bytes), exit: (code) => proc.exit(code) }),
     zlib: () => createZlibModule(),
   };
   for (const [name, mod] of Object.entries(stubs)) factories[name] ??= () => mod;
