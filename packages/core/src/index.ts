@@ -1,6 +1,7 @@
 export { VirtualFileSystem } from './vfs.js';
 export type { FileContent, FileTree, FlatFiles, FsChange } from './vfs.js';
 export type { DirectoryEntry } from './vfs.js';
+export { rootedFileSystem } from './rootedFs.js';
 export { exportZip, importZip } from './archive.js';
 export type { ZipExportOptions } from './archive.js';
 export { normalizePath, dirname, basename, join, extname } from './paths.js';

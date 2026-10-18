@@ -266,8 +266,14 @@ runtime.onPreviewConsole(({ level, text }) => console.log(`[preview ${level}]`, 
 runtime.setPreviewScripts(['window.__TEST_HOOK__ = true;']); // or `previewScripts` at start
 runtime.reload();
 
-runtime.listProcesses(); // [{ pid, command: 'node', args: ['server.js'], cwd: '/', startedAt, ports: [3000] }]
+runtime.listProcesses(); // [{ pid, command: 'node', args: ['server.js'], cwd: '/home/project', startedAt, ports: [3000] }]
 ```
+
+Everything above addresses the project as `/`. Node programs see it where it
+really lives, `runtime.root` (`/home/project` unless you pass `root`): that is
+where `run` starts and what `process.cwd()` returns, with `HOME` at `/home/user`
+beside it. Keeping the project below the file-system root matters to file
+watchers — chokidar, under Vite and so SvelteKit, mishandles watching `/` itself.
 
 The zip is plain zip (any unzip tool opens it). To keep a snapshot across
 reloads, `createSnapshotStore()` holds them in IndexedDB, keeping the most

@@ -31,13 +31,14 @@ export interface NodeRuntimeOptions {
   killGraceMs?: number;
 }
 
-export function createProcessHost(args: { fs: VirtualFileSystem; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions }): ProcessHost {
+export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions }): ProcessHost {
   const { options = {} } = args;
   const createWorker =
     options.createWorker ??
     (() => new Worker(options.workerUrl ?? new URL('./worker.js', import.meta.url), { name: 'bfwc-process' }) as unknown as WorkerLike);
   return new ProcessHost({
     fs: args.fs,
+    cwd: args.cwd,
     createWorker,
     previewOrigin: args.origin,
     previewBase: args.base,

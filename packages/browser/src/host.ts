@@ -3,8 +3,10 @@ import {
   PortCookieJars,
   VirtualFileSystem,
   buildProject,
+  rootedFileSystem,
   exportZip,
   importZip,
+  normalizePath,
   type BuildResult,
   type Bundler,
   type ComponentCompilers,
@@ -63,6 +65,14 @@ export interface CommonRuntimeOptions {
   styles?: StyleCompilers;
   /** Bundler for `build()`. Default: esbuild-wasm (the same instance as the compiler). */
   bundler?: Bundler;
+  /**
+   * The project's directory, as Node programs see it: where `run` starts and
+   * `process.cwd()` points. Everything this runtime hands you (`fs`,
+   * `writeTree`, zips, the dev server, `build`) addresses the project as `/`.
+   * Default `/home/project`; `/` puts the project at the file-system root,
+   * which file watchers (chokidar under Vite, so SvelteKit) mishandle.
+   */
+  root?: string;
   /** Stable id (e.g. the project id; `[A-Za-z0-9_-]`) — keeps the preview URL stable across reloads. */
   id?: string;
   /** The "Built with Builderforce.ai" badge in the preview. Default true — please keep it. */
@@ -92,7 +102,10 @@ export interface PreviewRuntime {
   readonly id: string;
   /** Absolute URL to load in the preview iframe. */
   readonly url: string;
+  /** The project, rooted at `/` (see `root`). */
   readonly fs: VirtualFileSystem;
+  /** The project's directory as Node programs see it (`/home/project` by default). */
+  readonly root: string;
   readonly server: DevServer;
   /** Write files into the runtime (nested or flat; see `FileTree`), under `at` (default `/`). Open previews update. */
   writeTree(files: FileTree, at?: string): void;
@@ -138,6 +151,8 @@ export interface PreviewRuntime {
   dispose(): void;
 }
 
+const DEFAULT_ROOT = '/home/project';
+
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 16) ?? Math.random().toString(36).slice(2, 18);
 }
@@ -167,7 +182,10 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     : await sameOriginTransport((options as SameOriginOptions).serviceWorkerUrl, options.scope);
 
   const base = previewBase(transport.scope, id);
-  const fs = new VirtualFileSystem();
+  const root = normalizePath(options.root ?? DEFAULT_ROOT);
+  // Processes see the whole tree; everything else sees the project as `/`.
+  const files = new VirtualFileSystem();
+  const fs = rootedFileSystem(files, root);
   const components = options.components ?? createCdnComponentCompilers();
   const styles = options.styles ?? createCdnStyleCompilers();
   /** Run in every preview page: dev-server documents and pages virtual servers serve alike. */
@@ -184,7 +202,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const previewUrl = new URL(base, transport.origin).href;
   // In relay mode processes run on the preview origin (the relay starts them), never the host's.
   const node = { ...options.node, createWorker: options.node?.createWorker ?? transport.createWorker?.bind(transport) };
-  const processes = createProcessHost({ fs, base, origin: transport.origin, previewUrl, options: node });
+  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, previewUrl, options: node });
 
   const cookies = new PortCookieJars();
   let responder: ReturnType<typeof createPortResponder> | undefined;
@@ -222,6 +240,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     id,
     url: previewUrl,
     fs,
+    root,
     server,
     writeTree: (files, at) => fs.writeTree(files, at),
     exportZip: (zipOptions) => exportZip(fs, zipOptions),

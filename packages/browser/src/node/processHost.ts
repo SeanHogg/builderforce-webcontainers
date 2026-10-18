@@ -45,6 +45,8 @@ export interface WorkerLike {
 
 export interface ProcessHostOptions {
   fs: VirtualFileSystem;
+  /** Where a process starts when `run` names no `cwd`. Default `/`. */
+  cwd?: string;
   createWorker(): WorkerLike;
   /** Origin and base path previews are served under (`/__bfwc/<id>/`). */
   previewOrigin: string;
@@ -132,12 +134,13 @@ export class ProcessHost {
 
   spawnChild(command: string, args: string[] = [], options: ProcessOptions = {}): ChildHandle {
     const pid = allocatePid();
+    const cwd = options.cwd ?? this.options.cwd ?? '/';
     const worker = this.options.createWorker();
     let resolveExit!: (code: number) => void;
     const exit = new Promise<number>((resolve) => (resolveExit = resolve));
     const proc: Proc = {
       pid,
-      info: { pid, command, args: [...args], cwd: options.cwd ?? '/', startedAt: Date.now() },
+      info: { pid, command, args: [...args], cwd, startedAt: Date.now() },
       worker,
       stdout: new Set(),
       stderr: new Set(),
@@ -171,7 +174,7 @@ export class ProcessHost {
       pid,
       command,
       args,
-      cwd: options.cwd ?? '/',
+      cwd,
       env: { ...DEFAULT_ENV, ...this.options.env, ...options.env },
       terminal: options.terminal,
       ipc: options.ipc,

@@ -12,6 +12,7 @@
  */
 import type { CommandContext } from './context.js';
 import { ownServerReason } from '../detectProject.js';
+import { rootedFileSystem } from '../rootedFs.js';
 
 interface Handoff {
   tool: string;
@@ -30,7 +31,8 @@ export function matchDevServer(argv: string[]): Handoff | undefined {
 /** The handoff for this command line, when the attached preview can serve the project instead. */
 export function devServerHandoff(ctx: CommandContext, argv: string[]): Handoff | undefined {
   const handoff = matchDevServer(argv);
-  return handoff && ctx.system.previewUrl && !ownServerReason(ctx.fs) ? handoff : undefined;
+  // The project is the working directory (`npm run` starts scripts in the package's own).
+  return handoff && ctx.system.previewUrl && !ownServerReason(rootedFileSystem(ctx.fs, ctx.cwd)) ? handoff : undefined;
 }
 
 function portOf(argv: string[], fallback: number, env: Record<string, string>): number {
