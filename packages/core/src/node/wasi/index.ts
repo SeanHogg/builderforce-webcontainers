@@ -10,6 +10,7 @@
  */
 import { CLOCK, ERRNO, Memory, attempt, guest, u64 } from './abi.js';
 import { createWasiFiles, type WasiFs } from './files.js';
+import { hostNow } from '../hostClock.js';
 
 /** Every `wasi_snapshot_preview1` function: a module imports by name, so each must exist (ENOSYS when not implemented). */
 const WASI_FUNCTIONS = [
@@ -76,7 +77,7 @@ export function createWasiModule(deps: WasiDeps): Record<string, unknown> {
         environ_sizes_get: (count: number, size: number) => attempt(() => memory.sizes(env, count, size)),
         clock_res_get: (id: number, result: number) => (knownClock(id) ? attempt(() => memory.u64(result, 1000n)) : ERRNO.INVAL),
         clock_time_get: (id: number, _precision: bigint, result: number) =>
-          knownClock(id) ? attempt(() => memory.u64(result, id === CLOCK.REALTIME ? u64(Date.now()) * 1_000_000n : u64(performance.now() * 1_000_000))) : ERRNO.INVAL,
+          knownClock(id) ? attempt(() => memory.u64(result, id === CLOCK.REALTIME ? u64(Date.now()) * 1_000_000n : u64(hostNow() * 1_000_000))) : ERRNO.INVAL,
         random_get: (buffer: number, length: number) =>
           attempt(() => {
             // Filled outside the module's memory, which may be shared: getRandomValues rejects a view over it.

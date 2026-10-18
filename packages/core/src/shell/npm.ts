@@ -14,6 +14,7 @@ import { findPackageScope } from '../node/resolve.js';
 import { parseFlags, type CommandContext } from './context.js';
 import type { JobInput, Shell } from './exec.js';
 import { devServerHandoff } from './devHandoff.js';
+import { hostNow } from '../node/hostClock.js';
 
 export const NPM_VERSION = '10.8.2';
 
@@ -32,7 +33,7 @@ function readPackage(ctx: CommandContext, dir: string): PackageJson | undefined 
 }
 
 async function install(ctx: CommandContext, options: Partial<InstallOptions>, dir = projectDir(ctx)): Promise<number> {
-  const started = performance.now();
+  const started = hostNow();
   const progress = ctx.io.isTerminal;
   try {
     // User file first, then the project's: later files win, as with npm.
@@ -50,7 +51,7 @@ async function install(ctx: CommandContext, options: Partial<InstallOptions>, di
     });
     if (progress) ctx.io.stdout('\r\x1b[K');
     for (const warning of result.warnings) ctx.io.stderr(`npm warn ${warning}\n`);
-    const seconds = ((performance.now() - started) / 1000).toFixed(1);
+    const seconds = ((hostNow() - started) / 1000).toFixed(1);
     const parts = [result.added && `added ${result.added} package${result.added === 1 ? '' : 's'}`, result.removed && `removed ${result.removed} package${result.removed === 1 ? '' : 's'}`].filter(Boolean);
     ctx.io.stdout(`\n${parts.length ? parts.join(', ') : 'up to date'}, audited ${result.total + 1} packages in ${seconds}s\n`);
     return 0;

@@ -209,6 +209,21 @@ describe('the global object', () => {
     expect(output).toBe('mine 1 function\n');
   });
 
+  it("keeps process.hrtime on the host clock when a program replaces performance with one built on it (esbuild-wasm ≤ 0.21's Go loader, Vite 5)", async () => {
+    const { output, code } = await runNode({
+      'index.js': `
+        globalThis.performance = { now() { const [sec, nsec] = process.hrtime(); return sec * 1000 + nsec / 1e6; } };
+        const a = performance.now();
+        const [s, n] = process.hrtime();
+        console.log(typeof a, a >= 0, Number.isInteger(s) && Number.isInteger(n), typeof process.hrtime.bigint(), process.uptime() >= 0);
+        console.time('t'); console.timeEnd('t');
+        console.log(typeof require('perf_hooks').performance.now());
+      `,
+    });
+    expect(code).toBe(0);
+    expect(output).toMatch(/^number true true bigint true\nt: \d+\.\d{3}ms\nnumber\n$/);
+  });
+
   it("shares one global between module code and code it compiles with new Function (esbuild-wasm's launcher)", async () => {
     const { output, code } = await runNode({
       'index.js': `

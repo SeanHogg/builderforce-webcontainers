@@ -9,6 +9,7 @@ import type { EventLoop } from './loop.js';
 import { decode } from './buffer.js';
 import { callable } from './callable.js';
 import { queueCallback } from './processExit.js';
+import { hostNow, hostPerformance } from './hostClock.js';
 
 export function createOsModule(env: () => Record<string, string | undefined>): Record<string, unknown> {
   const cpus = Array.from({ length: Math.max(1, Math.min(16, globalThis.navigator?.hardwareConcurrency ?? 4)) }, () => ({
@@ -34,7 +35,7 @@ export function createOsModule(env: () => Record<string, string | undefined>): R
     totalmem: () => 4 * 1024 ** 3,
     freemem: () => 2 * 1024 ** 3,
     loadavg: () => [0, 0, 0],
-    uptime: () => Math.floor(performance.now() / 1000),
+    uptime: () => Math.floor(hostNow() / 1000),
     networkInterfaces: () => ({ lo: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' }] }),
     endianness: () => 'LE',
     getPriority: () => 0,
@@ -245,7 +246,7 @@ const unavailable = (name: string) => () => {
 
 export function createStubModules(): Record<string, Record<string, unknown>> {
   return {
-    perf_hooks: { performance: globalThis.performance, PerformanceObserver: class { observe() {} disconnect() {} }, monitorEventLoopDelay: () => ({ enable() {}, disable() {}, percentile: () => 0, mean: 0, max: 0, min: 0 }), constants: {} },
+    perf_hooks: { performance: hostPerformance, PerformanceObserver: class { observe() {} disconnect() {} }, monitorEventLoopDelay: () => ({ enable() {}, disable() {}, percentile: () => 0, mean: 0, max: 0, min: 0 }), constants: {} },
     dns: { lookup: (host: string, options: unknown, cb?: (e: Error | null, address: string, family: number) => void) => queueCallback(() => ((typeof options === 'function' ? options : cb) as NonNullable<typeof cb>)(null, host === 'localhost' ? '127.0.0.1' : host, 4)), resolve: unavailable('dns.resolve'), promises: { lookup: async (host: string) => ({ address: host === 'localhost' ? '127.0.0.1' : host, family: 4 }) }, setDefaultResultOrder: () => undefined },
     v8: { getHeapStatistics: () => ({ total_heap_size: 30e6, used_heap_size: 20e6, heap_size_limit: 2e9 }), getHeapSpaceStatistics: () => [], serialize: (v: unknown) => new TextEncoder().encode(JSON.stringify(v)), deserialize: (b: Uint8Array) => JSON.parse(new TextDecoder().decode(b)), setFlagsFromString: () => undefined, cachedDataVersionTag: () => 0 },
     cluster: { isMaster: true, isPrimary: true, isWorker: false, workers: {}, fork: unavailable('cluster.fork'), on: () => undefined, settings: {} },

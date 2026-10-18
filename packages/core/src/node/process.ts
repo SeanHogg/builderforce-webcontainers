@@ -15,6 +15,7 @@ import { join, normalizePath } from '../paths.js';
 import { fsError } from './fs/stats.js';
 import { format } from './inspect.js';
 import { ProcessExit, queueCallback } from './processExit.js';
+import { hostNow } from './hostClock.js';
 
 export const NODE_VERSION = '20.18.0';
 
@@ -168,7 +169,7 @@ export function createProcess(options: ProcessOptions): NodeProcess {
   let cwd = normalizePath(options.cwd);
   let exited = false;
   let gone = false;
-  const started = performance.now();
+  const started = hostNow();
   const proc = new EventEmitterBase() as NodeProcess;
   const pid = nextPid++;
 
@@ -192,7 +193,7 @@ export function createProcess(options: ProcessOptions): NodeProcess {
   };
 
   const hrtime = (previous?: [number, number]): [number, number] => {
-    const now = performance.now();
+    const now = hostNow();
     let seconds = Math.floor(now / 1000);
     let nanos = Math.floor((now % 1000) * 1e6);
     if (previous) {
@@ -205,7 +206,7 @@ export function createProcess(options: ProcessOptions): NodeProcess {
     }
     return [seconds, nanos];
   };
-  hrtime.bigint = () => BigInt(Math.floor(performance.now() * 1e6));
+  hrtime.bigint = () => BigInt(Math.floor(hostNow() * 1e6));
 
   const memoryUsage = () => ({ rss: 50e6, heapTotal: 30e6, heapUsed: 20e6, external: 1e6, arrayBuffers: 1e5 });
   memoryUsage.rss = () => 50e6;
@@ -253,9 +254,9 @@ export function createProcess(options: ProcessOptions): NodeProcess {
     },
     hrtime,
     memoryUsage,
-    cpuUsage: () => ({ user: Math.floor((performance.now() - started) * 1000), system: 0 }),
+    cpuUsage: () => ({ user: Math.floor((hostNow() - started) * 1000), system: 0 }),
     resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: 50000 }),
-    uptime: () => (performance.now() - started) / 1000,
+    uptime: () => (hostNow() - started) / 1000,
     umask: () => 0o22,
     getuid: () => 1000,
     geteuid: () => 1000,
@@ -317,10 +318,10 @@ export function createConsole(proc: NodeProcess): Console {
       indent += '  ';
     },
     groupEnd: () => void (indent = indent.slice(2)),
-    time: (label = 'default') => void timers.set(label, performance.now()),
-    timeLog: (label = 'default', ...args: unknown[]) => log(`${label}: ${(performance.now() - (timers.get(label) ?? 0)).toFixed(3)}ms`, ...args),
+    time: (label = 'default') => void timers.set(label, hostNow()),
+    timeLog: (label = 'default', ...args: unknown[]) => log(`${label}: ${(hostNow() - (timers.get(label) ?? 0)).toFixed(3)}ms`, ...args),
     timeEnd: (label = 'default') => {
-      log(`${label}: ${(performance.now() - (timers.get(label) ?? 0)).toFixed(3)}ms`);
+      log(`${label}: ${(hostNow() - (timers.get(label) ?? 0)).toFixed(3)}ms`);
       timers.delete(label);
     },
     clear: () => undefined,
