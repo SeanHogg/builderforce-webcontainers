@@ -110,8 +110,10 @@ Known limits of what shipped, roughly in the order they are worth closing:
    which this runtime refuses to require. Nuxt 4 (4.6.2) installs but stalls
    silently after "Starting Nuxt..." (with `--no-fork`, no port, no error). Leads:
    the runtime reports Node 20.18 while Nuxt 4 wants ^22.21, and `oxc-parser`
-   (a peer of `oxc-walker`) was not installed at the top level. Needs a trace of
-   where start-up waits.
+   (a peer of `oxc-walker`) was not installed at the top level. In the
+   in-process kernel (`tests/e2e/frameworks.diag.test.ts`) `nuxt dev` does not
+   wait, it spins: the thread is CPU-bound and never yields (no output, timers
+   never fire), so the next step is a CPU profile of that loop.
    Framework start-up is also slow (about 20–35 s to Next's first page) because
    each process receives the whole file system; see item 18.
 17. **Shell gaps.** No `fg`/`bg` (a background job cannot be brought back to
