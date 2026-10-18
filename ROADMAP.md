@@ -100,16 +100,10 @@ Known limits of what shipped, roughly in the order they are worth closing:
 14. **Install scripts and native addons.** `postinstall` is skipped; `.node`
    addons cannot load. Packages with a WASM fallback (esbuild-wasm, @swc/wasm)
    work; ones that only ship native binaries (sharp, better-sqlite3) do not.
-15. **Framework dev servers: Nuxt, and SvelteKit's restarts.** Next.js and SvelteKit
-   run (2026.10.9). SvelteKit on real Vite restarts once or twice shortly after
-   start ("vite.config.js changed"), and a request landing mid-restart gets Vite's
-   SSR "not yet fully initialized" 500. Cause: projects live at the file-system
-   root `/`, and chokidar records `basename('/')` — `''` — as a child of `/`;
-   every rescan finds `''` missing and removes it, which unwatches `/`'s children
-   and reports `vite.config.js` / `svelte.config.js` as unlinked then added (real
-   chokidar does the same on Linux with root `/`). Fix: run projects from a
-   working directory below the root (e.g. `/home/project`) — `writeTree`, the dev
-   server, preview, build and the Builderforce.ai frontend all assume `/`.
+15. **Framework dev servers: Nuxt.** Next.js and SvelteKit run (2026.10.9).
+   SvelteKit's phantom start-up restarts are fixed in 2026.10.11: projects live
+   at `/home/project` (`root`), not `/`, where chokidar recorded `basename('/')`
+   as a child and unwatched the project on every rescan.
    Nuxt 3 does not run: it pins `oxc-parser ^0.143`, whose only WebAssembly build
    is the threaded `wasm32-wasi` one (single-threaded `-wasm32-wasip1` bindings
    start at 0.152), and that needs SharedArrayBuffer, so cross-origin isolation,
