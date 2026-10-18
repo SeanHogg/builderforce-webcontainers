@@ -5,18 +5,31 @@
  * module's memory.
  */
 import { normalizePath } from '../../paths.js';
-import { ALL_RIGHTS, ERRNO, FDFLAGS, FILETYPE, Memory, OFLAGS, WHENCE, errnoOf } from './abi.js';
+import { ALL_RIGHTS, ERRNO, FDFLAGS, FILETYPE, Memory, OFLAGS, WHENCE, attempt, errnoOf, guest, u64 } from './abi.js';
 
 /** The slice of Node's `fs` this needs; the process's own module satisfies it. */
 export interface WasiFs {
-  statSync(path: string, options?: { throwIfNoEntry?: boolean }): { isDirectory(): boolean; size: number; mtimeMs: number; ino?: number } | undefined;
-  readFileSync(path: string): Uint8Array;
-  writeFileSync(path: string, data: Uint8Array | string): void;
+  statSync(path: string, options?: { throwIfNoEntry?: boolean }): WasiStat | undefined;
+  fstatSync(fd: number): WasiStat;
+  /** `flags` as Node's string form: `'r+'` reads and writes, `'w+'` creates or truncates (`'wx+'`: and fails if it exists). */
+  openSync(path: string, flags: string): number;
+  /** Always at an explicit `position`: the cursor is the descriptor's own. */
+  readSync(fd: number, buffer: Uint8Array, offset: number, length: number, position: number): number;
+  writeSync(fd: number, buffer: Uint8Array, offset: number, length: number, position: number): number;
+  ftruncateSync(fd: number, length: number): void;
+  closeSync(fd: number): void;
   readdirSync(path: string, options: { withFileTypes: true }): Array<{ name: string; isDirectory(): boolean }>;
   mkdirSync(path: string): void;
   rmdirSync(path: string): void;
   unlinkSync(path: string): void;
   renameSync(from: string, to: string): void;
+}
+
+interface WasiStat {
+  isDirectory(): boolean;
+  size: number;
+  mtimeMs: number;
+  ino?: number;
 }
 
 export interface WasiStdio {
@@ -28,8 +41,12 @@ interface Descriptor {
   kind: 'stdio' | 'dir' | 'file';
   /** Absolute path in the file system (directories and files). */
   path: string;
+  /** The preopened directory this descends from: paths never leave it. */
+  root: string;
   /** The guest-visible name of a preopened directory. */
   preopen?: string;
+  /** The process fs's descriptor behind a file. */
+  host?: number;
   position: number;
   append: boolean;
 }
@@ -38,73 +55,79 @@ const FILESTAT_SIZE = 64;
 
 export function createWasiFiles(fs: WasiFs, stdio: WasiStdio, memory: Memory, preopens: Record<string, string>) {
   const fds = new Map<number, Descriptor>([
-    [0, { kind: 'stdio', path: '', position: 0, append: false }],
-    [1, { kind: 'stdio', path: '', position: 0, append: false }],
-    [2, { kind: 'stdio', path: '', position: 0, append: false }],
+    [0, { kind: 'stdio', path: '', root: '', position: 0, append: false }],
+    [1, { kind: 'stdio', path: '', root: '', position: 0, append: false }],
+    [2, { kind: 'stdio', path: '', root: '', position: 0, append: false }],
   ]);
   let nextFd = 3;
-  for (const [guest, host] of Object.entries(preopens)) fds.set(nextFd++, { kind: 'dir', path: normalizePath(host), preopen: guest, position: 0, append: false });
+  for (const [guest, host] of Object.entries(preopens)) {
+    const path = normalizePath(host);
+    fds.set(nextFd++, { kind: 'dir', path, root: path, preopen: guest, position: 0, append: false });
+  }
 
   const resolveAt = (dirFd: number, at: number, length: number): string | number => {
     const dir = fds.get(dirFd);
     if (!dir) return ERRNO.BADF;
     if (dir.kind !== 'dir') return ERRNO.NOTDIR;
-    const relative = memory.text(at, length);
-    return normalizePath(relative.startsWith('/') ? relative : `${dir.path}/${relative}`);
-  };
-
-  /** Run an fs operation, answering its failure as an errno. */
-  const attempt = (fn: () => number | void): number => {
+    let relative: string;
     try {
-      return fn() ?? ERRNO.SUCCESS;
+      relative = memory.text(at, length);
     } catch (error) {
       return errnoOf(error);
     }
+    if (relative.startsWith('/')) return ERRNO.NOTCAPABLE;
+    const path = normalizePath(`${dir.path}/${relative}`);
+    return path === dir.root || path.startsWith(dir.root === '/' ? '/' : `${dir.root}/`) ? path : ERRNO.NOTCAPABLE;
   };
 
-  const writeFilestat = (at: number, stat: { isDirectory(): boolean; size: number; mtimeMs: number; ino?: number }, kind?: number) => {
-    const view = memory.view;
-    memory.bytes(at, FILESTAT_SIZE).fill(0);
-    view.setBigUint64(at + 8, BigInt(stat.ino ?? 0), true);
-    view.setUint8(at + 16, kind ?? (stat.isDirectory() ? FILETYPE.DIRECTORY : FILETYPE.REGULAR_FILE));
-    view.setBigUint64(at + 24, 1n, true);
-    view.setBigUint64(at + 32, BigInt(stat.size), true);
-    const time = BigInt(Math.round(stat.mtimeMs)) * 1_000_000n;
-    for (const offset of [40, 48, 56]) view.setBigUint64(at + offset, time, true);
-  };
+  const writeFilestat = (at: number, stat: WasiStat, kind?: number) =>
+    guest(() => {
+      const view = memory.view;
+      memory.bytes(at, FILESTAT_SIZE).fill(0);
+      view.setBigUint64(at + 8, u64(stat.ino ?? 0), true);
+      view.setUint8(at + 16, kind ?? (stat.isDirectory() ? FILETYPE.DIRECTORY : FILETYPE.REGULAR_FILE));
+      view.setBigUint64(at + 24, 1n, true);
+      view.setBigUint64(at + 32, u64(stat.size), true);
+      const time = u64(stat.mtimeMs) * 1_000_000n;
+      for (const offset of [40, 48, 56]) view.setBigUint64(at + offset, time, true);
+    });
 
+  /** One fs read into a scratch buffer, scattered across the iovecs. */
   const readInto = (file: Descriptor, buffers: Uint8Array[], position: number): number => {
-    const contents = fs.readFileSync(file.path);
-    let at = position;
+    const scratch = new Uint8Array(buffers.reduce((sum, b) => sum + b.length, 0));
+    const n = fs.readSync(file.host!, scratch, 0, scratch.length, position);
+    let at = 0;
     for (const buffer of buffers) {
-      const chunk = contents.subarray(at, at + buffer.length);
-      buffer.set(chunk);
-      at += chunk.length;
-      if (chunk.length < buffer.length) break;
+      buffer.set(scratch.subarray(at, Math.min(n, at + buffer.length)));
+      at += buffer.length;
+      if (at >= n) break;
     }
-    return at - position;
+    return n;
   };
 
   const writeFrom = (file: Descriptor, buffers: Uint8Array[], position: number): number => {
-    const current = fs.statSync(file.path, { throwIfNoEntry: false }) ? fs.readFileSync(file.path) : new Uint8Array();
-    const total = buffers.reduce((sum, b) => sum + b.length, 0);
-    const next = new Uint8Array(Math.max(current.length, position + total));
-    next.set(current);
-    let at = position;
-    for (const buffer of buffers) {
-      next.set(buffer, at);
-      at += buffer.length;
-    }
-    fs.writeFileSync(file.path, next);
-    return total;
+    const bytes = concat(buffers);
+    return fs.writeSync(file.host!, bytes, 0, bytes.length, position);
   };
 
   return {
+    /** Close every host descriptor and forget them all (the module has finished). */
+    closeAll(): void {
+      for (const file of fds.values()) {
+        try {
+          if (file.host !== undefined) fs.closeSync(file.host);
+        } catch {
+          // already gone
+        }
+      }
+      fds.clear();
+    },
+
     fd_write(fd: number, iovs: number, count: number, written: number): number {
       const file = fds.get(fd);
       if (!file) return ERRNO.BADF;
-      const buffers = memory.iovecs(iovs, count);
       return attempt(() => {
+        const buffers = memory.iovecs(iovs, count);
         let n: number;
         if (file.kind === 'stdio') {
           const bytes = concat(buffers);
@@ -113,18 +136,18 @@ export function createWasiFiles(fs: WasiFs, stdio: WasiStdio, memory: Memory, pr
           else return ERRNO.BADF;
           n = bytes.length;
         } else if (file.kind === 'file') {
-          const at = file.append ? fs.statSync(file.path)?.size ?? 0 : file.position;
+          const at = file.append ? fs.fstatSync(file.host!).size : file.position;
           n = writeFrom(file, buffers, at);
           file.position = at + n;
         } else return ERRNO.ISDIR;
-        memory.view.setUint32(written, n, true);
+        memory.u32(written, n);
       });
     },
 
     fd_pwrite(fd: number, iovs: number, count: number, offset: bigint, written: number): number {
       const file = fds.get(fd);
       if (!file || file.kind !== 'file') return file ? ERRNO.INVAL : ERRNO.BADF;
-      return attempt(() => void memory.view.setUint32(written, writeFrom(file, memory.iovecs(iovs, count), Number(offset)), true));
+      return attempt(() => memory.u32(written, writeFrom(file, memory.iovecs(iovs, count), Number(offset))));
     },
 
     fd_read(fd: number, iovs: number, count: number, read: number): number {
@@ -135,48 +158,57 @@ export function createWasiFiles(fs: WasiFs, stdio: WasiStdio, memory: Memory, pr
         const n = file.kind === 'file' ? readInto(file, memory.iovecs(iovs, count), file.position) : file.kind === 'stdio' ? 0 : -1;
         if (n < 0) return ERRNO.ISDIR;
         file.position += n;
-        memory.view.setUint32(read, n, true);
+        memory.u32(read, n);
       });
     },
 
     fd_pread(fd: number, iovs: number, count: number, offset: bigint, read: number): number {
       const file = fds.get(fd);
       if (!file || file.kind !== 'file') return file ? ERRNO.INVAL : ERRNO.BADF;
-      return attempt(() => void memory.view.setUint32(read, readInto(file, memory.iovecs(iovs, count), Number(offset)), true));
+      return attempt(() => memory.u32(read, readInto(file, memory.iovecs(iovs, count), Number(offset))));
     },
 
     fd_seek(fd: number, offset: bigint, whence: number, result: number): number {
       const file = fds.get(fd);
       if (!file) return ERRNO.BADF;
+      if (file.kind === 'stdio') return ERRNO.SPIPE;
       if (file.kind !== 'file') return ERRNO.INVAL;
       return attempt(() => {
-        const base = whence === WHENCE.SET ? 0 : whence === WHENCE.CUR ? file.position : whence === WHENCE.END ? fs.statSync(file.path)?.size ?? 0 : -1;
+        const base = whence === WHENCE.SET ? 0 : whence === WHENCE.CUR ? file.position : whence === WHENCE.END ? fs.fstatSync(file.host!).size : -1;
         if (base < 0 || base + Number(offset) < 0) return ERRNO.INVAL;
         file.position = base + Number(offset);
-        memory.view.setBigUint64(result, BigInt(file.position), true);
+        memory.u64(result, BigInt(file.position));
       });
     },
 
     fd_tell(fd: number, result: number): number {
       const file = fds.get(fd);
       if (!file) return ERRNO.BADF;
-      memory.view.setBigUint64(result, BigInt(file.position), true);
-      return ERRNO.SUCCESS;
+      if (file.kind === 'stdio') return ERRNO.SPIPE;
+      return attempt(() => memory.u64(result, BigInt(file.position)));
     },
 
     fd_close(fd: number): number {
-      return fds.delete(fd) ? ERRNO.SUCCESS : ERRNO.BADF;
+      const file = fds.get(fd);
+      if (!file) return ERRNO.BADF;
+      fds.delete(fd);
+      return attempt(() => {
+        if (file.host !== undefined) fs.closeSync(file.host);
+      });
     },
 
     fd_fdstat_get(fd: number, at: number): number {
       const file = fds.get(fd);
       if (!file) return ERRNO.BADF;
-      const view = memory.view;
-      view.setUint8(at, file.kind === 'stdio' ? FILETYPE.CHARACTER_DEVICE : file.kind === 'dir' ? FILETYPE.DIRECTORY : FILETYPE.REGULAR_FILE);
-      view.setUint16(at + 2, file.append ? FDFLAGS.APPEND : 0, true);
-      view.setBigUint64(at + 8, ALL_RIGHTS, true);
-      view.setBigUint64(at + 16, ALL_RIGHTS, true);
-      return ERRNO.SUCCESS;
+      return attempt(() =>
+        guest(() => {
+          const view = memory.view;
+          view.setUint8(at, file.kind === 'stdio' ? FILETYPE.CHARACTER_DEVICE : file.kind === 'dir' ? FILETYPE.DIRECTORY : FILETYPE.REGULAR_FILE);
+          view.setUint16(at + 2, file.append ? FDFLAGS.APPEND : 0, true);
+          view.setBigUint64(at + 8, ALL_RIGHTS, true);
+          view.setBigUint64(at + 16, ALL_RIGHTS, true);
+        }),
+      );
     },
 
     fd_fdstat_set_flags(fd: number, flags: number): number {
@@ -190,36 +222,32 @@ export function createWasiFiles(fs: WasiFs, stdio: WasiStdio, memory: Memory, pr
       const file = fds.get(fd);
       if (!file) return ERRNO.BADF;
       if (file.kind === 'stdio') {
-        writeFilestat(at, { isDirectory: () => false, size: 0, mtimeMs: 0 }, FILETYPE.CHARACTER_DEVICE);
-        return ERRNO.SUCCESS;
+        return attempt(() => writeFilestat(at, { isDirectory: () => false, size: 0, mtimeMs: 0 }, FILETYPE.CHARACTER_DEVICE));
       }
-      return attempt(() => writeFilestat(at, fs.statSync(file.path)!));
+      return attempt(() => writeFilestat(at, file.host !== undefined ? fs.fstatSync(file.host) : fs.statSync(file.path)!));
     },
 
     fd_filestat_set_size(fd: number, size: bigint): number {
       const file = fds.get(fd);
       if (!file || file.kind !== 'file') return file ? ERRNO.INVAL : ERRNO.BADF;
-      return attempt(() => {
-        const current = fs.readFileSync(file.path);
-        const next = new Uint8Array(Number(size));
-        next.set(current.subarray(0, next.length));
-        fs.writeFileSync(file.path, next);
-      });
+      return attempt(() => fs.ftruncateSync(file.host!, Number(size)));
     },
 
     fd_prestat_get(fd: number, at: number): number {
       const file = fds.get(fd);
       if (!file?.preopen) return ERRNO.BADF;
-      memory.view.setUint8(at, 0); // a directory
-      memory.view.setUint32(at + 4, new TextEncoder().encode(file.preopen).length, true);
-      return ERRNO.SUCCESS;
+      return attempt(() =>
+        guest(() => {
+          memory.view.setUint8(at, 0); // a directory
+          memory.view.setUint32(at + 4, new TextEncoder().encode(file.preopen!).length, true);
+        }),
+      );
     },
 
     fd_prestat_dir_name(fd: number, at: number, length: number): number {
       const file = fds.get(fd);
       if (!file?.preopen) return ERRNO.BADF;
-      memory.bytes(at, length).set(new TextEncoder().encode(file.preopen).subarray(0, length));
-      return ERRNO.SUCCESS;
+      return attempt(() => void memory.bytes(at, length).set(new TextEncoder().encode(file.preopen).subarray(0, length)));
     },
 
     fd_readdir(fd: number, buffer: number, length: number, cookie: bigint, used: number): number {
@@ -228,7 +256,6 @@ export function createWasiFiles(fs: WasiFs, stdio: WasiStdio, memory: Memory, pr
       if (dir.kind !== 'dir') return ERRNO.NOTDIR;
       return attempt(() => {
         const entries = fs.readdirSync(dir.path, { withFileTypes: true });
-        const view = memory.view;
         let at = 0;
         for (let i = Number(cookie); i < entries.length && at < length; i++) {
           const entry = entries[i]!;
@@ -244,7 +271,7 @@ export function createWasiFiles(fs: WasiFs, stdio: WasiStdio, memory: Memory, pr
           memory.bytes(buffer + at, fits).set(record.subarray(0, fits));
           at += fits;
         }
-        view.setUint32(used, at, true);
+        memory.u32(used, at);
       });
     },
 
@@ -253,15 +280,19 @@ export function createWasiFiles(fs: WasiFs, stdio: WasiStdio, memory: Memory, pr
       if (typeof path === 'number') return path;
       return attempt(() => {
         const stat = fs.statSync(path, { throwIfNoEntry: false });
-        if (stat && oflags & OFLAGS.EXCL && oflags & OFLAGS.CREAT) return ERRNO.EXIST;
+        const exclusive = !!(oflags & OFLAGS.EXCL && oflags & OFLAGS.CREAT);
+        if (stat && exclusive) return ERRNO.EXIST;
         if (!stat && !(oflags & OFLAGS.CREAT)) return ERRNO.NOENT;
         if (stat?.isDirectory()) {
           if (oflags & OFLAGS.TRUNC) return ERRNO.ISDIR;
         } else if (oflags & OFLAGS.DIRECTORY) return stat ? ERRNO.NOTDIR : ERRNO.NOENT;
-        if (!stat || oflags & OFLAGS.TRUNC) fs.writeFileSync(path, new Uint8Array());
-        const fd = nextFd++;
-        fds.set(fd, { kind: stat?.isDirectory() ? 'dir' : 'file', path, position: 0, append: (fdflags & FDFLAGS.APPEND) !== 0 });
-        memory.view.setUint32(result, fd, true);
+        const dir = fds.get(dirFd)!;
+        const isDir = !!stat?.isDirectory();
+        const fd = nextFd;
+        memory.u32(result, fd); // before anything opens: a bad pointer must not leak a descriptor
+        const host = isDir ? undefined : fs.openSync(path, exclusive ? 'wx+' : !stat || oflags & OFLAGS.TRUNC ? 'w+' : 'r+');
+        nextFd++;
+        fds.set(fd, { kind: isDir ? 'dir' : 'file', path, root: dir.root, host, position: 0, append: (fdflags & FDFLAGS.APPEND) !== 0 });
       });
     },
 

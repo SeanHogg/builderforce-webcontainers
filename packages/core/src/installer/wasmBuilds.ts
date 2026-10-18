@@ -34,7 +34,7 @@ export interface NapiWasmSibling {
  * not list (oxc-parser, rolldown, @tailwindcss/oxide). This names them, at the
  * bindings' range, as optional dependencies: the single-threaded `-wasm32-wasip1`
  * first, the threaded `-wasm32-wasi` only if that one is not published (a registry
- * miss is skipped like any optional one). None when the package lists one itself.
+ * miss is skipped like any optional one). Nothing when the package lists the single-threaded one itself; one that lists only the threaded one gets the single-threaded one added, and its own entry becomes the fallback.
  */
 export function napiWasmSiblings(optional: Readonly<Record<string, string>> | undefined): NapiWasmSibling[] {
   const bindings = Object.entries(optional ?? {}).filter(([name]) => NAPI_PLATFORM.test(name));
@@ -42,9 +42,10 @@ export function napiWasmSiblings(optional: Readonly<Record<string, string>> | un
   const [first, range] = bindings[0]!;
   const base = first.replace(NAPI_PLATFORM, '');
   if (bindings.some(([name]) => name.replace(NAPI_PLATFORM, '') !== base)) return [];
-  const names = NAPI_WASM_FLAVORS.map((flavor) => base + flavor);
-  if (names.some((name) => optional![name])) return [];
-  return names.map((name, i) => (i === 0 ? { name, range } : { name, range, fallbackFor: names[0] }));
+  const [preferred, fallback] = NAPI_WASM_FLAVORS.map((flavor) => base + flavor) as [string, string];
+  if (optional![preferred]) return [];
+  // Listing only the threaded flavor still gets the single-threaded one added; the listed entry becomes its fallback.
+  return [{ name: preferred, range }, { name: fallback, range, fallbackFor: preferred }];
 }
 
 /**

@@ -101,7 +101,10 @@ function dependenciesOf(m: PackageJson | PackageManifest, isRoot: boolean, produ
   if (isRoot && !production) add((m as PackageJson).devDependencies, 'dev');
   add(m.dependencies, 'prod');
   add(m.optionalDependencies, 'optional');
-  for (const sibling of napiWasmSiblings(m.optionalDependencies)) out.set(sibling.name, { name: sibling.name, range: sibling.range, type: 'optional', implied: true, fallbackFor: sibling.fallbackFor });
+  for (const sibling of napiWasmSiblings(m.optionalDependencies)) {
+    const listed = out.get(sibling.name);
+    out.set(sibling.name, listed ? { ...listed, fallbackFor: sibling.fallbackFor } : { name: sibling.name, range: sibling.range, type: 'optional', implied: true, fallbackFor: sibling.fallbackFor });
+  }
   if (!isRoot) {
     const meta = (m as PackageManifest).peerDependenciesMeta ?? {};
     for (const [name, range] of Object.entries(m.peerDependencies ?? {})) {
@@ -185,7 +188,10 @@ export async function resolveTree(options: ResolveTreeOptions): Promise<Map<stri
     for (const dep of deps) {
       const spec = specs.get(dep.name);
       if (!spec) continue;
-      if (dep.fallbackFor && lookup(location, dep.fallbackFor)) continue;
+      if (dep.fallbackFor) {
+        const preferred = lookup(location, dep.fallbackFor);
+        if (preferred && matches(nodes.get(preferred)!.manifest.version, specs.get(dep.fallbackFor)?.range ?? spec.range)) continue;
+      }
       const from = dep.type === 'peer' ? parentLocation(location) : location;
       const existing = lookup(from, dep.name);
       const edge = { ...dep, range: spec.range, owner: location, from };

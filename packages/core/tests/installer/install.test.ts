@@ -92,6 +92,50 @@ describe('installPackages', () => {
     expect(fs.exists('/node_modules/@p/binding-wasm32-wasi')).toBe(false);
   });
 
+  const bindingPackage = (optionalDependencies: Record<string, string> = {}) => ({
+    versions: { '1.2.0': { optionalDependencies: { '@p/binding-linux-x64-gnu': '1.2.0', '@p/binding-darwin-arm64': '1.2.0', ...optionalDependencies } } },
+  });
+  const nativeBindings = {
+    '@p/binding-linux-x64-gnu': { versions: { '1.2.0': { cpu: ['x64'], os: ['linux'] } } },
+    '@p/binding-darwin-arm64': { versions: { '1.2.0': { cpu: ['arm64'], os: ['darwin'] } } },
+  };
+  const wasm = { versions: { '1.2.0': { cpu: ['wasm32'] } } };
+
+  it('falls back to the threaded -wasm32-wasi binding when -wasm32-wasip1 is not published at that version', async () => {
+    const { fs, run } = await setup(
+      { parser: bindingPackage(), ...nativeBindings, '@p/binding-wasm32-wasi': wasm, '@p/binding-wasm32-wasip1': { versions: { '1.1.0': { cpu: ['wasm32'] } } } },
+      { dependencies: { parser: '1.2.0' } },
+    );
+    await run();
+    expect(version(fs, 'node_modules/@p/binding-wasm32-wasi')).toBe('1.2.0');
+    expect(fs.exists('/node_modules/@p/binding-wasm32-wasip1')).toBe(false);
+  });
+
+  it('adds -wasm32-wasip1 beside a package that lists only -wasm32-wasi, and installs just that one', async () => {
+    const { fs, run } = await setup(
+      { parser: bindingPackage({ '@p/binding-wasm32-wasi': '1.2.0' }), ...nativeBindings, '@p/binding-wasm32-wasi': wasm, '@p/binding-wasm32-wasip1': wasm },
+      { dependencies: { parser: '1.2.0' } },
+    );
+    await run();
+    expect(version(fs, 'node_modules/@p/binding-wasm32-wasip1')).toBe('1.2.0');
+    expect(fs.exists('/node_modules/@p/binding-wasm32-wasi')).toBe(false);
+  });
+
+  it('installs the -wasm32-wasi fallback when the hoisted -wasm32-wasip1 is at another version', async () => {
+    const { fs, run } = await setup(
+      {
+        parser: bindingPackage(),
+        ...nativeBindings,
+        '@p/binding-wasm32-wasi': wasm,
+        '@p/binding-wasm32-wasip1': { versions: { '2.0.0': { cpu: ['wasm32'] } } },
+      },
+      { dependencies: { parser: '1.2.0', '@p/binding-wasm32-wasip1': '2.0.0' } },
+    );
+    await run();
+    expect(version(fs, 'node_modules/@p/binding-wasm32-wasip1')).toBe('2.0.0');
+    expect(version(fs, 'node_modules/@p/binding-wasm32-wasi')).toBe('1.2.0');
+  });
+
   it('nests deeper rather than shadow a version a sibling already resolves to', async () => {
     const { fs, run } = await setup(
       {

@@ -34,10 +34,10 @@ servers run as the real thing: `next dev` serves a Next.js app from its own
 process, with Next's WebAssembly compiler (`@next/swc-wasm-nodejs`) standing in
 for the native one, and `vite dev` runs SvelteKit on real Vite. Installs swap native-only build tools for their WebAssembly
 twins (`esbuild` → `esbuild-wasm`, `rollup` → `@rollup/wasm-node`, napi-rs
-`-wasm32-wasi` builds). Nuxt is the exception: its parser's WebAssembly build
-needs threads over shared memory, i.e. cross-origin isolation, which this runtime
-does not require (see the [ROADMAP](ROADMAP.md)). The roadmap is how it closes the
-rest of the gap.
+`-wasm32-wasip1` builds first, over `node:wasi`, then `-wasm32-wasi`). Nuxt does
+not run yet: Nuxt 3's parser has only a threaded WebAssembly build, which needs
+cross-origin isolation, and Nuxt 4 stalls during start-up (see the
+[ROADMAP](ROADMAP.md)). The roadmap is how it closes the rest of the gap.
 
 ## Quick start
 

@@ -223,8 +223,24 @@ describe('node builtins', () => {
         console.log('write', w.fd_write(fd, 8, 1, 50), fs.readFileSync('/data/out.txt', 'utf8'));
         console.log('seek+read', w.fd_seek(fd, 8n, 0, 90), (iov(16, 400, 7), w.fd_read(fd, 16, 1, 50)), new TextDecoder().decode(bytes.subarray(400, 407)));
         console.log('missing', w.path_open(3, 0, 500, put(500, 'nope'), 0, 0n, 0n, 0, 80), 'socket', w.sock_accept(0, 0, 0));
+        console.log('keys', Object.keys(w).includes('path_open'), Object.keys(w).length, 'absolute', w.path_open(3, 0, 600, put(600, '/etc/passwd'), 0, 0n, 0n, 0, 80), 'escape', (() => { const jail = new WASI({ preopens: { '/d': '/data' } }); jail.initialize({ exports: { memory } }); return jail.wasiImport.path_open(3, 0, 620, put(620, '../x'), 0, 0n, 0n, 0, 80); })());
+        console.log('random', w.random_get(700, 16), bytes.subarray(700, 716).some((b) => b !== 0), 'clock', w.clock_time_get(9, 0n, 720), w.fd_seek(1, 0n, 0, 90), 'badiov', w.fd_write(1, 65530, 1, 50), 'badclock', w.clock_time_get(0, 0n, 65535));
+        try { new WASI({ version: 'unstable' }); console.log('unstable ok'); } catch (e) { console.log('unstable', e instanceof TypeError); }
         const runner = new WASI({ version: 'preview1' });
         console.log('exit', runner.start({ exports: { memory: new WebAssembly.Memory({ initial: 1 }), _start: () => runner.wasiImport.proc_exit(7) } }));
+        // a module importing a socket call and proc_exit instantiates against getImportObject()
+        const wasm = new Uint8Array([
+          0, 97, 115, 109, 1, 0, 0, 0,
+          1, 15, 3, 96, 3, 127, 127, 127, 1, 127, 96, 1, 127, 0, 96, 0, 0,
+          2, 73, 2, 22, ...new TextEncoder().encode('wasi_snapshot_preview1'), 11, ...new TextEncoder().encode('sock_accept'), 0, 0,
+          22, ...new TextEncoder().encode('wasi_snapshot_preview1'), 9, ...new TextEncoder().encode('proc_exit'), 0, 1,
+          3, 2, 1, 2,
+          5, 3, 1, 0, 1,
+          7, 19, 2, 6, ...new TextEncoder().encode('memory'), 2, 0, 6, ...new TextEncoder().encode('_start'), 0, 2,
+          10, 17, 1, 15, 0, 65, 0, 65, 0, 65, 0, 16, 0, 26, 65, 3, 16, 1, 11,
+        ]);
+        const guest = new WASI({ version: 'preview1' });
+        console.log('module exit', guest.start(new WebAssembly.Instance(new WebAssembly.Module(wasm), guest.getImportObject())));
       `),
     );
     expect(output.split('\n').filter(Boolean)).toEqual([
@@ -236,7 +252,58 @@ describe('node builtins', () => {
       'write 0 written by wasi',
       'seek+read 0 0 by wasi',
       'missing 44 socket 52',
+      'keys true 46 absolute 76 escape 76',
+      'random 0 true clock 28 70 badiov 21 badclock 21',
+      'unstable true',
       'exit 7',
+      'module exit 3',
+    ]);
+  });
+
+  it('wasi: shared memory, create/write/seek/read on one fd, O_EXCL, closed fds, and closeAll after start()', async () => {
+    const { output } = await runNode(
+      script(`
+        const { WASI } = require('node:wasi');
+        const setup = (memory) => {
+          const wasi = new WASI({ version: 'preview1', preopens: { '/': '/' } });
+          wasi.initialize({ exports: { memory } });
+          const bytes = new Uint8Array(memory.buffer);
+          const view = new DataView(memory.buffer);
+          const put = (at, text) => { const b = new TextEncoder().encode(text); bytes.set(b, at); return b.length; };
+          const iov = (at, buf, len) => { view.setUint32(at, buf, true); view.setUint32(at + 4, len, true); };
+          return { wasi, w: wasi.wasiImport, bytes, view, put, iov };
+        };
+        const shared = setup(new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true }));
+        console.log('shared', shared.w.random_get(100, 8), shared.w.path_open(3, 0, 200, shared.put(200, 'shared.txt'), 1, 0n, 0n, 0, 80));
+        const { w, wasi, bytes, view, put, iov } = setup(new WebAssembly.Memory({ initial: 1 }));
+        console.log('open', w.path_open(3, 0, 200, put(200, 'rw.txt'), 1 | 8, 0n, 0n, 0, 80));
+        const fd = view.getUint32(80, true);
+        iov(0, 300, put(300, 'hello'));
+        console.log('write', w.fd_write(fd, 0, 1, 50), view.getUint32(50, true), 'seek', w.fd_seek(fd, 0n, 0, 90));
+        iov(8, 400, 5);
+        console.log('read', w.fd_read(fd, 8, 1, 50), new TextDecoder().decode(bytes.slice(400, 405)));
+        console.log('excl', w.path_open(3, 0, 200, 6, 1 | 4, 0n, 0n, 0, 80));
+        console.log('close', w.fd_close(fd), 'again', w.fd_write(fd, 0, 1, 50), w.fd_close(fd));
+        const runner = setup(new WebAssembly.Memory({ initial: 1 }));
+        let held;
+        runner.wasi = new WASI({ preopens: { '/': '/' } });
+        const mem = new WebAssembly.Memory({ initial: 1 });
+        const v = new DataView(mem.buffer);
+        new Uint8Array(mem.buffer).set(new TextEncoder().encode('held.txt'), 200);
+        console.log('start', runner.wasi.start({ exports: { memory: mem, _start: () => { console.log('held open', runner.wasi.wasiImport.path_open(3, 0, 200, 8, 1, 0n, 0n, 0, 80)); held = v.getUint32(80, true); } } }));
+        console.log('after start', runner.wasi.wasiImport.fd_write(held, 0, 0, 50));
+      `),
+    );
+    expect(output.split('\n').filter(Boolean)).toEqual([
+      'shared 0 0',
+      'open 0',
+      'write 0 5 seek 0',
+      'read 0 hello',
+      'excl 20',
+      'close 0 again 8 8',
+      'held open 0',
+      'start 0',
+      'after start 8',
     ]);
   });
 

@@ -24,6 +24,7 @@ ships on its own.
 - 2026.10.8 (also): shell control flow — `if`/`while`/`until`/`for`/`case`, functions with `local`/`return`, groups and subshells, here-documents, `test`/`[`, `read`, `shift`, `break`/`continue`, `jobs`/`wait`; `pnpm` and `yarn` front ends; `createSnapshotStore()` keeps `exportZip` snapshots in IndexedDB across reloads; `exportZip({ include })`; virtual-server pages get the same error/console bridge and host scripts as dev-server pages.
 
 - 2026.10.9: hot updates — an edit swaps stylesheets in place and, in React apps, re-renders the changed components keeping their state (Fast Refresh through the official `react-refresh` runtime, with the module graph deciding what to re-run and when a reload is needed); Sass (`.scss`/`.sass`) and Less, in files, CSS Modules and component `<style lang>` blocks, with `@use`/`@import` resolved from the project, `node_modules` or the package CDN; real CSS Modules scoping in the dev server (`:global`, `composes`, keyframes); package stylesheets imported from JS in the preview; `child_process.fork` message channels and `worker_threads` Workers (each its own process Worker); framework dev servers as real Node processes — `next dev` serves Next.js (its WebAssembly SWC, chosen through `process.versions.webcontainer`), `vite dev` serves SvelteKit on real Vite (esbuild-wasm's Go service over binary pipes, Rollup's WebAssembly build), and `vite`/`react-scripts start` run the installed tool when the project needs its own server; installs swap native-only tools for WebAssembly twins (`esbuild-wasm`, `@rollup/wasm-node`, napi-rs `-wasm32-wasi` siblings); binary-safe pipes, per-stream `stdio` inherit, `fs.read(0)` on stdin, children killed with their parent unless `detached`, real `ref`/`unref`; `vm` contexts as the code's global; top-level await of dynamic imports; requests without a `Host` header get one.
+- 2026.10.10: `node:wasi` (WASI preview1 over the process's file system and stdio — `WASI` with `getImportObject`, `start`, `initialize`, preopens, files, `proc_exit`); installs prefer a napi-rs package's single-threaded `-wasm32-wasip1` binding, falling back to `-wasm32-wasi` only when none is published at that version (also when the package lists `-wasm32-wasi` itself), so current oxc-parser releases load without shared memory.
 
 ## Shipped in 2026.10.3
 
@@ -101,15 +102,22 @@ Known limits of what shipped, roughly in the order they are worth closing:
    work; ones that only ship native binaries (sharp, better-sqlite3) do not.
 15. **Framework dev servers: Nuxt, and SvelteKit's restarts.** Next.js and SvelteKit
    run (2026.10.9). SvelteKit on real Vite restarts once or twice shortly after
-   start ("vite.config.js changed") although only Vite's own
-   `vite.config.js.timestamp-*.mjs` bundle is created and removed beside it; a
-   request landing mid-restart gets Vite's SSR "not yet fully initialized" 500 and
-   the next one renders. Needs a trace of chokidar's own events to find which
-   watcher answer it misreads. Nuxt does not run: its
-   parser, `oxc-parser`, has only native builds and a `wasm32-wasi` build that
-   needs `node:wasi` with threads over shared memory — SharedArrayBuffer, so
-   cross-origin isolation, which this runtime refuses to require. Unblocked by a
-   single-threaded WASI build of oxc-parser (or a JS parser fallback upstream).
+   start ("vite.config.js changed"), and a request landing mid-restart gets Vite's
+   SSR "not yet fully initialized" 500. Cause: projects live at the file-system
+   root `/`, and chokidar records `basename('/')` — `''` — as a child of `/`;
+   every rescan finds `''` missing and removes it, which unwatches `/`'s children
+   and reports `vite.config.js` / `svelte.config.js` as unlinked then added (real
+   chokidar does the same on Linux with root `/`). Fix: run projects from a
+   working directory below the root (e.g. `/home/project`) — `writeTree`, the dev
+   server, preview, build and the Builderforce.ai frontend all assume `/`.
+   Nuxt 3 does not run: it pins `oxc-parser ^0.143`, whose only WebAssembly build
+   is the threaded `wasm32-wasi` one (single-threaded `-wasm32-wasip1` bindings
+   start at 0.152), and that needs SharedArrayBuffer, so cross-origin isolation,
+   which this runtime refuses to require. Nuxt 4 (4.6.2) installs but stalls
+   silently after "Starting Nuxt..." (with `--no-fork`, no port, no error). Leads:
+   the runtime reports Node 20.18 while Nuxt 4 wants ^22.21, and `oxc-parser`
+   (a peer of `oxc-walker`) was not installed at the top level. Needs a trace of
+   where start-up waits.
    Framework start-up is also slow (about 20–35 s to Next's first page) because
    each process receives the whole file system; see item 18.
 17. **Shell gaps.** No `fg`/`bg` (a background job cannot be brought back to
