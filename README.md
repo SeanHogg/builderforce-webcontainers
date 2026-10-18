@@ -29,11 +29,15 @@ previews, built to be forked.
 It runs **frontend apps** (Vite with React, Vue or Svelte, Create React App,
 static sites), which it previews, builds for deployment and type-checks; and
 **Node programs**: `npm install` from the real registry, Node scripts and
-Express-style servers, and an interactive shell for a terminal. Frameworks whose
-dev servers need native binaries (Next.js, Nuxt, SvelteKit, Remix, Astro) are
-detected and declined with a reason, so a host can fall back to
-another runtime instead of showing a broken preview. The roadmap is how it closes
-the rest of the gap.
+Express-style servers, and an interactive shell for a terminal. Framework dev
+servers run as the real thing: `next dev` serves a Next.js app from its own
+process, with Next's WebAssembly compiler (`@next/swc-wasm-nodejs`) standing in
+for the native one, and `vite dev` runs SvelteKit on real Vite. Installs swap native-only build tools for their WebAssembly
+twins (`esbuild` → `esbuild-wasm`, `rollup` → `@rollup/wasm-node`, napi-rs
+`-wasm32-wasi` builds). Nuxt is the exception: its parser's WebAssembly build
+needs threads over shared memory, i.e. cross-origin isolation, which this runtime
+does not require (see the [ROADMAP](ROADMAP.md)). The roadmap is how it closes the
+rest of the gap.
 
 ## Quick start
 
@@ -230,11 +234,14 @@ and closing, for a host that lists running servers.
   `worker_threads` Workers run as processes of their own — in the browser, their
   own Web Worker, so in parallel — with `workerData`, `parentPort` and a worker's
   uncaught error arriving as the parent's `'error'` event. Messages are copied
-  (there is no shared memory without cross-origin isolation).
+  (there is no shared memory without cross-origin isolation). Pipes carry bytes
+  untouched (esbuild's service protocol runs over a child's stdin/stdout), a
+  child's stdio can be inherited per stream, `fs.read(0, …)` reads stdin, and
+  children die with their parent unless `detached`.
 
 Not supported yet (see the [ROADMAP](ROADMAP.md)): native addons,
 `execSync`/`spawnSync`, WebSocket clients inside Node programs (the `ws` client,
-Node's global `WebSocket`), and the Next.js/Nuxt dev servers. Outside the browser
+Node's global `WebSocket`), and the Nuxt dev server. Outside the browser
 (tests, a CLI), the core's `Kernel` runs the same programs in-process:
 `new Kernel({ programs: defaultPrograms() }).run('npm', ['install'])`, with
 `kernel.requestStream()` for a streamed response and

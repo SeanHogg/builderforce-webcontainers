@@ -23,7 +23,7 @@ ships on its own.
 - 2026.10.8: streaming HTTP — a virtual server's head leaves on `writeHead` and each `res.write()` reaches the preview (page → service worker `ReadableStream`) and loopback clients as its own chunk, so Server-Sent Events, long-polling and chunked progress arrive live, and a client hanging up is seen by the server; WebSockets — `upgrade` listeners get a socket over a raw connection, so `ws`/socket.io run their own framing, and preview pages get a `WebSocket` shim that tunnels virtual-server URLs over a MessageChannel to the host page; cookies from virtual servers — a per-port jar in the host stores `Set-Cookie` (Path, Max-Age/Expires, HttpOnly kept from script), sends it back on requests and handshakes, and mirrors `document.cookie` on pages those servers served.
 - 2026.10.8 (also): shell control flow — `if`/`while`/`until`/`for`/`case`, functions with `local`/`return`, groups and subshells, here-documents, `test`/`[`, `read`, `shift`, `break`/`continue`, `jobs`/`wait`; `pnpm` and `yarn` front ends; `createSnapshotStore()` keeps `exportZip` snapshots in IndexedDB across reloads; `exportZip({ include })`; virtual-server pages get the same error/console bridge and host scripts as dev-server pages.
 
-- 2026.10.9: hot updates — an edit swaps stylesheets in place and, in React apps, re-renders the changed components keeping their state (Fast Refresh through the official `react-refresh` runtime, with the module graph deciding what to re-run and when a reload is needed); Sass (`.scss`/`.sass`) and Less, in files, CSS Modules and component `<style lang>` blocks, with `@use`/`@import` resolved from the project, `node_modules` or the package CDN; real CSS Modules scoping in the dev server (`:global`, `composes`, keyframes); package stylesheets imported from JS in the preview; `child_process.fork` message channels and `worker_threads` Workers (each its own process Worker).
+- 2026.10.9: hot updates — an edit swaps stylesheets in place and, in React apps, re-renders the changed components keeping their state (Fast Refresh through the official `react-refresh` runtime, with the module graph deciding what to re-run and when a reload is needed); Sass (`.scss`/`.sass`) and Less, in files, CSS Modules and component `<style lang>` blocks, with `@use`/`@import` resolved from the project, `node_modules` or the package CDN; real CSS Modules scoping in the dev server (`:global`, `composes`, keyframes); package stylesheets imported from JS in the preview; `child_process.fork` message channels and `worker_threads` Workers (each its own process Worker); framework dev servers as real Node processes — `next dev` serves Next.js (its WebAssembly SWC, chosen through `process.versions.webcontainer`), `vite dev` serves SvelteKit on real Vite (esbuild-wasm's Go service over binary pipes, Rollup's WebAssembly build), and `vite`/`react-scripts start` run the installed tool when the project needs its own server; installs swap native-only tools for WebAssembly twins (`esbuild-wasm`, `@rollup/wasm-node`, napi-rs `-wasm32-wasi` siblings); binary-safe pipes, per-stream `stdio` inherit, `fs.read(0)` on stdin, children killed with their parent unless `detached`, real `ref`/`unref`; `vm` contexts as the code's global; top-level await of dynamic imports; requests without a `Host` header get one.
 
 ## Shipped in 2026.10.3
 
@@ -99,12 +99,19 @@ Known limits of what shipped, roughly in the order they are worth closing:
 14. **Install scripts and native addons.** `postinstall` is skipped; `.node`
    addons cannot load. Packages with a WASM fallback (esbuild-wasm, @swc/wasm)
    work; ones that only ship native binaries (sharp, better-sqlite3) do not.
-15. **Next.js / Nuxt / SvelteKit dev servers.** Feasible in principle (they are
-   Node HTTP servers), blocked today by: SWC/esbuild/lightningcss native binaries
-   (need WASM builds wired as fallbacks), `worker_threads` (Next spawns workers),
-   and their size (hundreds of MB of `node_modules`
-   mirrored into each process worker). Real Vite is blocked by the same native
-   esbuild/rollup binaries, which is why `vite` hands off to the built-in server.
+15. **Framework dev servers: Nuxt, and SvelteKit's restarts.** Next.js and SvelteKit
+   run (2026.10.9). SvelteKit on real Vite restarts once or twice shortly after
+   start ("vite.config.js changed") although only Vite's own
+   `vite.config.js.timestamp-*.mjs` bundle is created and removed beside it; a
+   request landing mid-restart gets Vite's SSR "not yet fully initialized" 500 and
+   the next one renders. Needs a trace of chokidar's own events to find which
+   watcher answer it misreads. Nuxt does not run: its
+   parser, `oxc-parser`, has only native builds and a `wasm32-wasi` build that
+   needs `node:wasi` with threads over shared memory — SharedArrayBuffer, so
+   cross-origin isolation, which this runtime refuses to require. Unblocked by a
+   single-threaded WASI build of oxc-parser (or a JS parser fallback upstream).
+   Framework start-up is also slow (about 20–35 s to Next's first page) because
+   each process receives the whole file system; see item 18.
 17. **Shell gaps.** No `fg`/`bg` (a background job cannot be brought back to
    the terminal), no arithmetic `$(( ))`; `npx` installs only what has a `bin`.
 18. **Process start-up cost.** Each process receives a full snapshot of the file

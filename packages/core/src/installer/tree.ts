@@ -32,6 +32,8 @@ interface Dependency {
   name: string;
   range: string;
   type: EdgeType;
+  /** Added by this installer (a napi-rs wasm binding), not declared: missing is silent. */
+  implied?: boolean;
 }
 
 interface Edge extends Dependency {
@@ -91,14 +93,14 @@ function bundledNames(m: { bundleDependencies?: string[] | boolean; bundledDepen
 
 function dependenciesOf(m: PackageJson | PackageManifest, isRoot: boolean, production: boolean): Dependency[] {
   const out = new Map<string, Dependency>();
-  const add = (record: Record<string, string> | undefined, type: EdgeType) => {
-    for (const [name, range] of Object.entries(record ?? {})) if (!out.has(name) || type === 'optional') out.set(name, { name, range, type });
+  const add = (record: Record<string, string> | undefined, type: EdgeType, implied?: boolean) => {
+    for (const [name, range] of Object.entries(record ?? {})) if (!out.has(name) || type === 'optional') out.set(name, { name, range, type, implied });
   };
   if (isRoot && !production) add((m as PackageJson).devDependencies, 'dev');
   add(m.dependencies, 'prod');
   add(m.optionalDependencies, 'optional');
   const sibling = napiWasmSibling(m.optionalDependencies);
-  if (sibling) add({ [sibling[0]]: sibling[1] }, 'optional');
+  if (sibling) add({ [sibling[0]]: sibling[1] }, 'optional', true);
   if (!isRoot) {
     const meta = (m as PackageManifest).peerDependenciesMeta ?? {};
     for (const [name, range] of Object.entries(m.peerDependencies ?? {})) {
@@ -199,7 +201,7 @@ export async function resolveTree(options: ResolveTreeOptions): Promise<Map<stri
         manifest = await pickPreferringWasm(options, spec);
       } catch (error) {
         if (dep.type !== 'optional') throw error;
-        options.warn(`skipped optional ${dep.name}: ${(error as Error).message}`);
+        if (!dep.implied) options.warn(`skipped optional ${dep.name}: ${(error as Error).message}`);
         continue;
       }
       if (!fitsPlatform(manifest)) {

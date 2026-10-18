@@ -21,6 +21,8 @@ export interface LoaderOptions {
   builtin(name: string): unknown;
   /** Injected into every module's wrapper by name. */
   globals: Record<string, unknown>;
+  /** Where processes share a realm: a `with` scope for module code, so names set on the process's `globalThis` resolve bare. */
+  scope?: object;
 }
 
 export interface NodeModule {
@@ -180,26 +182,47 @@ export function createModuleSystem(options: LoaderOptions) {
       const [outerNames, outerValues, innerNames, innerValues] = esm
         ? [[...globalNames, ...cjsNames], [...globalValues, ...cjsValues], helperNames, helperValues]
         : [globalNames, globalValues, [...cjsNames, ...helperNames], [...cjsValues, ...helperValues]];
-      const wrapped = (async: boolean) =>
-        new Function(...outerNames, `return ${async ? 'async ' : ''}function (${innerNames.join(', ')}) {${code}\n}`)(...outerValues) as (...args: unknown[]) => unknown;
+      const wrapped = (async: boolean) => {
+        const body = `return ${async ? 'async ' : ''}function (${innerNames.join(', ')}) {${code}\n}`;
+        // The `with` sits outside the globals' parameters, so those (and the module's own
+        // declarations) still win; it only answers names set on `globalThis` since.
+        const fn = options.scope
+          ? new Function('__bfwc_scope', `with (__bfwc_scope) { return function (${outerNames.join(', ')}) { ${body} }; }`)(options.scope)(...outerValues)
+          : new Function(...outerNames, body)(...outerValues);
+        return fn as (...args: unknown[]) => unknown;
+      };
       let fn: (...args: unknown[]) => unknown;
       try {
         fn = wrapped(false);
       } catch (error) {
-        if (esm && error instanceof SyntaxError && /await/.test(error.message)) fn = wrapped(true);
-        else {
+        // Top-level await reads as a syntax error in a plain function, and V8 names the
+        // token after `await` (`Unexpected identifier '__bfwc_dynamic'`), not `await` itself.
+        let retried: ((...args: unknown[]) => unknown) | undefined;
+        if (esm && error instanceof SyntaxError && /\bawait\b/.test(source)) {
+          try {
+            retried = wrapped(true);
+          } catch {
+            // not top-level await after all: report the first error
+          }
+        }
+        if (!retried) {
           if (error instanceof Error) error.message = `${filename}: ${error.message}`;
           throw error;
         }
+        fn = retried;
       }
-      const result = fn.apply(this.exports, innerValues);
+      // An ES module's static imports evaluate first; one still in top-level await holds
+      // this module's body (and so, through its own `__tla`, whoever imports it).
+      const pending = esm ? importsAwaiting(this, source) : [];
+      const result = pending.length ? Promise.all(pending).then(() => fn.apply(this.exports, innerValues)) : fn.apply(this.exports, innerValues);
       if (result instanceof Promise) this.__tla = result;
       return result;
     }
   }
 
-  function esmHelpers(module: Module, filename: string): unknown[] {
-    const load = (rawSpecifier: string): { exports: any; __tla?: Promise<unknown> } => {
+  /** Load what an ES module imports, as `import` and `import()` do. */
+  function importLoader(module: Module) {
+    return (rawSpecifier: string): { exports: any; __tla?: Promise<unknown> } => {
       // `import()` takes file URLs (`import(pathToFileURL(configPath).href)`); `require` does not.
       const specifier = rawSpecifier.startsWith('file:') ? decodeURIComponent(new URL(rawSpecifier).pathname) : rawSpecifier;
       let target: string;
@@ -213,6 +236,30 @@ export function createModuleSystem(options: LoaderOptions) {
       }
       return loadResolved(target, module, false);
     };
+  }
+
+  /**
+   * Evaluate a rewritten module's static imports (`__bfwc_import("…")`, in order) and
+   * return the top-level awaits still running among them. One that fails to load is
+   * left for the module's own import statement to report.
+   */
+  function importsAwaiting(module: Module, rewritten: string): Promise<unknown>[] {
+    const load = importLoader(module);
+    const pending: Promise<unknown>[] = [];
+    for (const [, literal] of rewritten.matchAll(/__bfwc_import\(("(?:[^"\\]|\\.)*")\)/g)) {
+      if (!literal) continue;
+      try {
+        const loaded = load(JSON.parse(literal) as string);
+        if (loaded.__tla) pending.push(loaded.__tla);
+      } catch {
+        // reported where the module imports it
+      }
+    }
+    return pending;
+  }
+
+  function esmHelpers(module: Module, filename: string): unknown[] {
+    const load = importLoader(module);
     const importSync = (specifier: string) => namespaceOf(load(specifier).exports);
     const meta = {
       url: 'file://' + filename,

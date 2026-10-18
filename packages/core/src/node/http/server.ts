@@ -101,7 +101,9 @@ export class Server extends EventEmitterBase {
     const req = new IncomingMessage(socket);
     req.method = request.method.toUpperCase();
     req.url = request.url;
-    req._fill(headers, body);
+    // HTTP/1.1 always names the host; servers check it (Vite's `allowedHosts` answers 403 without it).
+    const named = Object.keys(headers).some((k) => k.toLowerCase() === 'host');
+    req._fill(named ? headers : { ...headers, host: `localhost:${socket.localPort}` }, body);
     return req;
   }
 

@@ -8,10 +8,8 @@
  * cut short by the process exiting.
  */
 import { EventEmitterBase } from '../events.js';
-import { Buffer } from '../buffer.js';
-import { Readable } from '../stream/readable.js';
-import { Writable } from '../stream/writable.js';
 import { createSyncFs, type FsContext, type SyncFs } from './sync.js';
+import { createFsStreams } from './streams.js';
 import { Dirent, Stats, constants } from './stats.js';
 import { normalizePath } from '../../paths.js';
 import { queueCallback } from '../processExit.js';
@@ -26,7 +24,6 @@ export interface FsModuleContext extends FsContext {
 
 type Fn = (...args: any[]) => any;
 
-const CHUNK = 64 * 1024;
 
 function lastCallback(args: unknown[]): Fn | undefined {
   return typeof args[args.length - 1] === 'function' ? (args.pop() as Fn) : undefined;
@@ -52,101 +49,7 @@ export function createFsModule(ctx: FsModuleContext): Record<string, any> {
 
   const toPromise = (fn: Fn) => async (...args: any[]) => fn(...args);
 
-  class ReadStream extends Readable {
-    bytesRead = 0;
-    readonly path: string;
-    fd: number | null = null;
-    pending = true;
-    private data?: Uint8Array;
-    private offset: number;
-    private readonly endAt: number;
-
-    constructor(path: string | URL, options: { start?: number; end?: number; encoding?: string; highWaterMark?: number; fd?: number } | string = {}) {
-      const opts = typeof options === 'string' ? { encoding: options } : options;
-      super({ highWaterMark: opts.highWaterMark ?? CHUNK, encoding: opts.encoding });
-      this.path = typeof options === 'object' && opts.fd !== undefined ? '' : sync._resolve(path);
-      this.offset = opts.start ?? 0;
-      this.endAt = opts.end ?? Infinity;
-      queueCallback(() => {
-        try {
-          const contents = sync.readFileSync(this.path) as Buffer;
-          this.data = contents;
-          this.fd = -1;
-          this.pending = false;
-          this.emit('open', this.fd);
-          this.emit('ready');
-          this._pull();
-        } catch (error) {
-          this.destroy(error as Error);
-        }
-      });
-    }
-
-    override _read(): void {
-      if (!this.data) {
-        this._readableState.reading = false; // retried once the file is loaded
-        return;
-      }
-      const end = Math.min(this.data.length, this.endAt + 1);
-      if (this.offset >= end) {
-        this.push(null);
-        return;
-      }
-      const chunk = this.data.subarray(this.offset, Math.min(end, this.offset + this._readableState.highWaterMark));
-      this.offset += chunk.length;
-      this.bytesRead += chunk.length;
-      this.push(Buffer.from(chunk));
-    }
-
-    close(callback?: Fn): void {
-      this.destroy();
-      if (callback) this.once('close', callback);
-    }
-  }
-
-  class WriteStream extends Writable {
-    bytesWritten = 0;
-    readonly path: string;
-    pending = false;
-    private started = false;
-
-    constructor(path: string | URL, private readonly options: { flags?: string; encoding?: string } | string = {}) {
-      super({ decodeStrings: true });
-      this.path = sync._resolve(path);
-      queueCallback(() => {
-        try {
-          this.open();
-          this.emit('open', -1);
-          this.emit('ready');
-        } catch (error) {
-          this.destroy(error as Error);
-        }
-      });
-    }
-
-    private open(): void {
-      if (this.started) return;
-      this.started = true;
-      const flags = typeof this.options === 'object' ? this.options.flags ?? 'w' : 'w';
-      if (!flags.startsWith('a') || !ctx.vfs.isFile(this.path)) sync.writeFileSync(this.path, '', { flag: flags.includes('x') ? 'wx' : 'w' });
-    }
-
-    override _write(chunk: Buffer, _encoding: string, callback: (error?: Error | null) => void): void {
-      try {
-        this.open();
-        sync.appendFileSync(this.path, chunk);
-        this.bytesWritten += chunk.length;
-        callback();
-      } catch (error) {
-        callback(error as Error);
-      }
-    }
-
-    close(callback?: Fn): void {
-      this.end();
-      if (callback) this.once('close', callback);
-    }
-  }
+  const { ReadStream, WriteStream } = createFsStreams(sync, ctx);
 
   class FSWatcher extends EventEmitterBase {
     private readonly release: () => void;

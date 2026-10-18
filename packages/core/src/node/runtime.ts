@@ -15,6 +15,7 @@ import { EventLoop } from './loop.js';
 import { createConsole, createProcess, ProcessExit, type NodeProcess } from './process.js';
 import { esmReady } from './esm.js';
 import { inspect } from './inspect.js';
+import { installGlobalObject } from './globalObject.js';
 
 export interface NodeOptions {
   system: System;
@@ -159,21 +160,9 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
     clearImmediate: loop.clearImmediate,
     fetch: builtins.fetch,
   };
-  if (options.installGlobals) {
-    Object.assign(globalThis, globals, { global: globalThis });
-    globals.global = globalThis;
-  } else {
-    // A per-process view of the global object: Node's own names resolve to this
-    // process's, everything else reads from the real one — WITH the real one as
-    // receiver, because host getters (`crypto`, `navigator`) check what `this` is.
-    const own = Object.assign(Object.create(globalThis), globals) as Record<PropertyKey, unknown>;
-    globals.global = new Proxy(own, {
-      get: (target, key) => (Object.hasOwn(target, key) ? target[key] : Reflect.get(globalThis, key)),
-    });
-  }
-  globals.globalThis = globals.global;
+  const scope = installGlobalObject(globals, !!options.installGlobals);
 
-  const modules = createModuleSystem({ fs: system.fs, isBuiltin: builtins.isBuiltin, builtin: builtins.get, globals });
+  const modules = createModuleSystem({ fs: system.fs, isBuiltin: builtins.isBuiltin, builtin: builtins.get, globals, scope });
   (modules.Module as unknown as { builtinModules: string[] }).builtinModules = builtins.names;
   Object.defineProperty(proc, 'mainModule', { get: () => modules.main, configurable: true });
 

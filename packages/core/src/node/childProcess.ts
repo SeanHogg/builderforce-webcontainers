@@ -78,7 +78,9 @@ class ChildProcess extends EventEmitterBase {
       },
     });
     this.stdio = [this.stdin, this.stdout, this.stderr];
-    const inherit = options.stdio === 'inherit' || (Array.isArray(options.stdio) && options.stdio[1] === 'inherit');
+    // Per stream, as Node reads it: `'inherit'`, or `['pipe', 'pipe', 'inherit']` (esbuild's service: its stderr is the parent's).
+    const inherits = (fd: 1 | 2) => options.stdio === 'inherit' || (Array.isArray(options.stdio) && options.stdio[fd] === 'inherit');
+    const [inheritOut, inheritErr] = [inherits(1), inherits(2)];
 
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(options.env ?? deps.env())) if (v !== undefined) env[k] = String(v);
@@ -109,8 +111,8 @@ class ChildProcess extends EventEmitterBase {
       });
     }
     // Piped output arrives as Buffers, as in Node.
-    this.handle.onStdout((chunk) => (inherit ? deps.stdout(chunk) : this.stdout.push(Buffer.from(chunk))));
-    this.handle.onStderr((chunk) => (inherit ? deps.stderr(chunk) : this.stderr.push(Buffer.from(chunk))));
+    this.handle.onStdout((chunk) => (inheritOut ? deps.stdout(chunk) : this.stdout.push(Buffer.from(chunk))));
+    this.handle.onStderr((chunk) => (inheritErr ? deps.stderr(chunk) : this.stderr.push(Buffer.from(chunk))));
     options.signal?.addEventListener('abort', () => this.kill());
     queueCallback(() => this.emit('spawn'));
     void this.handle.exit.then((code) => {

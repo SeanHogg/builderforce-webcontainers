@@ -91,6 +91,19 @@ describe('node runtime: modules', () => {
     expect(output).toBe('cjs esm-only\n');
   });
 
+  it('runs top-level await of a dynamic import (SvelteKit loads TypeScript this way)', async () => {
+    const { output, code } = await runNode(
+      {
+        'main.mjs': `import { ts } from './ts.mjs'; console.log(ts);`,
+        'ts.mjs': `let ts; try { ts = (await import('./typescript.mjs')).default; } catch { ts = 'missing'; }\nexport { ts };`,
+        'typescript.mjs': `export default 'loaded';`,
+      },
+      'main.mjs',
+    );
+    expect(code).toBe(0);
+    expect(output).toBe('loaded\n');
+  });
+
   it('ignores a straggling callback that writes or exits again after the process exited', async () => {
     const { output, code } = await runNode({ 'index.js': 'require("fs").promises.readFile("/index.js").then(() => { console.error("late"); process.exit(2); }); console.log("early"); process.exit(0);' });
     expect(code).toBe(0);
@@ -186,6 +199,28 @@ describe('binary stdio', () => {
     });
     expect(code).toBe(0);
     expect(output).toBe('true 7,0,255,128,10,226,130\n');
+  });
+});
+
+describe('the global object', () => {
+  it('lets strict code replace host getter globals, as Node does (Go wasm assigns globalThis.crypto)', async () => {
+    const { output, code } = await runNode({ 'index.js': `'use strict'; globalThis.crypto = { tag: 'mine' }; globalThis.performance = { now: () => 1 }; console.log(globalThis.crypto.tag, globalThis.performance.now(), typeof global.setTimeout);` });
+    expect(code).toBe(0);
+    expect(output).toBe('mine 1 function\n');
+  });
+
+  it("shares one global between module code and code it compiles with new Function (esbuild-wasm's launcher)", async () => {
+    const { output, code } = await runNode({
+      'index.js': `
+        Object.defineProperty(globalThis, 'crypto', { writable: true, configurable: true });
+        const kept = typeof globalThis.crypto;
+        new Function('require', '"use strict"; globalThis.crypto = { tag: "go" }; require("./loader.js"); console.log(new Go().tag, typeof setTimeout);')(require);
+        console.log(kept, globalThis.Go === Go, new Function('a', 'b', 'return a + b')(2, 3), (() => {}) instanceof Function);
+      `,
+      'loader.js': `if (!globalThis.crypto) throw new Error('no crypto'); globalThis.Go = class { constructor() { this.tag = globalThis.crypto.tag; } };`,
+    });
+    expect(code).toBe(0);
+    expect(output).toBe('go function\nobject true 5 true\n');
   });
 });
 

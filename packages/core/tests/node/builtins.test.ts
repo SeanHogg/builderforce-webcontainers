@@ -197,6 +197,32 @@ describe('node builtins', () => {
     expect(output).toBe('é true\ndata x\n');
   });
 
+  it("fs streams can be subclassed graceful-fs's way (apply on its own object, its own open)", async () => {
+    // webpack's persistent cache writes through graceful-fs, which wraps fs.WriteStream like this.
+    const { output } = await runNode(
+      script(`
+        const fs = require('fs');
+        fs.writeFileSync('/in.txt', 'hello');
+        function GracefulWrite(path, options) {
+          if (this instanceof GracefulWrite) return fs.WriteStream.apply(this, arguments), this;
+          return GracefulWrite.apply(Object.create(GracefulWrite.prototype), arguments);
+        }
+        GracefulWrite.prototype = Object.create(fs.WriteStream.prototype);
+        GracefulWrite.prototype.open = function () {
+          fs.open(this.path, this.flags, this.mode, (err, fd) => { this.fd = fd; this.emit('open', fd); });
+        };
+        const out = new GracefulWrite('/out.txt');
+        out.on('open', () => console.log('opened', typeof out.fd));
+        out.on('finish', () => console.log('wrote', fs.readFileSync('/out.txt', 'utf8'), out instanceof fs.WriteStream));
+        out.write('a');
+        out.end('b');
+        const input = fs.ReadStream.call(Object.create(fs.ReadStream.prototype), '/in.txt');
+        input.on('data', (chunk) => console.log('read', String(chunk)));
+      `),
+    );
+    expect(output.split('\n').filter(Boolean).sort()).toEqual(['opened number', 'read hello', 'wrote ab true']);
+  });
+
   it('readline reads lines from stdin', async () => {
     const { output } = await runNode(
       script(`

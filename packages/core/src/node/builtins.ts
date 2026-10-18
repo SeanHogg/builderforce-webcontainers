@@ -103,7 +103,7 @@ export function createBuiltins(deps: BuiltinDeps) {
     timers: () => createTimersModule(loop),
     'timers/promises': (get) => get('timers').promises,
     tty: () => createTtyModule(!!deps.io.terminal),
-    url: (get) => createUrlModule(get('querystring')),
+    url: (get) => createUrlModule(get('querystring'), (path) => get('path').resolve(path)),
     util: () => createUtilModule(env, (message) => proc.stderr.write(message + '\n')),
     'util/types': () => utilTypes,
     vm: () => createVmModule(),

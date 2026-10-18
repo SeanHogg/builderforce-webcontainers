@@ -62,7 +62,7 @@ export interface LegacyUrl {
   href: string;
 }
 
-export function createUrlModule(qs: Record<string, any>): Record<string, unknown> {
+export function createUrlModule(qs: Record<string, any>, resolvePath: (path: string) => string): Record<string, unknown> {
   function parse(input: string, parseQueryString = false, slashesDenoteHost = false): LegacyUrl {
     let rest = input.trim();
     const out: LegacyUrl = { protocol: null, slashes: null, auth: null, host: null, port: null, hostname: null, hash: null, search: null, query: null, pathname: null, path: null, href: '' };
@@ -153,7 +153,15 @@ export function createUrlModule(qs: Record<string, any>): Record<string, unknown
       if (u.protocol !== 'file:') throw Object.assign(new TypeError('The URL must be of scheme file'), { code: 'ERR_INVALID_URL_SCHEME' });
       return decodeURIComponent(u.pathname);
     },
-    pathToFileURL: (path: string) => new URL('file://' + encodeURI(path).replace(/[?#]/g, encodeURIComponent)),
+    // As Node: resolved against the working directory (a relative path never becomes the
+    // URL's host), a trailing slash kept, and the characters a pathname would misread escaped.
+    pathToFileURL: (path: string) => {
+      let resolved = resolvePath(path);
+      if (path.endsWith('/') && !resolved.endsWith('/')) resolved += '/';
+      const url = new URL('file://');
+      url.pathname = resolved.replace(/%/g, '%25').replace(/\\/g, '%5C').replace(/\n/g, '%0A').replace(/\r/g, '%0D').replace(/\t/g, '%09');
+      return url;
+    },
     domainToASCII: (d: string) => d,
     domainToUnicode: (d: string) => d,
     urlToHttpOptions: (u: URL) => ({ protocol: u.protocol, hostname: u.hostname, hash: u.hash, search: u.search, pathname: u.pathname, path: u.pathname + u.search, href: u.href, port: u.port ? Number(u.port) : undefined }),
