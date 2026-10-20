@@ -2,7 +2,9 @@
  * What a kernel's TTY layer does between xterm.js and a program:
  *
  * - InputQueue: stdin as a buffered stream of chunks — text, or bytes (data that arrives
- *   before the program subscribes is kept, not dropped).
+ *   before the program subscribes is kept, not dropped). As a pipe, its reader
+ *   closes it on exit (`closeReader`): what was buffered is dropped and later
+ *   writes throw EPIPE, so the writer stops instead of buffering forever.
  * - LineDiscipline: "cooked" mode — echo, backspace, Ctrl-U, Enter delivers the
  *   line, Ctrl-C raises SIGINT, Ctrl-D is end-of-file. A program that calls
  *   `setRawMode(true)` (the shell, prompts libraries) gets keystrokes untouched.
@@ -10,6 +12,7 @@
  *   only moves to column 0 on `\r`.
  */
 import type { StdioChunk } from './types.js';
+import { BrokenPipeError } from './signals.js';
 
 
 export class InputQueue<T extends StdioChunk = string> {
@@ -18,8 +21,14 @@ export class InputQueue<T extends StdioChunk = string> {
   private ended = false;
 
   private draining = false;
+  private readerClosed = false;
 
+  /** Queue a chunk (`null`: end-of-file). Throws {@link BrokenPipeError} once the reader has closed; ending is always allowed. */
   push(chunk: T | null): void {
+    if (this.readerClosed) {
+      if (chunk === null) return;
+      throw new BrokenPipeError(this);
+    }
     if (this.ended) return;
     if (chunk === null) this.ended = true;
     this.buffered.push(chunk);
@@ -64,8 +73,49 @@ export class InputQueue<T extends StdioChunk = string> {
     });
   }
 
+  /**
+   * The first `count` lines (each with its `\n`; fewer at end-of-file), then stop
+   * reading — what `head` needs to exit early, so the writer upstream gets EPIPE.
+   */
+  readLines(count: number): Promise<string> {
+    return new Promise((resolve) => {
+      if (count <= 0) return resolve('');
+      let text = '';
+      let found = 0;
+      let done = false;
+      const finish = () => {
+        done = true;
+        stop();
+        resolve(text);
+      };
+      const stop = this.subscribe(
+        textChunks((chunk) => {
+          if (done) return;
+          if (chunk === null) return finish();
+          for (let from = 0; ; ) {
+            const newline = chunk.indexOf('\n', from);
+            if (newline < 0) return void (text += chunk.slice(from));
+            text += chunk.slice(from, newline + 1);
+            from = newline + 1;
+            if (++found === count) return finish();
+          }
+        }),
+      );
+    });
+  }
+
+  /** The reader is gone (a pipeline stage exited): drop what it never read; later writes fail with EPIPE. */
+  closeReader(): void {
+    this.readerClosed = true;
+    this.buffered.length = 0;
+  }
+
   get isEnded(): boolean {
     return this.ended;
+  }
+
+  get isReaderClosed(): boolean {
+    return this.readerClosed;
   }
 }
 

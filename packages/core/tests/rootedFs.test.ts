@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { VirtualFileSystem, type FsChange } from '../src/vfs.js';
-import { rootedFileSystem } from '../src/rootedFs.js';
+import { baseToProject, projectToBase, rootedFileSystem } from '../src/rootedFs.js';
 
 const ROOT = '/home/project';
 
@@ -79,5 +79,22 @@ describe('rootedFileSystem', () => {
       .filter((name) => !composed.has(name) && !own.has(name))
       .filter((name) => !['removeFile', 'link', 'ensureDir', 'unlink', 'unlinkDir', 'emit'].includes(name));
     expect(unmapped).toEqual([]);
+  });
+});
+
+describe('project ↔ base paths', () => {
+  it('maps a project path under root, never above it', () => {
+    expect(projectToBase(ROOT, '/')).toBe(ROOT);
+    expect(projectToBase(ROOT, 'packages/web')).toBe(`${ROOT}/packages/web`);
+    expect(projectToBase(ROOT, '/../../etc')).toBe(`${ROOT}/etc`);
+    expect(projectToBase('/', '/src')).toBe('/src');
+  });
+
+  it('maps a base path back, and nothing outside root', () => {
+    expect(baseToProject(ROOT, ROOT)).toBe('/');
+    expect(baseToProject(ROOT, `${ROOT}/src`)).toBe('/src');
+    expect(baseToProject(ROOT, '/home/projects')).toBeUndefined();
+    expect(baseToProject(ROOT, '/tmp')).toBeUndefined();
+    expect(baseToProject('/', '/tmp')).toBe('/tmp');
   });
 });

@@ -11,6 +11,7 @@ import { basename, clear, dirname, echo, env, falseCommand, grep, head, printf, 
 import { bracket, test } from './testCommand.js';
 import { readLine } from './lineReader.js';
 import type { Flow } from './compound.js';
+import { setBuiltin, type ShellSettings } from './options.js';
 
 /** A command started with `&`. */
 export interface BackgroundJob {
@@ -30,6 +31,8 @@ export interface ShellState {
   flow?: Flow;
   /** `$1…`, `$@`; a function call swaps them for its arguments. */
   positional: string[];
+  /** `set -o` options (pipefail). */
+  readonly settings: ShellSettings;
   readonly functions: ReadonlyMap<string, unknown>;
   readonly jobs: ReadonlyMap<number, BackgroundJob>;
   /** One frame per running function (for `local`). */
@@ -54,7 +57,8 @@ export const SYSTEM_PROGRAMS = ['node', 'npm', 'npx', 'pnpm', 'yarn', 'bfsh', 's
 const HELP = `bfsh — BuilderForce WebContainers shell
 
   Builtins:  cd, pwd, export, unset, exit, source, history, type, which, help,
-             read, local, shift, return, break, continue, jobs, wait
+             read, local, shift, return, break, continue, jobs, wait,
+             set -o|+o pipefail (on by default), set -- args
   Files:     ls [-la], cat, mkdir [-p], rm [-rf], cp [-r], mv, touch, test / [ … ]
   Text:      echo, printf, head, tail, grep, wc, env, clear, sleep, basename, dirname
   Node:      node <file>, npm install|ci|run|start|test, npx <bin>, pnpm, yarn
@@ -65,6 +69,7 @@ const HELP = `bfsh — BuilderForce WebContainers shell
 `;
 
 export const BUILTINS: Record<string, Builtin> = {
+  set: setBuiltin,
   async cd(ctx, shell) {
     const home = shell.env.HOME && ctx.fs.isDirectory(shell.env.HOME) ? shell.env.HOME : '/';
     const target = ctx.args[0] === '-' ? shell.env.OLDPWD ?? shell.cwd : ctx.args[0] ?? home;
@@ -153,9 +158,6 @@ export const BUILTINS: Record<string, Builtin> = {
       }
     }
     return status;
-  },
-  async set() {
-    return 0; // options (-e, -x) are accepted and ignored
   },
   async break(ctx, shell) {
     return loopControl(ctx, shell, 'break');

@@ -2,7 +2,10 @@ import {
   DevServer,
   PortCookieJars,
   VirtualFileSystem,
+  baseToProject,
   buildProject,
+  projectToBase,
+  runArguments,
   rootedFileSystem,
   exportZip,
   importZip,
@@ -20,6 +23,7 @@ import {
   type StyleCompilers,
   type Transformer,
   type ZipExportOptions,
+  type ZipImportLimits,
 } from '@seanhogg/builderforce-webcontainers-core';
 import { PREVIEW_ID, isPortPath, isWireCancel, isWireRequest, previewBase, type WireReply, type WireResponse } from './protocol.js';
 import { createPortResponder, createProcessHost, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
@@ -111,8 +115,8 @@ export interface PreviewRuntime {
   writeTree(files: FileTree, at?: string): void;
   /** The project as a zip — "Download project" with `exclude: ['node_modules']`, or a full snapshot to restore later. */
   exportZip(options?: ZipExportOptions): Uint8Array;
-  /** Write a zip's contents (an `exportZip` snapshot, a downloaded template) into the runtime, under `at`. */
-  importZip(zip: Uint8Array, at?: string): void;
+  /** Write a zip's contents (an `exportZip` snapshot, a downloaded template) into the runtime, under `at`. Throws `ZipLimitError` past `limits`. */
+  importZip(zip: Uint8Array, at?: string, limits?: ZipImportLimits): void;
   /** Reload every frame showing this preview now (live reload does this on edits by itself). */
   reload(): void;
   /** Whether this runtime can serve the mounted project, and why not. */
@@ -132,7 +136,9 @@ export interface PreviewRuntime {
   /**
    * Run a command — `node server.js`, `npm install`, `npm run dev`, `bfsh` for a
    * terminal — in its own Web Worker. Pass `{ terminal: { cols, rows } }` when
-   * wiring it to xterm.js.
+   * wiring it to xterm.js. `cwd` is project-relative like every other path here
+   * (`/` is the project, `/packages/web` a folder in it; `..` cannot leave it);
+   * the default is the project itself.
    */
   run(command: string, args?: string[], options?: ProcessOptions): RuntimeProcess;
   run(command: string, options?: ProcessOptions): RuntimeProcess;
@@ -140,7 +146,11 @@ export interface PreviewRuntime {
   onServerListening(listener: (server: ServerAddress) => void): () => void;
   /** A virtual server opened or closed its port. */
   onPortChange(listener: (change: PortChange) => void): () => void;
-  /** Processes still running, with the ports their servers listen on. */
+  /**
+   * Processes still running, with the ports their servers listen on. `cwd` is
+   * project-relative; a process that changed directory out of the project (a
+   * shell's `cd /tmp`) reports the absolute path it sees.
+   */
   listProcesses(): ProcessInfo[];
   /**
    * Cookies virtual servers set, per port. A service worker cannot set cookies,
@@ -155,6 +165,13 @@ const DEFAULT_ROOT = '/home/project';
 
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 16) ?? Math.random().toString(36).slice(2, 18);
+}
+
+/** 128 random bits, hex: the runtime's preview nonce. */
+function randomNonce(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export function toWire(reqId: number, served: Awaited<ReturnType<DevServer['handle']>>): { message: WireResponse; transfer: Transferable[] } {
@@ -182,6 +199,8 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     : await sameOriginTransport((options as SameOriginOptions).serviceWorkerUrl, options.scope);
 
   const base = previewBase(transport.scope, id);
+  // Every bridge this runtime injects carries it; preview messages without it are refused.
+  const nonce = randomNonce();
   const root = normalizePath(options.root ?? DEFAULT_ROOT);
   // Processes see the whole tree; everything else sees the project as `/`.
   const files = new VirtualFileSystem();
@@ -193,7 +212,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   let server: DevServer;
   try {
     const transformer = options.transformer ?? (await createEsbuildWasmTransformer());
-    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, styles, attribution: options.attribution, previewScripts, hot: options.hot });
+    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, styles, attribution: options.attribution, previewScripts, previewNonce: nonce, hot: options.hot });
   } catch (error) {
     transport.dispose();
     throw error;
@@ -212,7 +231,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     const reply = (message: WireReply, transfer: Transferable[]) => channel.port1.postMessage(message, transfer);
     // Virtual servers' responses stream (one responder per channel: request ids are per worker).
     responder?.dispose();
-    const ports = (responder = createPortResponder(processes, { cookies, scripts: () => previewScripts }));
+    const ports = (responder = createPortResponder(processes, { cookies, scripts: () => previewScripts, nonce }));
     channel.port1.onmessage = async (event) => {
       if (isWireCancel(event.data)) return ports.cancel(event.data.reqId);
       if (!isWireRequest(event.data)) return;
@@ -232,9 +251,9 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const reload = () => transport.send(base, { type: 'reload' });
   const stopWatching = options.liveReload === false ? undefined : watchForPreviewUpdates(fs, server, (update) => transport.send(base, update));
 
-  const previewMessages = listenToPreview(window, transport.origin, base);
+  const previewMessages = listenToPreview(window, transport.origin, base, nonce);
   // WebSockets and document.cookie for virtual servers, which a service worker cannot carry.
-  const bridge = listenToPreviewBridge(window, transport.origin, base, { upgrade: (port, request) => processes.upgrade(port, request), cookies });
+  const bridge = listenToPreviewBridge(window, transport.origin, base, { upgrade: (port, request) => processes.upgrade(port, request), cookies, nonce });
 
   return {
     id,
@@ -244,7 +263,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     server,
     writeTree: (files, at) => fs.writeTree(files, at),
     exportZip: (zipOptions) => exportZip(fs, zipOptions),
-    importZip: (zip, at) => importZip(fs, zip, at),
+    importZip: (zip, at, limits) => importZip(fs, zip, at, limits),
     reload,
     profile: () => server.profile(),
     async build(buildOptions = {}) {
@@ -258,10 +277,13 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
       server.setPreviewScripts(previewScripts);
       reload();
     },
-    run: (command: string, args?: string[] | ProcessOptions, runOptions?: ProcessOptions) => processes.run(command, args as string[], runOptions),
+    run(command: string, argsOrOptions?: string[] | ProcessOptions, maybeOptions?: ProcessOptions) {
+      const [args, runOptions] = runArguments(argsOrOptions, maybeOptions);
+      return processes.run(command, args, runOptions.cwd === undefined ? runOptions : { ...runOptions, cwd: projectToBase(root, runOptions.cwd) });
+    },
     onServerListening: (listener) => processes.servers.onListening(listener),
     onPortChange: (listener) => processes.servers.onPortChange(listener),
-    listProcesses: () => processes.list(),
+    listProcesses: () => processes.list().map((info) => ({ ...info, cwd: baseToProject(root, info.cwd) ?? info.cwd })),
     cookies,
     dispose() {
       bridge.dispose();

@@ -4,7 +4,8 @@
  * the files at start, and writes flow both ways as batched ops (a worker's
  * write reaches the page, then every other worker). Children a worker spawns
  * (the shell running `node`, `child_process`) are started here too, so every
- * process — however deep — can be killed by terminating its worker.
+ * process — however deep — can be killed by terminating its worker. Ending a
+ * process (exit, kill, dispose) ends its children too, unless spawned `detached`.
  *
  * Responses from a worker's servers stream through here chunk by chunk (see
  * responseWire.ts), and upgraded connections (WebSockets) are relayed as raw
@@ -17,6 +18,7 @@ import {
   allocatePid,
   createIpcEndpoint,
   runArguments,
+  signalExitCode,
   textResponse,
   toRuntimeProcess,
   type ByteChannel,
@@ -60,8 +62,6 @@ export interface ProcessHostOptions {
   /** How long a killed process may take to exit before its worker is terminated. Default 2000ms. */
   killGraceMs?: number;
 }
-
-const SIGNAL_CODES: Record<string, number> = { SIGINT: 130, SIGTERM: 143, SIGKILL: 137, SIGHUP: 129 };
 
 /** A running process, as `listProcesses()` reports it. */
 export interface ProcessInfo {
@@ -223,28 +223,27 @@ export class ProcessHost {
   }
 
   dispose(): void {
-    for (const proc of [...this.procs]) {
-      proc.worker.terminate();
-      proc.resolveExit(SIGNAL_CODES.SIGKILL!);
-    }
+    for (const proc of [...this.procs]) this.terminate(proc, signalExitCode('SIGKILL'));
     this.unwatch();
     this.stopPorts();
   }
 
   private kill(proc: Proc, signal: string): void {
     if (proc.exited) return;
-    if (signal === 'SIGKILL') {
-      proc.worker.terminate();
-      proc.resolveExit(SIGNAL_CODES.SIGKILL!);
-      return;
-    }
+    if (signal === 'SIGKILL') return this.terminate(proc, signalExitCode('SIGKILL'));
     this.post(proc, { type: 'kill', signal });
     // A process stuck in a loop never sees the signal: terminate its worker.
     setTimeout(() => {
-      if (proc.exited) return;
-      proc.worker.terminate();
-      proc.resolveExit(SIGNAL_CODES[signal] ?? 1);
+      if (!proc.exited) this.terminate(proc, signalExitCode(signal));
     }, this.options.killGraceMs ?? 2000);
+  }
+
+  /** Stop a process now: its children first (sibling Workers that would outlive it), then its own Worker. */
+  private terminate(proc: Proc, code: number): void {
+    if (proc.exited) return;
+    proc.children.killAll('SIGKILL');
+    proc.worker.terminate();
+    proc.resolveExit(code);
   }
 
   private cleanup(proc: Proc): void {
@@ -256,6 +255,8 @@ export class ProcessHost {
     for (const socket of proc.sockets.values()) socket.close();
     proc.sockets.clear();
     proc.ipc?.closed();
+    // Exited on its own: its children get SIGTERM (and the grace period), as a real parent's would.
+    proc.children.killAll('SIGTERM');
     this.procs.delete(proc);
     queueMicrotask(() => proc.worker.terminate());
   }

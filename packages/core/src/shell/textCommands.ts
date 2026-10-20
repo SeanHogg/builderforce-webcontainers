@@ -62,7 +62,9 @@ function headTail(which: 'head' | 'tail'): Command {
     const numeric = ctx.args.find((a) => /^-\d+$/.test(a));
     const { values, operands } = parseFlags(ctx.args.filter((a) => a !== numeric), ['n']);
     const count = numeric ? Number(numeric.slice(1)) : values.n !== undefined ? Number(values.n) : 10;
-    const files = await inputs(ctx, operands, which);
+    // head on stdin stops reading once it has its lines (and exits, closing the pipe), as the real one does.
+    const fromStdin = which === 'head' && (!operands.length || (operands.length === 1 && operands[0] === '-'));
+    const files = fromStdin ? [{ label: '(standard input)', text: await ctx.io.stdin.readLines(count) }] : await inputs(ctx, operands, which);
     if (typeof files === 'number') return files;
     files.forEach((file, index) => {
       if (files.length > 1) ctx.io.stdout(`${index ? '\n' : ''}==> ${file.label} <==\n`);

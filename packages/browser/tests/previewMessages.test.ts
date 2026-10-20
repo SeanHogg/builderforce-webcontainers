@@ -35,4 +35,17 @@ describe('listenToPreview', () => {
     messages.dispose();
     expect(win.attached).toBe(false);
   });
+
+  it('requires the runtime nonce when it has one, so another frame cannot claim this base by href', () => {
+    const win = fakeWindow();
+    const messages = listenToPreview(win, 'https://preview.test', '/__bfwc/p1/', 'n0nce');
+    const logs: PreviewConsoleMessage[] = [];
+    messages.onConsole((m) => logs.push(m));
+    const href = 'https://preview.test/__bfwc/p1/index.html';
+    win.post('https://preview.test', { type: CONSOLE_MESSAGE_TYPE, level: 'log', text: 'no nonce', href });
+    win.post('https://preview.test', { type: CONSOLE_MESSAGE_TYPE, level: 'log', text: 'wrong nonce', href, nonce: 'other' });
+    win.post('https://preview.test', { type: CONSOLE_MESSAGE_TYPE, level: 'log', text: 'mine', href, nonce: 'n0nce' });
+    expect(logs).toEqual([{ level: 'log', text: 'mine', href }]);
+    messages.dispose();
+  });
 });

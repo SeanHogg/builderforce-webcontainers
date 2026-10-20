@@ -111,6 +111,42 @@ describe('preview bridge: WebSockets', () => {
   });
 });
 
+describe('preview bridge: pages that go away', () => {
+  it('hangs up on the server when the page port can no longer be posted to', async () => {
+    const { win } = await runtime();
+    let closed = false;
+    const deadPort = {
+      onmessage: null,
+      postMessage: () => {
+        throw new DOMException('The port is detached.', 'DataCloneError');
+      },
+      close: () => void (closed = true),
+    };
+    win.post(ORIGIN, { type: SOCKET_MESSAGE_TYPE, href: `${ORIGIN}${BASE}`, port: 3000, path: '/hmr' }, [deadPort as unknown as MessagePort]);
+    expect(bridge!.openSockets).toBe(1);
+    for (let i = 0; i < 200 && bridge!.openSockets; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(bridge!.openSockets).toBe(0);
+    expect(closed).toBe(true);
+  });
+
+  it('requires the runtime nonce on socket requests when it has one', async () => {
+    const { win, cookies } = await runtime();
+    bridge!.dispose(); // this one without the kernel: count the upgrades a nonce lets through
+    let upgrades = 0;
+    bridge = listenToPreviewBridge(win, ORIGIN, BASE, { upgrade: () => (upgrades++, undefined), cookies, nonce: 'n0nce' });
+    const without = new MessageChannel();
+    win.post(ORIGIN, { type: SOCKET_MESSAGE_TYPE, href: `${ORIGIN}${BASE}`, port: 3000, path: '/' }, [without.port2]);
+    expect(bridge.openSockets).toBe(0);
+    const withNonce = new MessageChannel();
+    const page = inbox(withNonce.port1);
+    win.post(ORIGIN, { type: SOCKET_MESSAGE_TYPE, href: `${ORIGIN}${BASE}`, nonce: 'n0nce', port: 3000, path: '/' }, [withNonce.port2]);
+    expect(await page.next()).toMatchObject({ kind: 'close', code: 1006 }); // accepted; no upgrade answered
+    expect(upgrades).toBe(1);
+    without.port1.close();
+    withNonce.port1.close();
+  });
+});
+
 describe('preview bridge: document.cookie', () => {
   it('mirrors the jar into a virtual-server page and stores what the page assigns', async () => {
     const { win, cookies } = await runtime();

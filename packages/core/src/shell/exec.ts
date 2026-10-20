@@ -1,7 +1,9 @@
 /**
  * The executor: runs a parsed script. Lists honour `&&`/`||`/`;`/`&`; pipeline
  * stages run concurrently, joined by in-memory pipes, and a pipeline's status is
- * the rightmost non-zero stage (pipefail) — not only the last stage. Redirects
+ * the rightmost non-zero stage (pipefail, on by default; `set +o pipefail` gives
+ * the POSIX last-stage status). A stage writing to a pipe whose reader is gone
+ * stops with EPIPE (SIGPIPE's status, 141) instead of buffering forever. Redirects
  * (here-documents included) swap a stage's stdin/stdout/stderr. Compound
  * commands run through compound.ts. Dispatch order per simple command: shell
  * functions, builtins,
@@ -11,6 +13,7 @@
  */
 import type { System } from '../system/types.js';
 import { InputQueue, textChunks } from '../system/terminal.js';
+import { SIGPIPE_STATUS, brokePipe, isBrokenPipe } from '../system/signals.js';
 import type { Command as CommandNode, FunctionDefinition, Pipeline, Redirect, Script, SimpleCommand, Word } from './ast.js';
 import { parse, ShellSyntaxError } from './parse.js';
 import { expandWord, expandWords, type ExpandContext } from './expand.js';
@@ -18,6 +21,7 @@ import { BUILTINS, COREUTILS, type BackgroundJob, type ShellState } from './buil
 import { resolvePath, type CommandContext } from './context.js';
 import { devServerHandoff, runDevServerHandoff } from './devHandoff.js';
 import { runCompound, type Flow, type ScriptRunner } from './compound.js';
+import { DEFAULT_SHELL_SETTINGS, pipelineStatus, type ShellSettings } from './options.js';
 
 export interface ShellIO {
   stdout(text: string): void;
@@ -46,6 +50,12 @@ export interface ShellOptions {
   commands?: Record<string, ShellCommand>;
   /** Functions inherited from a parent shell (subshells and `$(…)`). */
   functions?: Map<string, FunctionDefinition>;
+  /**
+   * Fail a pipeline when any stage fails (status: the rightmost non-zero).
+   * Default true; false is POSIX (the last stage's status). Scripts switch it
+   * with `set -o pipefail` / `set +o pipefail`.
+   */
+  pipefail?: boolean;
 }
 
 let nextShellPid = 500;
@@ -59,6 +69,7 @@ export class Shell implements ShellState, ScriptRunner {
   flow?: Flow;
   positional: string[];
   readonly functions: Map<string, FunctionDefinition>;
+  readonly settings: ShellSettings;
   readonly jobs = new Map<number, BackgroundJob>();
   /** One frame per running function: names declared `local`, with the value to restore. */
   readonly localFrames: Array<Map<string, string | undefined>> = [];
@@ -73,11 +84,12 @@ export class Shell implements ShellState, ScriptRunner {
     this.env = { ...options.env, PWD: options.cwd };
     this.positional = [...(options.positional ?? [])];
     this.functions = new Map(options.functions);
+    this.settings = { ...DEFAULT_SHELL_SETTINGS, pipefail: options.pipefail ?? DEFAULT_SHELL_SETTINGS.pipefail };
   }
 
   /** A child shell for `npm run` / subshells: same IO, its own cwd, environment and functions. */
   fork(overrides: { cwd?: string; env?: Record<string, string>; positional?: string[] }): Shell {
-    return new Shell({ ...this.options, cwd: overrides.cwd ?? this.cwd, env: { ...this.env, ...overrides.env }, positional: overrides.positional ?? this.positional, functions: this.functions });
+    return new Shell({ ...this.options, cwd: overrides.cwd ?? this.cwd, env: { ...this.env, ...overrides.env }, positional: overrides.positional ?? this.positional, functions: this.functions, pipefail: this.settings.pipefail });
   }
 
   subshell(): Shell {
@@ -170,23 +182,32 @@ export class Shell implements ShellState, ScriptRunner {
   private async runPipeline(pipeline: Pipeline, io: ShellIO, input: JobInput, signal: AbortSignal): Promise<number> {
     const count = pipeline.commands.length;
     const pipes = Array.from({ length: count - 1 }, () => new InputQueue());
-    const statuses = await Promise.all(
+    // Every stage settles before the pipeline does: none is left running detached.
+    const settled = await Promise.allSettled(
       pipeline.commands.map(async (command, i) => {
         const stdin: JobInput = i === 0 ? input : { queue: pipes[i - 1]! };
         const stdout = i === count - 1 ? io.stdout : (text: string) => pipes[i]!.push(text);
         const stageIO: ShellIO = { stdout, stderr: io.stderr, isTerminal: io.isTerminal && i === count - 1 };
         try {
           return await this.runCommand(command, stageIO, stdin, signal, count === 1);
+        } catch (error) {
+          // Its own pipe broke (the reader exited): SIGPIPE ends the stage. An enclosing
+          // pipeline's pipe is not its to absorb: that travels on, ending loops on the way.
+          if (i < count - 1 && brokePipe(error, pipes[i]!)) return SIGPIPE_STATUS;
+          throw error;
         } finally {
           if (i < count - 1) pipes[i]!.push(null);
+          if (i > 0) pipes[i - 1]!.closeReader(); // its reader is gone: the writer upstream gets EPIPE
         }
       }),
     );
-    // pipefail: any non-zero stage fails the pipeline. The status is the rightmost
-    // non-zero, so `build 2>&1 | tail` reports the build rather than tail's 0.
-    // A one-stage pipeline (a non-pipeline command) is unchanged.
-    let status = 0;
-    for (const stage of statuses) if (stage !== 0) status = stage;
+    const failed = settled.find((stage): stage is PromiseRejectedResult => stage.status === 'rejected');
+    if (failed) throw failed.reason;
+    const statuses = settled.map((stage) => (stage as PromiseFulfilledResult<number>).value);
+    // pipefail (the default): any non-zero stage fails the pipeline, the status the
+    // rightmost non-zero, so `build 2>&1 | tail` reports the build rather than tail's 0.
+    // A one-stage pipeline (a non-pipeline command) is the same either way.
+    const status = pipelineStatus(statuses, this.settings);
     return pipeline.negate ? (status === 0 ? 1 : 0) : status;
   }
 
@@ -337,9 +358,22 @@ export class Shell implements ShellState, ScriptRunner {
       io.stderr(`bfsh: command not found: ${name}\n`);
       return 127;
     }
-    // The shell's own IO is text; a child's bytes are decoded as they enter it.
-    child.onStdout(textChunks((text) => text !== null && io.stdout(text)));
-    child.onStderr(textChunks((text) => text !== null && io.stderr(text)));
+    // The shell's own IO is text; a child's bytes are decoded as they enter it. Writing into
+    // a pipe whose reader has exited kills the child with SIGPIPE (its timers stop with it),
+    // then raises the break here, so the stage owning the pipe ends — a loop around it too.
+    let brokenPipe: unknown;
+    const relay = (write: (text: string) => void) => (text: string | null) => {
+      if (text === null || brokenPipe !== undefined) return;
+      try {
+        write(text);
+      } catch (error) {
+        if (!isBrokenPipe(error)) throw error;
+        brokenPipe = error;
+        child.kill('SIGPIPE');
+      }
+    };
+    child.onStdout(textChunks(relay(io.stdout)));
+    child.onStderr(textChunks(relay(io.stderr)));
     let stop: (() => void) | undefined;
     if (size && input.setRawSink) input.setRawSink((data) => child.write(data));
     else stop = input.queue.subscribe((chunk) => (chunk === null ? child.closeStdin() : child.write(chunk)));
@@ -347,7 +381,9 @@ export class Shell implements ShellState, ScriptRunner {
     if (signal.aborted) onAbort();
     signal.addEventListener('abort', onAbort);
     try {
-      return await child.exit;
+      const code = await child.exit;
+      if (brokenPipe !== undefined) throw brokenPipe;
+      return code;
     } finally {
       signal.removeEventListener('abort', onAbort);
       if (size && input.setRawSink) input.setRawSink(undefined);

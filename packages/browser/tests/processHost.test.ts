@@ -46,4 +46,50 @@ describe('ProcessHost (worker per process)', () => {
     expect(await proc.wait()).toBe(143);
     expect(await output).toBe('ignoring\n');
   });
+
+  const SERVER = `require('http').createServer((req, res) => res.end('ok')).listen(3000);`;
+  const listening = (processes: ReturnType<typeof host>['processes']) => new Promise<void>((resolve) => processes.servers.onListening(() => resolve()));
+
+  it('SIGKILL ends the children a shell started (their Workers are siblings), freeing their ports', async () => {
+    const { processes } = host({ 'server.js': SERVER });
+    const ready = listening(processes);
+    const proc = processes.run('bfsh', ['-c', 'node server.js']);
+    await ready;
+    expect(processes.list()).toHaveLength(2);
+    proc.kill('SIGKILL');
+    expect(await proc.wait()).toBe(137);
+    expect(processes.ports.has(3000)).toBe(false);
+    expect(processes.list()).toEqual([]);
+  });
+
+  it('a parent terminated after the grace period takes its spawned and forked children with it', async () => {
+    const { processes } = host({
+      'server.js': SERVER,
+      'parent.js': `const cp = require('child_process'); cp.spawn('node', ['server.js']); cp.fork('idle.js'); process.on('SIGTERM', () => {}); setTimeout(() => {}, 3000);`,
+      'idle.js': `process.on('SIGTERM', () => {}); setTimeout(() => {}, 3000);`,
+    }, 50);
+    const ready = listening(processes);
+    const proc = processes.run('node', ['parent.js']);
+    await ready;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(processes.list()).toHaveLength(3);
+    proc.kill();
+    expect(await proc.wait()).toBe(143);
+    expect(processes.ports.has(3000)).toBe(false);
+    expect(processes.list()).toEqual([]);
+  });
+
+  it('a detached child outlives its parent', async () => {
+    const { processes } = host({
+      'server.js': SERVER,
+      'parent.js': `require('child_process').spawn('node', ['server.js'], { detached: true }).unref();`,
+    });
+    const ready = listening(processes);
+    const proc = processes.run('node', ['parent.js']);
+    await ready;
+    expect(await proc.wait()).toBe(0);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(processes.ports.has(3000)).toBe(true);
+    processes.dispose();
+  });
 });

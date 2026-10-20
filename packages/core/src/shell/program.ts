@@ -16,11 +16,13 @@ import { BUILTINS, COREUTILS, SYSTEM_PROGRAMS } from './builtins.js';
 import { npmCommand, npxCommand } from './npm.js';
 import { pnpmCommand, yarnCommand } from './packageManagers.js';
 import { glob } from './expand.js';
+import { DEFAULT_SHELL_SETTINGS, takeInvocationOptions, type ShellSettings } from './options.js';
 
 export const SHELL_COMMANDS: Record<string, ShellCommand> = { npm: npmCommand, npx: npxCommand, pnpm: pnpmCommand, yarn: yarnCommand };
 
-function createShell(ctx: ProgramContext, positional: string[] = []): Shell {
+function createShell(ctx: ProgramContext, positional: string[] = [], settings: ShellSettings = DEFAULT_SHELL_SETTINGS): Shell {
   return new Shell({
+    pipefail: settings.pipefail,
     system: ctx.system,
     cwd: ctx.cwd,
     env: { ...ctx.env, SHELL: '/bin/bfsh' },
@@ -104,9 +106,9 @@ function completer(shell: Shell) {
   };
 }
 
-async function interactive(ctx: ProgramContext): Promise<number> {
+async function interactive(ctx: ProgramContext, settings: ShellSettings): Promise<number> {
   const terminal = ctx.io.terminal!;
-  const shell = createShell(ctx);
+  const shell = createShell(ctx, [], settings);
   const io = text(ctx);
   terminal.setRawMode(true);
   const editor = new LineEditor({ write: (t) => ctx.io.stdout(t), history: shell.history, complete: completer(shell) });
@@ -200,9 +202,19 @@ async function interactive(ctx: ProgramContext): Promise<number> {
   return code;
 }
 
+/**
+ * `bfsh [-o|+o OPTION]… -c SCRIPT [ARGS…]`, `bfsh [-o|+o OPTION]… FILE [ARGS…]`,
+ * or no arguments (interactive / stdin). `+o pipefail` opts out of pipefail.
+ */
 export const shellProgram: Program = async (ctx) => {
-  const args = ctx.args.filter((a) => a !== '-l' && a !== '--login' && a !== '-i');
-  if (args[0] === '-c') return runOnce(ctx, createShell(ctx, args.slice(2)), args[1] ?? '');
+  const settings: ShellSettings = { ...DEFAULT_SHELL_SETTINGS };
+  const taken = takeInvocationOptions(ctx.args.filter((a) => a !== '-l' && a !== '--login' && a !== '-i'), settings);
+  if ('error' in taken) {
+    ctx.io.stderr(`${taken.error}\n`);
+    return 2;
+  }
+  const args = taken.rest;
+  if (args[0] === '-c') return runOnce(ctx, createShell(ctx, args.slice(2), settings), args[1] ?? '');
   if (args[0]) {
     const path = args[0].startsWith('/') ? args[0] : join(ctx.cwd, args[0]);
     const source = ctx.system.fs.readText(path);
@@ -210,14 +222,14 @@ export const shellProgram: Program = async (ctx) => {
       ctx.io.stderr(`bfsh: ${args[0]}: No such file or directory\n`);
       return 127;
     }
-    return runOnce(ctx, createShell(ctx, args.slice(1)), source.replace(/^#!.*\n/, ''));
+    return runOnce(ctx, createShell(ctx, args.slice(1), settings), source.replace(/^#!.*\n/, ''));
   }
-  if (ctx.io.terminal) return interactive(ctx);
+  if (ctx.io.terminal) return interactive(ctx, settings);
   // No terminal, no script: read commands from stdin.
   const { input, stop } = stdinJob(ctx);
   const source = await input.queue.readAll();
   stop();
-  const shell = createShell(ctx);
+  const shell = createShell(ctx, [], settings);
   const empty = new InputQueue();
   empty.push(null);
   return shell.exec(source, text(ctx), { queue: empty }, ctx.signal);

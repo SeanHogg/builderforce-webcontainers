@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { VirtualFileSystem, type FsChange } from '../src/vfs.js';
-import { exportZip, importZip } from '../src/archive.js';
+import { ZipLimitError, exportZip, importZip } from '../src/archive.js';
+import { zipSync } from 'fflate';
 import { authHeaders, parseNpmrc, readNpmConfig, registryFor } from '../src/installer/npmrc.js';
 import { RegistryClient, type FetchLike } from '../src/installer/registry.js';
 import { transformHtml, CONSOLE_MESSAGE_TYPE } from '../src/html.js';
@@ -59,6 +60,34 @@ describe('zip export and import', () => {
     const full = new VirtualFileSystem();
     importZip(full, exportZip(fs, { level: 0 }), '/copy');
     expect(full.readText('/copy/node_modules/react/index.js')).toBe('module.exports = 1');
+  });
+
+  it('refuses a zip past its limits (entries, one entry, the total) before writing anything', () => {
+    const zip = zipSync({ 'a.txt': new Uint8Array(100), 'b.txt': new Uint8Array(100), 'c.txt': new Uint8Array(100) });
+    const refused = (limits: Parameters<typeof importZip>[3]) => {
+      const fs = new VirtualFileSystem();
+      let error: unknown;
+      try {
+        importZip(fs, zip, '/', limits);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(fs.list()).toEqual([]);
+      return error as ZipLimitError;
+    };
+    expect(refused({ maxEntries: 2 })).toMatchObject({ code: 'EZIPLIMIT', limit: 'maxEntries' });
+    expect(refused({ maxEntryBytes: 99 })).toMatchObject({ limit: 'maxEntryBytes', entry: 'a.txt' });
+    expect(refused({ maxTotalBytes: 250 })).toMatchObject({ limit: 'maxTotalBytes', entry: 'c.txt' });
+    expect(refused({ maxTotalBytes: 250 })).toBeInstanceOf(ZipLimitError);
+    const fits = new VirtualFileSystem();
+    importZip(fits, zip, '/', { maxEntries: 3, maxEntryBytes: 100, maxTotalBytes: 300 });
+    expect(fits.list()).toHaveLength(3);
+  });
+
+  it('keeps entry names inside the target directory', () => {
+    const fs = new VirtualFileSystem();
+    importZip(fs, zipSync({ '../../escape.txt': new TextEncoder().encode('x') }), '/sub');
+    expect(fs.list()).toEqual(['/sub/escape.txt']);
   });
 });
 

@@ -228,7 +228,10 @@ and closing, for a host that lists running servers.
   `( … )`, here-documents (`<<EOF`, `<<-EOF`, `<<'EOF'`), `test`/`[ … ]`, `read`,
   `shift`, `break`/`continue`, `jobs` and `wait`; `cd`, `ls -la`, `cat`,
   `mkdir -p`, `rm -rf`, `cp -r`, `mv`, `grep`, `head`, `tail` and friends.
-  Unknown commands print `command not found`.
+  Unknown commands print `command not found`. Pipelines fail when any stage
+  fails (`pipefail` is on); `set +o pipefail` — or `bfsh +o pipefail -c …` —
+  gives the POSIX last-stage status. A stage writing to a pipe whose reader has
+  exited stops with SIGPIPE (status 141), so `yes | head -1` ends.
 * **Processes talking to each other.** `child_process.fork()` opens a message
   channel (`child.send` ↔ `process.on('message')`, `disconnect`), and
   `worker_threads` Workers run as processes of their own — in the browser, their
@@ -266,16 +269,19 @@ runtime.onPreviewConsole(({ level, text }) => console.log(`[preview ${level}]`, 
 runtime.setPreviewScripts(['window.__TEST_HOOK__ = true;']); // or `previewScripts` at start
 runtime.reload();
 
-runtime.listProcesses(); // [{ pid, command: 'node', args: ['server.js'], cwd: '/home/project', startedAt, ports: [3000] }]
+runtime.listProcesses(); // [{ pid, command: 'node', args: ['server.js'], cwd: '/', startedAt, ports: [3000] }]
 ```
 
 Everything above addresses the project as `/`. Node programs see it where it
 really lives, `runtime.root` (`/home/project` unless you pass `root`): that is
 where `run` starts and what `process.cwd()` returns, with `HOME` at `/home/user`
-beside it. Keeping the project below the file-system root matters to file
+beside it. `run`'s `cwd` and `listProcesses()`'s are project paths like the rest
+(`run('npm', ['i'], { cwd: '/packages/web' })`; `..` cannot leave the project). Keeping the project below the file-system root matters to file
 watchers — chokidar, under Vite and so SvelteKit, mishandles watching `/` itself.
 
-The zip is plain zip (any unzip tool opens it). To keep a snapshot across
+The zip is plain zip (any unzip tool opens it). `importZip` refuses one past
+250,000 entries, 256 MB per entry or 1 GB in all (a `ZipLimitError`, nothing
+written); pass `limits` as its third argument to change that. To keep a snapshot across
 reloads, `createSnapshotStore()` holds them in IndexedDB, keeping the most
 recently used few and failing soft when storage is blocked:
 

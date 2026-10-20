@@ -45,6 +45,62 @@ describe('shell execution', () => {
     expect(await sh(kernel, 'true')).toMatchObject({ code: 0 });
   });
 
+  it('opts out to POSIX pipeline status with set +o pipefail, or bfsh +o pipefail', async () => {
+    const kernel = kernelWith();
+    // POSIX: the last stage's status.
+    expect(await sh(kernel, 'set +o pipefail; false | true')).toMatchObject({ code: 0 });
+    expect(await sh(kernel, 'set +o pipefail; true | false')).toMatchObject({ code: 1 });
+    expect(await sh(kernel, 'set +o pipefail; false | true && echo ran')).toEqual({ output: 'ran\n', code: 0 });
+    // And back on, mid-script; subshells inherit the setting.
+    expect(await sh(kernel, 'set +o pipefail; set -o pipefail; false | true')).toMatchObject({ code: 1 });
+    expect(await sh(kernel, 'set +o pipefail; (false | true)')).toMatchObject({ code: 0 });
+    // At invocation.
+    expect(await exec(kernel, 'bfsh', ['+o', 'pipefail', '-c', 'false | true'])).toMatchObject({ code: 0 });
+    expect(await exec(kernel, 'bfsh', ['-o', 'pipefail', '-c', 'false | true'])).toMatchObject({ code: 1 });
+    // Listing, positional parameters, and refusing what is not supported.
+    expect((await sh(kernel, 'set -o')).output).toBe('pipefail       on\n');
+    expect((await sh(kernel, 'set +o pipefail; set +o')).output).toBe('set +o pipefail\n');
+    expect((await sh(kernel, 'set -- a b; echo $2 $#')).output).toBe('b 2\n');
+    expect(await sh(kernel, 'set -o nosuch')).toMatchObject({ code: 2 });
+    // Real options this shell does not model are accepted and ignored, so ordinary
+    // `set -euo pipefail` script headers keep working; pipefail inside the cluster is real.
+    expect(await sh(kernel, 'set -e; echo ok')).toMatchObject({ code: 0, output: 'ok\n' });
+    expect(await sh(kernel, 'set -o errexit -x; echo ok')).toMatchObject({ code: 0, output: 'ok\n' });
+    expect(await sh(kernel, 'set +o pipefail; set -euo pipefail; false | true')).toMatchObject({ code: 1 });
+    expect(await exec(kernel, 'bfsh', ['+o', 'nosuch', '-c', 'true'])).toMatchObject({ code: 2 });
+  });
+
+  it('stops a writer whose reader exited with SIGPIPE (141) instead of buffering forever', async () => {
+    const kernel = kernelWith();
+    // An in-process writer (a builtin in an endless loop) and a spawned one (node).
+    expect(await sh(kernel, 'while true; do echo y; done | head -n 1')).toEqual({ output: 'y\n', code: 141 });
+    expect(await sh(kernel, `node -e "setInterval(() => console.log('y'), 1)" | head -n 2`)).toEqual({ output: 'y\ny\n', code: 141 });
+    // POSIX status: the last stage's, so the pipeline succeeds.
+    expect(await sh(kernel, 'set +o pipefail; while true; do echo y; done | head -n 1')).toEqual({ output: 'y\n', code: 0 });
+    // A writer that finished before its reader exited is unaffected.
+    expect(await sh(kernel, `printf 'a\\nb\\n' | head -n 1`)).toEqual({ output: 'a\n', code: 0 });
+  });
+
+  it('ends a loop, group or nested pipeline whose writes hit a closed pipe, after the earlier scenarios on one kernel', async () => {
+    // The scenarios above, then SIGPIPE, in file order on one kernel: a broken pipe raised
+    // inside a loop must end the stage, not be absorbed by the loop body's own pipeline.
+    const kernel = kernelWith();
+    expect(await sh(kernel, `X="a  b"; echo $X; false || echo fallback; echo $?`)).toEqual({ output: 'a b\nfallback\n0\n', code: 0 });
+    expect(await sh(kernel, 'false | true')).toMatchObject({ code: 1 });
+    expect((await sh(kernel, `node -e 'process.exit(3)' | node -e 'process.exit(4)'`)).code).toBe(4);
+    expect(await sh(kernel, 'set +o pipefail; false | true')).toMatchObject({ code: 0 });
+    expect(await sh(kernel, 'while true; do echo y; done | head -n 1')).toEqual({ output: 'y\n', code: 141 });
+    expect(await sh(kernel, `node -e "setInterval(() => console.log('y'), 1)" | head -n 2`)).toEqual({ output: 'y\ny\n', code: 141 });
+    // Nested: the inner pipeline's last stage writes into the outer pipe; a group; a for loop.
+    expect(await sh(kernel, 'while true; do echo y | cat; done | head -n 1')).toEqual({ output: 'y\n', code: 141 });
+    expect(await sh(kernel, '{ while true; do echo y; done; echo never; } | head -n 1')).toEqual({ output: 'y\n', code: 141 });
+    expect(await sh(kernel, 'for i in 1 2 3; do while true; do echo $i; done; done | head -n 1; echo after $?')).toEqual({ output: '1\nafter 141\n', code: 0 });
+    // A spawned writer inside a loop: SIGPIPE kills it and ends the loop around it.
+    expect(await sh(kernel, `while true; do node -e "console.log('y')"; done | head -n 1`)).toEqual({ output: 'y\n', code: 141 });
+    // The kernel is still usable afterwards: nothing left running holds it up.
+    expect(await sh(kernel, 'echo still here')).toEqual({ output: 'still here\n', code: 0 });
+  });
+
   it('pipes, redirects and command substitution', async () => {
     const kernel = kernelWith();
     const { output } = await sh(kernel, `printf 'b\\na\\nc\\n' | grep -v c | head -n 1; echo hi > out.txt; echo there >> out.txt; cat out.txt; cat < out.txt | wc -l; echo "[$(echo inner)]"; nosuch 2> err.txt; cat err.txt`);

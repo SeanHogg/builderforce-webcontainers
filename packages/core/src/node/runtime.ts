@@ -6,6 +6,7 @@
  */
 import type { ProgramIO, System, ThreadInfo } from '../system/types.js';
 import type { IpcEndpoint } from '../system/ipc.js';
+import { signalExitCode } from '../system/signals.js';
 import { attachProcessChannel } from './ipc.js';
 import { threadErrorEnvelope } from './workerThreads.js';
 import { Buffer } from './buffer.js';
@@ -51,8 +52,6 @@ export interface NodeInstance {
   /** Keep the process alive until the returned function is called. */
   hold(): () => void;
 }
-
-const SIGNAL_CODES: Record<string, number> = { SIGINT: 130, SIGTERM: 143, SIGKILL: 137, SIGHUP: 129 };
 
 export async function startNode(options: NodeOptions): Promise<NodeInstance> {
   await esmReady;
@@ -188,7 +187,7 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
         loop._run(() => proc.emit(signal, signal));
         return;
       }
-      finish(SIGNAL_CODES[signal] ?? 1);
+      finish(signalExitCode(signal));
     },
     reportUncaught: uncaught,
     hold: () => loop.hold(),

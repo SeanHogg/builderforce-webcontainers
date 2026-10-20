@@ -4,7 +4,8 @@
  * reload can `importZip` an installed `node_modules` instead of reinstalling.
  *
  * Bounded: snapshots over `maxBytes` are not stored, and only the
- * `maxEntries` most recently used are kept. Every operation fails soft —
+ * `maxEntries` most recently used are kept. Recency is read from a `usedAt`
+ * index walked with a key cursor, so pruning and `keys()` never load a zip. Every operation fails soft —
  * storage blocked (private windows) or full means a miss, never a throw.
  */
 
@@ -36,6 +37,9 @@ interface Row {
 }
 
 const STORE = 'snapshots';
+const USED_AT = 'usedAt';
+/** v1: the store; v2: the `usedAt` index (built over existing rows by the upgrade itself). */
+const DB_VERSION = 2;
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -62,9 +66,11 @@ export function createSnapshotStore(options: SnapshotStoreOptions = {}): Snapsho
       const factory = options.indexedDB ?? globalThis.indexedDB;
       if (!factory) return undefined;
       try {
-        const req = factory.open(options.name ?? 'bfwc-snapshots', 1);
+        const req = factory.open(options.name ?? 'bfwc-snapshots', DB_VERSION);
         req.onupgradeneeded = () => {
-          if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE, { keyPath: 'key' });
+          const db = req.result;
+          const store = db.objectStoreNames.contains(STORE) ? req.transaction!.objectStore(STORE) : db.createObjectStore(STORE, { keyPath: 'key' });
+          if (!store.indexNames.contains(USED_AT)) store.createIndex(USED_AT, USED_AT);
         };
         return await request(req);
       } catch {
@@ -72,10 +78,19 @@ export function createSnapshotStore(options: SnapshotStoreOptions = {}): Snapsho
       }
     })());
 
-  const rows = async (db: IDBDatabase): Promise<Row[]> => {
-    const all = (await request(db.transaction(STORE, 'readonly').objectStore(STORE).getAll())) as Row[];
-    return all.sort((a, b) => b.usedAt - a.usedAt);
-  };
+  /** Keys, most recently used first — walked off the `usedAt` index; no zip is read. */
+  const keysByRecency = (db: IDBDatabase): Promise<string[]> =>
+    new Promise((resolve, reject) => {
+      const keys: string[] = [];
+      const cursor = db.transaction(STORE, 'readonly').objectStore(STORE).index(USED_AT).openKeyCursor(null, 'prev');
+      cursor.onsuccess = () => {
+        const at = cursor.result;
+        if (!at) return resolve(keys);
+        keys.push(at.primaryKey as string);
+        at.continue();
+      };
+      cursor.onerror = () => reject(cursor.error);
+    });
 
   return {
     async load(key) {
@@ -100,10 +115,10 @@ export function createSnapshotStore(options: SnapshotStoreOptions = {}): Snapsho
         const tx = db.transaction(STORE, 'readwrite');
         tx.objectStore(STORE).put({ key, zip, usedAt: Date.now() } satisfies Row);
         await done(tx);
-        const stale = (await rows(db)).slice(maxEntries);
+        const stale = (await keysByRecency(db)).slice(maxEntries);
         if (stale.length) {
           const prune = db.transaction(STORE, 'readwrite');
-          for (const row of stale) prune.objectStore(STORE).delete(row.key);
+          for (const staleKey of stale) prune.objectStore(STORE).delete(staleKey);
           await done(prune);
         }
         return true;
@@ -126,7 +141,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions = {}): Snapsho
       const db = await open();
       if (!db) return [];
       try {
-        return (await rows(db)).map((row) => row.key);
+        return await keysByRecency(db);
       } catch {
         return [];
       }

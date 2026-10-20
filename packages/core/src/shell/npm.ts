@@ -15,6 +15,7 @@ import { parseFlags, type CommandContext } from './context.js';
 import type { JobInput, Shell } from './exec.js';
 import { devServerHandoff } from './devHandoff.js';
 import { hostNow } from '../node/hostClock.js';
+import { isBrokenPipe } from '../system/signals.js';
 
 export const NPM_VERSION = '10.8.2';
 
@@ -56,6 +57,7 @@ async function install(ctx: CommandContext, options: Partial<InstallOptions>, di
     ctx.io.stdout(`\n${parts.length ? parts.join(', ') : 'up to date'}, audited ${result.total + 1} packages in ${seconds}s\n`);
     return 0;
   } catch (error) {
+    if (isBrokenPipe(error)) throw error; // its reader exited: SIGPIPE, not an install failure
     if (progress) ctx.io.stdout('\r\x1b[K');
     if (ctx.signal.aborted) return 130;
     ctx.io.stderr(`npm error ${error instanceof Error ? error.message : String(error)}\n`);

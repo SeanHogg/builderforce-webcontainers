@@ -105,7 +105,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
       ? createIpcEndpoint((data) => deps.post({ type: 'child-ipc', childId, data }), () => deps.post({ type: 'child-ipc-disconnect', childId }))
       : undefined;
     children.set(childId, { stdout, stderr, exit: resolveExit, ipc });
-    deps.post({ type: 'spawn', childId, command, args, cwd: options.cwd, env: options.env, terminal: options.terminal, ipc: options.ipc, thread: options.thread });
+    deps.post({ type: 'spawn', childId, command, args, cwd: options.cwd, env: options.env, terminal: options.terminal, ipc: options.ipc, thread: options.thread, detached: options.detached });
     return {
       pid: childId,
       onStdout: (l) => (stdout.add(l), () => stdout.delete(l)),

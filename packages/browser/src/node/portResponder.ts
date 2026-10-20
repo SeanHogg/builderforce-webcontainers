@@ -29,6 +29,8 @@ export interface PortResponderOptions {
   bridge?: boolean;
   /** The host's preview scripts, read per page so `setPreviewScripts` applies to virtual servers too. */
   scripts?: () => readonly string[];
+  /** The runtime's nonce, carried by every message the injected bridge posts to the host. */
+  nonce?: string;
 }
 
 export interface OpenedPortResponse {
@@ -70,7 +72,7 @@ export async function openPortResponse(host: ProcessHost, request: WireRequest, 
   // A compressed body cannot be edited in flight; such a page goes without the bridge.
   const hasBody = request.method !== 'HEAD' && response.status !== 204 && response.status !== 304;
   if (options.bridge !== false && hasBody && type && /^\s*text\/html/i.test(out[type]!) && !headerKey(out, 'content-encoding')) {
-    body = injectBridge(body, bridgeFor(jar, target.path, options.scripts?.() ?? []));
+    body = injectBridge(body, bridgeFor(jar, target.path, options.scripts?.() ?? [], options.nonce));
     const length = headerKey(out, 'content-length');
     if (length) delete out[length];
     // The bridge pushes a `<meta charset>` past the 1,024-byte prescan; say it in the header instead.
@@ -80,8 +82,8 @@ export async function openPortResponse(host: ProcessHost, request: WireRequest, 
 }
 
 /** The same bridge a dev-server page gets (errors, console, sockets), plus cookies and the host's scripts. */
-function bridgeFor(jar: CookieJar | undefined, path: string, scripts: readonly string[]): string {
-  return [errorBridgeScript(), previewSocketScript(), jar ? previewCookieScript(jar.documentCookie(path)) : '', ...scripts.map(scriptTag)].join('');
+function bridgeFor(jar: CookieJar | undefined, path: string, scripts: readonly string[], nonce?: string): string {
+  return [errorBridgeScript(nonce), previewSocketScript(nonce), jar ? previewCookieScript(jar.documentCookie(path), nonce) : '', ...scripts.map(scriptTag)].join('');
 }
 
 /** Insert `script` into a streamed document, after `<head>` (see `bridgeInsertionPoint`), passing the rest through as it arrives. */

@@ -17,6 +17,16 @@
  * `{ kind: 'close', code, reason }`; host → page: `{ kind: 'open', protocol }`,
  * `{ kind: 'message', data }` (string or ArrayBuffer), `{ kind: 'close', code, reason, wasClean }`.
  * On the cookie channel — page → host `{ kind: 'set-cookie', value }`, host → page `{ kind: 'cookies', value }`.
+ *
+ * A MessagePort gives no signal when the page on the other end goes away, so
+ * the page says so: on `pagehide`, and when it gives up waiting for the host
+ * (the connect timeout), it posts `{ kind: 'close', code: 1001 }` for every
+ * socket still open — otherwise the server's end (an HMR socket) would leak on
+ * every reload.
+ *
+ * Every message to the host carries the runtime's `nonce` (when it has one):
+ * the host accepts a page's messages only with it, so a frame on the preview
+ * origin cannot pass itself off as another runtime's page by its `href` alone.
  */
 
 /** page → host, with a MessagePort: "connect a WebSocket to `port` at `path`". */
@@ -26,8 +36,11 @@ export const COOKIE_MESSAGE_TYPE = 'bfwc:cookies';
 /** How long a page waits for the host to answer a socket before failing it (code 1006). */
 export const SOCKET_CONNECT_TIMEOUT_MS = 15_000;
 
-/** The `WebSocket` replacement; runs in every preview page (dev-server documents and virtual-server HTML). */
-export function previewSocketScript(): string {
+/** `JSON.stringify`, safe inside an inline script. */
+export const scriptLiteral = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
+
+/** The `WebSocket` replacement; runs in every preview page (dev-server documents and virtual-server HTML). `nonce`: the runtime's (see the module doc). */
+export function previewSocketScript(nonce = ''): string {
   return `<script>(function(){
   var Native = window.WebSocket;
   if (!Native || Native.__bfwc) return;
@@ -51,6 +64,10 @@ export function previewSocketScript(): string {
     return null;
   }
   var CONNECTING = 0, OPEN = 1, CLOSING = 2, CLOSED = 3;
+  var live = new Set();
+  window.addEventListener('pagehide', function () {
+    live.forEach(function (s) { s._abandon(); });
+  });
   class VirtualWebSocket extends EventTarget {
     constructor(url, protocols) {
       var t = target(url);
@@ -64,9 +81,10 @@ export function previewSocketScript(): string {
       this._queue = Promise.resolve();
       this._port = channel.port1;
       this._port.onmessage = function (e) { self._receive(e.data); };
-      this._timer = setTimeout(function () { self._receive({ kind: 'close', code: 1006, reason: '', wasClean: false }); }, ${SOCKET_CONNECT_TIMEOUT_MS});
+      this._timer = setTimeout(function () { self._abandon(); }, ${SOCKET_CONNECT_TIMEOUT_MS});
+      live.add(this);
       var list = protocols === undefined ? [] : typeof protocols === 'string' ? [protocols] : Array.from(protocols, String);
-      runtime.postMessage({ type: ${JSON.stringify(SOCKET_MESSAGE_TYPE)}, href: location.href, port: t.port, path: t.path, protocols: list }, '*', [channel.port2]);
+      runtime.postMessage({ type: ${JSON.stringify(SOCKET_MESSAGE_TYPE)}, href: location.href, nonce: ${scriptLiteral(nonce)}, port: t.port, path: t.path, protocols: list }, '*', [channel.port2]);
     }
     get url() { return this._url; }
     get readyState() { return this._state; }
@@ -92,6 +110,12 @@ export function previewSocketScript(): string {
       var port = this._port;
       this._queue.then(function () { port.postMessage({ kind: 'close', code: code, reason: reason === undefined ? '' : String(reason) }); });
     }
+    /** Tell the host this end is gone (it would never know otherwise), then close here. */
+    _abandon() {
+      if (this._state === CLOSED) return;
+      this._port.postMessage({ kind: 'close', code: 1001, reason: '' });
+      this._receive({ kind: 'close', code: 1006, reason: '', wasClean: false });
+    }
     _receive(m) {
       if (!m || this._state === CLOSED) return;
       if (m.kind === 'open' && this._state === CONNECTING) {
@@ -106,6 +130,7 @@ export function previewSocketScript(): string {
       } else if (m.kind === 'close') {
         clearTimeout(this._timer);
         this._state = CLOSED;
+        live.delete(this);
         this._port.close();
         if (!m.wasClean) this._emit(new Event('error'));
         this._emit(new CloseEvent('close', { code: m.code, reason: m.reason || '', wasClean: !!m.wasClean }));
@@ -127,15 +152,12 @@ export function previewSocketScript(): string {
 })();</script>`;
 }
 
-/** `JSON.stringify`, safe inside an inline script. */
-const scriptLiteral = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
-
 /**
  * `document.cookie` for a page a virtual server served: starts from the host's
  * jar (`initial`: the non-HttpOnly cookies for this page's path), stays in sync
  * over a channel, and sends assignments to the host's jar.
  */
-export function previewCookieScript(initial: string): string {
+export function previewCookieScript(initial: string, nonce = ''): string {
   return `<script>(function(){
   var runtime = window.parent !== window ? window.parent : window.opener;
   var cookies = ${scriptLiteral(initial)};
@@ -144,7 +166,7 @@ export function previewCookieScript(initial: string): string {
     var channel = new MessageChannel();
     port = channel.port1;
     port.onmessage = function (e) { if (e.data && e.data.kind === 'cookies') cookies = String(e.data.value); };
-    runtime.postMessage({ type: ${JSON.stringify(COOKIE_MESSAGE_TYPE)}, href: location.href }, '*', [channel.port2]);
+    runtime.postMessage({ type: ${JSON.stringify(COOKIE_MESSAGE_TYPE)}, href: location.href, nonce: ${scriptLiteral(nonce)} }, '*', [channel.port2]);
   }
   function apply(value) {
     var parts = value.split(';'), pair = parts[0], eq = pair.indexOf('=');

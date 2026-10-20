@@ -12,7 +12,7 @@
  *   • the attribution badge is appended unless the host turned it off.
  */
 import { injectAttribution } from './attribution.js';
-import { previewSocketScript } from './previewBridge.js';
+import { previewSocketScript, scriptLiteral } from './previewBridge.js';
 import { hotUpdateScript } from './hot/client.js';
 import { refreshPreambleScript } from './hot/reactRefresh.js';
 
@@ -26,12 +26,14 @@ export const CONSOLE_MESSAGE_LIMIT = 1000;
  * app's console output, to the host page (`window.parent`): how an editor — or
  * an agent — learns what the app did without scraping the iframe. Console
  * arguments are flattened to text (errors with their stack, objects as JSON),
- * each message capped at 4,000 characters.
+ * each message capped at 4,000 characters. Each carries `nonce`, the runtime's
+ * (see previewBridge.ts), which the host checks.
  */
-export function errorBridgeScript(): string {
+export function errorBridgeScript(nonce = ''): string {
   return `<script>(function(){
+  var NONCE = ${scriptLiteral(nonce)};
   var send = function (message, stack) {
-    try { parent.postMessage({ type: ${JSON.stringify(ERROR_MESSAGE_TYPE)}, message: String(message), stack: stack ? String(stack) : undefined, href: location.href }, '*'); } catch (_) {}
+    try { parent.postMessage({ type: ${JSON.stringify(ERROR_MESSAGE_TYPE)}, message: String(message), stack: stack ? String(stack) : undefined, href: location.href, nonce: NONCE }, '*'); } catch (_) {}
   };
   addEventListener('error', function (e) { send(e.message, e.error && e.error.stack); });
   addEventListener('unhandledrejection', function (e) { var r = e.reason; send(r && r.message ? r.message : r, r && r.stack); });
@@ -46,7 +48,7 @@ export function errorBridgeScript(): string {
     console[level] = function () {
       if (sent < ${CONSOLE_MESSAGE_LIMIT}) {
         sent++;
-        try { parent.postMessage({ type: ${JSON.stringify(CONSOLE_MESSAGE_TYPE)}, level: level, text: Array.prototype.map.call(arguments, text).join(' ').slice(0, 4000), href: location.href }, '*'); } catch (_) {}
+        try { parent.postMessage({ type: ${JSON.stringify(CONSOLE_MESSAGE_TYPE)}, level: level, text: Array.prototype.map.call(arguments, text).join(' ').slice(0, 4000), href: location.href, nonce: NONCE }, '*'); } catch (_) {}
       }
       return original.apply(console, arguments);
     };
@@ -69,6 +71,8 @@ export interface HtmlOptions {
   scripts?: readonly string[];
   /** URL of `react-refresh/runtime`; installed before the app so components re-render in place on edits. */
   refreshRuntime?: string;
+  /** The runtime's nonce, carried by every message the bridge posts to the host. */
+  nonce?: string;
 }
 
 /** A host script as a tag. `</script>` inside the body would end the tag early, so it is escaped. */
@@ -88,8 +92,8 @@ export function transformHtml(html: string, options: HtmlOptions): string {
   if (options.attribution !== false) out = injectAttribution(out);
 
   const bridge = [
-    errorBridgeScript(),
-    previewSocketScript(),
+    errorBridgeScript(options.nonce),
+    previewSocketScript(options.nonce),
     hotUpdateScript(base),
     ...(options.scripts ?? []).map(scriptTag),
     ...(options.refreshRuntime ? [refreshPreambleScript(options.refreshRuntime)] : []),

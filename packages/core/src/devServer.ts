@@ -45,6 +45,8 @@ export interface DevServerOptions {
   attribution?: boolean;
   /** Host scripts (JavaScript source) run in every preview page before the app. */
   previewScripts?: readonly string[];
+  /** The runtime's nonce, put in the bridge of every served page (the host accepts preview messages only with it). */
+  previewNonce?: string;
   /**
    * Hot updates: stylesheets swap and React components re-render in place on an
    * edit, keeping state (see {@link DevServer.planUpdate}). Default true.
@@ -220,7 +222,7 @@ export class DevServer {
       if (loaderFor(ext)) return reply(200, JS_MIME, await this.compileWithRefresh(ctx, file));
       if (isScriptPath(file)) return reply(200, JS_MIME, await compileComponent(ctx, file));
       if (ext === '.html' || ext === '.htm') {
-        return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: this.options.attribution, scripts: this.previewScripts }));
+        return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: this.options.attribution, scripts: this.previewScripts, nonce: this.options.previewNonce }));
       }
       return reply(200, mimeFor(ext), fs.readFile(file) ?? '');
     } catch (error) {
@@ -268,7 +270,7 @@ export class DevServer {
     const html = this.options.fs.readText(profile.htmlPath) ?? '';
     const { base, attribution } = this.options;
     const refreshRuntime = this.refreshEnabled() ? (await this.packageCdn()).urlFor('react-refresh', '/runtime') : undefined;
-    return reply(200, 'text/html; charset=utf-8', transformHtml(html, { base, entry: profile.entry, attribution, scripts: this.previewScripts, refreshRuntime }));
+    return reply(200, 'text/html; charset=utf-8', transformHtml(html, { base, entry: profile.entry, attribution, scripts: this.previewScripts, refreshRuntime, nonce: this.options.previewNonce }));
   }
 
   private packageCdn(): Promise<PackageCdn> {

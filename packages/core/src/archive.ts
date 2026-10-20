@@ -6,7 +6,7 @@
  */
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 import { VirtualFileSystem } from './vfs.js';
-import { join } from './paths.js';
+import { projectToBase } from './rootedFs.js';
 
 export interface ZipExportOptions {
   /** Only these path prefixes (`node_modules`), relative to the root, no leading slash. Default: everything. */
@@ -45,11 +45,51 @@ export function exportZip(fs: VirtualFileSystem, options: ZipExportOptions = {})
   return zipSync(entries, { level: options.level ?? 6 });
 }
 
-/** Write a zip's contents into `fs` under `at` (default `/`), over whatever is there. */
-export function importZip(fs: VirtualFileSystem, zip: Uint8Array, at = '/'): void {
-  for (const [name, bytes] of Object.entries(unzipSync(zip))) {
+/** What `importZip` accepts before refusing a zip (a zip bomb, or something that is not a project). */
+export interface ZipImportLimits {
+  /** Entries (files and directories). Default 250,000 — a large `node_modules`. */
+  maxEntries?: number;
+  /** One entry's unpacked size, in bytes. Default 256 MB. */
+  maxEntryBytes?: number;
+  /** All entries' unpacked size together, in bytes. Default 1 GB. */
+  maxTotalBytes?: number;
+}
+
+export const DEFAULT_ZIP_IMPORT_LIMITS: Readonly<Required<ZipImportLimits>> = { maxEntries: 250_000, maxEntryBytes: 256 * 1024 * 1024, maxTotalBytes: 1024 * 1024 * 1024 };
+
+/** A zip `importZip` refused, before unpacking anything past the limit. */
+export class ZipLimitError extends Error {
+  readonly code = 'EZIPLIMIT';
+  constructor(readonly limit: keyof ZipImportLimits, readonly value: number, readonly max: number, readonly entry?: string) {
+    super(`The zip exceeds ${limit} (${value} > ${max})${entry ? ` at "${entry}"` : ''}.`);
+    this.name = 'ZipLimitError';
+  }
+}
+
+/**
+ * Write a zip's contents into `fs` under `at` (default `/`), over whatever is
+ * there. Entry names cannot climb out of `at` (`../x` lands at `<at>/x`). Throws
+ * {@link ZipLimitError} — having written nothing — past `limits`.
+ */
+export function importZip(fs: VirtualFileSystem, zip: Uint8Array, at = '/', limits: ZipImportLimits = {}): void {
+  const { maxEntries, maxEntryBytes, maxTotalBytes } = { ...DEFAULT_ZIP_IMPORT_LIMITS, ...limits };
+  let entries = 0;
+  let total = 0;
+  const files = unzipSync(zip, {
+    // Checked from the central directory before each entry is unpacked. A deflated
+    // entry is inflated into a buffer of its declared size, so a lying size cannot overrun it.
+    filter({ name, size, originalSize, compression }) {
+      if (++entries > maxEntries) throw new ZipLimitError('maxEntries', entries, maxEntries);
+      const unpacked = compression === 0 ? Math.max(size, originalSize) : originalSize;
+      if (unpacked > maxEntryBytes) throw new ZipLimitError('maxEntryBytes', unpacked, maxEntryBytes, name);
+      total += unpacked;
+      if (total > maxTotalBytes) throw new ZipLimitError('maxTotalBytes', total, maxTotalBytes, name);
+      return true;
+    },
+  });
+  for (const [name, bytes] of Object.entries(files)) {
     if (name.endsWith('/')) {
-      fs.mkdir(join(at, name.slice(0, -1)));
+      fs.mkdir(projectToBase(at, name.slice(0, -1)));
       continue;
     }
     let contents: string | Uint8Array = bytes;
@@ -58,6 +98,6 @@ export function importZip(fs: VirtualFileSystem, zip: Uint8Array, at = '/'): voi
     } catch {
       // binary: keep the bytes
     }
-    fs.writeFile(join(at, name), contents);
+    fs.writeFile(projectToBase(at, name), contents);
   }
 }

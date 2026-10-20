@@ -37,6 +37,7 @@ export type { ServerAddress, PortChange } from './serverEvents.js';
 export { resolveCommand, findExecutable, binDirectories, interpreterFor, commandNotFound } from './commands.js';
 export type { ResolvedCommand } from './commands.js';
 export { InputQueue, LineDiscipline, toTerminal } from './terminal.js';
+export { SIGNAL_EXIT_CODES, SIGPIPE_STATUS, signalExitCode, BrokenPipeError, isBrokenPipe, brokePipe } from './signals.js';
 export { defaultPrograms } from './programs.js';
 export { startNode } from '../node/runtime.js';
 export type { NodeInstance, NodeOptions } from '../node/runtime.js';

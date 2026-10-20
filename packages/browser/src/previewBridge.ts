@@ -12,6 +12,10 @@
  *
  * One window listener per runtime, accepting only messages from the preview
  * origin whose page sits under this runtime's base (as `listenToPreview` does).
+ *
+ * A page that goes away posts `close` for its sockets (see the page end); a
+ * port that can no longer be posted to closes its connection too, so a server
+ * socket never outlives the page it served.
  */
 import {
   COOKIE_MESSAGE_TYPE,
@@ -30,6 +34,8 @@ export interface PreviewBridgeOptions {
   upgrade(port: number, request: HttpRequestData): ByteChannel | undefined;
   /** The runtime's cookie jars: sent with WebSocket handshakes and mirrored into `document.cookie`. */
   cookies?: PortCookieJars;
+  /** The runtime's nonce: pages must carry it (see `previewPageOf`). */
+  nonce?: string;
 }
 
 /** The slice of MessagePort the bridge uses. */
@@ -79,15 +85,29 @@ export function listenToPreviewBridge(
     if (typeof navigator !== 'undefined' && navigator.userAgent) headers['user-agent'] = navigator.userAgent;
     const connection = connectWebSocket((request) => options.upgrade(port, request), { path, protocols, headers });
     sockets.add(connection);
-    connection.onOpen(({ protocol }) => channel.postMessage({ kind: 'open', protocol }));
+    /** Post to the page; a port that throws (the page is gone) ends the connection. */
+    let pageGone = false;
+    const toPage = (message: unknown, transfer?: Transferable[]): void => {
+      if (pageGone) return;
+      try {
+        channel.postMessage(message, transfer);
+      } catch {
+        // Posting failed: the page (and its port) is gone. Hang up on the server for it.
+        pageGone = true;
+        sockets.delete(connection);
+        channel.close();
+        connection.close(1001, 'The preview page is gone.');
+      }
+    };
+    connection.onOpen(({ protocol }) => toPage({ kind: 'open', protocol }));
     connection.onMessage((message) => {
-      if (typeof message === 'string') return channel.postMessage({ kind: 'message', data: message });
+      if (typeof message === 'string') return toPage({ kind: 'message', data: message });
       const buffer = new Uint8Array(message).buffer as ArrayBuffer;
-      channel.postMessage({ kind: 'message', data: buffer }, [buffer]);
+      toPage({ kind: 'message', data: buffer }, [buffer]);
     });
     connection.onClose((info) => {
       sockets.delete(connection);
-      channel.postMessage({ kind: 'close', ...info });
+      toPage({ kind: 'close', ...info });
       channel.close();
     });
     channel.onmessage = (event) => {
@@ -125,7 +145,7 @@ export function listenToPreviewBridge(
   const onMessage = (event: MessageEvent) => {
     const data = event.data as BridgeMessage | null;
     const channel = event.ports?.[0] as BridgePort | undefined;
-    const page = channel && data ? previewPageOf(event, origin, base) : undefined;
+    const page = channel && data ? previewPageOf(event, origin, base, options.nonce) : undefined;
     if (!page) return;
     if (data!.type === SOCKET_MESSAGE_TYPE) openSocket(channel!, data!, page);
     else if (data!.type === COOKIE_MESSAGE_TYPE) syncCookies(channel!, page);

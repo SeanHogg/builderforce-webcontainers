@@ -11,7 +11,8 @@ import { FakeSocket, IncomingMessage, OutgoingHeaders } from './messages.js';
 /** Where a response goes as it is written. */
 export interface ResponseSink {
   head(head: HttpResponseHead): void;
-  chunk(data: Uint8Array): void;
+  /** A body chunk; call `written` once there is room for the next (at once, or when a slow reader catches up). */
+  chunk(data: Uint8Array, written: () => void): void;
   end(): void;
 }
 
@@ -71,8 +72,9 @@ export class ServerResponse extends OutgoingHeaders {
 
   override _write(chunk: Uint8Array, _encoding: string, callback: () => void): void {
     this.sendHead();
-    if (!this.hungUp && this.req.method !== 'HEAD' && !NO_BODY.has(this.statusCode)) this.sink.chunk(new Uint8Array(chunk));
-    callback();
+    // Backpressure: the write completes when the body has room, so `write()` returns false and 'drain' follows, as in Node.
+    if (!this.hungUp && this.req.method !== 'HEAD' && !NO_BODY.has(this.statusCode)) this.sink.chunk(new Uint8Array(chunk), callback);
+    else callback();
   }
 
   override _final(callback: () => void): void {

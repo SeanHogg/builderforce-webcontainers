@@ -119,7 +119,15 @@ export class Server extends EventEmitterBase {
       const body = pushStream(() => this.deps.loop._run(() => res._hangUp()));
       const res: ServerResponse = new ServerResponse(req, {
         head: (head) => resolve({ ...head, body: body.stream }),
-        chunk: (data) => body.push(data),
+        chunk: (data, written) => {
+          if (body.push(data)) return written();
+          // The reader is behind: hold the process and the write until it pulls (or hangs up).
+          const release = this.deps.loop.hold();
+          void body.ready().then(() => {
+            release();
+            this.deps.loop._run(written);
+          });
+        },
         end: () => body.end(),
       });
       this.deps.loop._run(() => {

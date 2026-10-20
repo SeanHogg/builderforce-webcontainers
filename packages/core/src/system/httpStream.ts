@@ -6,10 +6,19 @@
  */
 import type { ByteChannel, HttpResponseData, HttpResponseHead, HttpStreamResponse } from './types.js';
 
+/** Bytes a body stream queues for a reader that is not keeping up before `push` reports it full. */
+export const BODY_HIGH_WATER_MARK = 1024 * 1024;
+
 export interface PushStream {
   readonly stream: ReadableStream<Uint8Array>;
-  /** Queue a chunk; ignored once the stream is closed or cancelled. */
-  push(chunk: Uint8Array): void;
+  /**
+   * Queue a chunk; ignored once the stream is closed or cancelled. Returns false
+   * when the queue is at its high-water mark (or the reader is gone): a producer
+   * that can wait should, until `ready()` resolves.
+   */
+  push(chunk: Uint8Array): boolean;
+  /** Resolves when the reader wants more (pulls below the high-water mark), or the stream is done. */
+  ready(): Promise<void>;
   end(): void;
   /** End with an error: the reader sees a failed read (a truncated response). */
   fail(error: unknown): void;
@@ -17,32 +26,54 @@ export interface PushStream {
   readonly done: boolean;
 }
 
-/** A body stream fed from outside. `onCancel` runs when the reader hangs up before the end. */
-export function pushStream(onCancel?: (reason: unknown) => void): PushStream {
+/**
+ * A body stream fed from outside, pull-based: it queues up to `highWaterMark`
+ * bytes for a slow reader, and `push`/`ready` tell the producer when to wait.
+ * `onCancel` runs when the reader hangs up before the end.
+ */
+export function pushStream(onCancel?: (reason: unknown) => void, highWaterMark = BODY_HIGH_WATER_MARK): PushStream {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   let done = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start: (c) => void (controller = c),
-    cancel: (reason) => {
-      if (done) return;
-      done = true;
-      onCancel?.(reason);
+  let waiting: Array<() => void> = [];
+  const wake = () => {
+    const resume = waiting;
+    waiting = [];
+    for (const go of resume) go();
+  };
+  const hasRoom = () => !done && (controller.desiredSize ?? 0) > 0;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start: (c) => void (controller = c),
+      pull: wake, // the reader drained below the mark: producers may go on
+      cancel: (reason) => {
+        if (done) return;
+        done = true;
+        wake();
+        onCancel?.(reason);
+      },
     },
-  });
+    new ByteLengthQueuingStrategy({ highWaterMark }),
+  );
   return {
     stream,
     push(chunk) {
       if (!done && chunk.byteLength) controller.enqueue(chunk);
+      return hasRoom();
+    },
+    ready() {
+      return done || hasRoom() ? Promise.resolve() : new Promise((resolve) => waiting.push(resolve));
     },
     end() {
       if (done) return;
       done = true;
       controller.close();
+      wake();
     },
     fail(error) {
       if (done) return;
       done = true;
       controller.error(error);
+      wake();
     },
     get done() {
       return done;
