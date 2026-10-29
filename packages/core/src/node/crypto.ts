@@ -113,7 +113,12 @@ function pbkdf2Sync(password: Input, salt: Input, iterations: number, keylen: nu
 
 function randomFill<T extends ArrayBufferView>(view: T): T {
   const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-  for (let i = 0; i < bytes.length; i += 65536) globalThis.crypto.getRandomValues(bytes.subarray(i, i + 65536));
+  // Filled through an ArrayBuffer-backed scratch chunk: getRandomValues accepts only ArrayBuffer views, not a view over shared memory.
+  for (let i = 0; i < bytes.length; i += 65536) {
+    const chunk = new Uint8Array(Math.min(65536, bytes.length - i));
+    globalThis.crypto.getRandomValues(chunk);
+    bytes.set(chunk, i);
+  }
   return view;
 }
 

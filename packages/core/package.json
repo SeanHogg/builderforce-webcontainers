@@ -24,8 +24,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "node ./node_modules/typescript-7/bin/tsc -p tsconfig.build.json",
+    "typecheck": "node ./node_modules/typescript-7/bin/tsc --noEmit",
     "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
@@ -66,7 +66,7 @@
     "fflate": "^0.8.2"
   },
   "peerDependencies": {
-    "typescript": ">=5.0.0"
+    "typescript": ">=5.0.0 <7"
   },
   "peerDependenciesMeta": {
     "typescript": {
@@ -81,7 +81,8 @@
     "@types/less": "^3.0.6",
     "sass": "^1.80.0",
     "svelte": "^5.0.0",
-    "typescript": "^5.5.0",
+    "typescript": "5.9.3",
+    "typescript-7": "npm:typescript@^7.0.2",
     "vitest": "^2.1.0"
   }
 }

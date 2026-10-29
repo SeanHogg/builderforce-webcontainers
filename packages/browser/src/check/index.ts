@@ -13,7 +13,12 @@ import { CHECK, CHECK_RESULT, isCheckInput, isCheckReply, type CheckReply } from
 export type { CheckDiagnostic, DiagnosticCategory, TypecheckResult } from '@seanhogg/builderforce-webcontainers-core/check';
 export { formatDiagnostic } from '@seanhogg/builderforce-webcontainers-core/check';
 
-/** The TypeScript the checker runs. Pinned, so results do not change under a project. */
+/**
+ * The TypeScript the checker runs. Pinned, so results do not change under a project.
+ * The devDependency `typescript` in packages/core and packages/browser (and the root) must
+ * equal this version, so the tests run the compiler that ships. `tsc` in node_modules/.bin is that
+ * 5.9.3 API package's, so the package scripts call `typescript-7/bin/tsc` (TS 7) directly.
+ */
 export const TYPESCRIPT_VERSION = '5.9.3';
 export const DEFAULT_TYPESCRIPT_URL = `https://cdn.jsdelivr.net/npm/typescript@${TYPESCRIPT_VERSION}/lib/typescript.js`;
 
