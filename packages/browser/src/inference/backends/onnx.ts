@@ -19,6 +19,7 @@ import type {
   InferenceToken,
   ModelRef,
 } from '../types.js';
+import { detectBackendEnv } from '../capabilities.js';
 
 /** Minimal shape of the onnxruntime-web wasm inference session we use. */
 export interface OrtWasmModule {
@@ -27,7 +28,7 @@ export interface OrtWasmModule {
 }
 
 export interface OrtSession {
-  run(prompt: string, options: { maxTokens: number; temperature: number }): AsyncIterable<string>;
+  run(prompt: string, options: { maxTokens: number; temperature: number; signal?: AbortSignal }): AsyncIterable<string>;
   release(): Promise<void>;
 }
 
@@ -45,13 +46,12 @@ export function createOnnxBackend(options: OnnxBackendOptions): InferenceBackend
     kind: 'onnx',
 
     async probe(): Promise<BackendInfo> {
-      const wasm = typeof WebAssembly !== 'undefined';
-      const wasmSimd = wasm && WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 9, 1, 7, 0, 65, 0, 253, 15, 26, 11]));
+      const env = detectBackendEnv();
       return {
         kind: 'onnx',
-        available: wasm,
-        reason: wasm ? undefined : 'WebAssembly not available',
-        wasmSimd,
+        available: env.wasm,
+        reason: env.wasm ? undefined : 'WebAssembly not available',
+        wasmSimd: env.wasmSimd,
         webgpu: false,
       };
     },
@@ -70,7 +70,7 @@ export function createOnnxBackend(options: OnnxBackendOptions): InferenceBackend
       const maxTokens = options?.maxTokens ?? 256;
       const temperature = options?.temperature ?? 0.7;
       let index = 0;
-      for await (const token of session.run(prompt, { maxTokens, temperature })) {
+      for await (const token of session.run(prompt, { maxTokens, temperature, signal: options?.signal })) {
         yield { token, index: index++ };
       }
     },

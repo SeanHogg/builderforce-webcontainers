@@ -25,7 +25,7 @@ export interface WebLlmModule {
 }
 
 export interface WebLlmModel {
-  generate(prompt: string, options: { maxTokens: number; temperature: number }): AsyncIterable<string>;
+  generate(prompt: string, options: { maxTokens: number; temperature: number; signal?: AbortSignal }): AsyncIterable<string>;
   release(): Promise<void>;
 }
 
@@ -65,6 +65,7 @@ export function createWebLlmBackend(options: WebLlmBackendOptions): InferenceBac
       for await (const token of model.generate(renderChatPrompt(messages), {
         maxTokens: options?.maxTokens ?? 256,
         temperature: options?.temperature ?? 0.7,
+        signal: options?.signal,
       })) {
         yield { token, index: index++ };
       }

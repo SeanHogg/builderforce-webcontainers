@@ -73,6 +73,31 @@ describe('onnx backend (injected module)', () => {
     expect(out).toEqual(['a', 'b', 'c']);
   });
 
+  it('forwards the abort signal to the engine call (cancel actually stops it)', async () => {
+    let seen: AbortSignal | undefined;
+    const backend = createOnnxBackend({
+      loadModule: async () => ({
+        initRuntime: async () => {},
+        createSession: async () => ({
+          async *run(_prompt: string, opts: { signal?: AbortSignal }) {
+            seen = opts.signal;
+            yield 'a';
+            yield 'b';
+          },
+          release: async () => {},
+        }),
+      }),
+    });
+    await backend.load(ref, new ArrayBuffer(8), noopContext);
+    const controller = new AbortController();
+    const out: string[] = [];
+    for await (const { token } of backend.generate(messages, { maxTokens: 4, signal: controller.signal })) {
+      out.push(token);
+    }
+    expect(out).toEqual(['a', 'b']);
+    expect(seen).toBe(controller.signal); // regression: backends used to drop the signal
+  });
+
   it('reports WebAssembly availability in probe', async () => {
     const info = await createOnnxBackend({ loadModule: async () => { throw new Error('unused'); } }).probe();
     expect(info.kind).toBe('onnx');

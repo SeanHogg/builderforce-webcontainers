@@ -18,6 +18,7 @@ import type {
   ModelRef,
 } from '../types.js';
 import { renderChatPrompt } from './onnx.js';
+import { detectBackendEnv } from '../capabilities.js';
 
 export interface WllamaModule {
   init(config: { simd: boolean }): Promise<void>;
@@ -25,7 +26,7 @@ export interface WllamaModule {
 }
 
 export interface WllamaModel {
-  generate(prompt: string, options: { maxTokens: number; temperature: number }): AsyncIterable<string>;
+  generate(prompt: string, options: { maxTokens: number; temperature: number; signal?: AbortSignal }): AsyncIterable<string>;
   release(): Promise<void>;
 }
 
@@ -41,13 +42,12 @@ export function createWllamaBackend(options: WllamaBackendOptions): InferenceBac
     kind: 'wllama',
 
     async probe(): Promise<BackendInfo> {
-      const wasm = typeof WebAssembly !== 'undefined';
-      const wasmSimd = wasm && WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 9, 1, 7, 0, 65, 0, 253, 15, 26, 11]));
+      const env = detectBackendEnv();
       return {
         kind: 'wllama',
-        available: wasm,
-        reason: wasm ? undefined : 'WebAssembly not available',
-        wasmSimd,
+        available: env.wasm,
+        reason: env.wasm ? undefined : 'WebAssembly not available',
+        wasmSimd: env.wasmSimd,
         webgpu: false,
       };
     },
@@ -65,6 +65,7 @@ export function createWllamaBackend(options: WllamaBackendOptions): InferenceBac
       for await (const token of model.generate(renderChatPrompt(messages), {
         maxTokens: options?.maxTokens ?? 256,
         temperature: options?.temperature ?? 0.7,
+        signal: options?.signal,
       })) {
         yield { token, index: index++ };
       }

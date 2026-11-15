@@ -10,11 +10,13 @@
 
 import type { BackendInfo, BackendKind, RuntimeCapabilities } from './types.js';
 
-/** 8-byte WASM module using a v128 (SIMD) operation, for feature detection. */
-const SIMD_PROBE = new Uint8Array([
-  0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 9, 1, 7, 0,
-  65, 0, 253, 15, 26, 11,
-]);
+/**
+ * 8-byte WASM module: `1,4,1,96,0,0` declares one () → nil func type,
+ * `3,2,1,0` has one of it, `10,0` has an empty code section. It validates
+ * iff the engine accepts SIMD opcodes (`0xFD`), which is all we need to
+ * detect. (ONNX's own `hasSimd()` uses the same bytes.)
+ */
+const SIMD_PROBE = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 0]);
 
 function detectWasmSimd(): boolean {
   if (typeof WebAssembly === 'undefined' || typeof WebAssembly.validate !== 'function') return false;
@@ -23,6 +25,12 @@ function detectWasmSimd(): boolean {
   } catch {
     return false;
   }
+}
+
+/** Shared wasm / wasm-SIMD detection for backend probes (onnx, wllama). */
+export function detectBackendEnv(): { wasm: boolean; wasmSimd: boolean } {
+  const wasm = typeof WebAssembly !== 'undefined';
+  return { wasm, wasmSimd: wasm && detectWasmSimd() };
 }
 
 export function probeRuntimeCapabilities(backends: InferenceBackendLike[] = []): RuntimeCapabilities {
