@@ -11,12 +11,15 @@
 import type { BackendInfo, BackendKind, RuntimeCapabilities } from './types.js';
 
 /**
- * 8-byte WASM module: `1,4,1,96,0,0` declares one () → nil func type,
- * `3,2,1,0` has one of it, `10,0` has an empty code section. It validates
- * iff the engine accepts SIMD opcodes (`0xFD`), which is all we need to
- * detect. (ONNX's own `hasSimd()` uses the same bytes.)
+ * Minimal WASM module that performs a `v128.load` (`0xFD 0x0F`) in its single
+ * function body: `65,0` = i32.const 0, `253,15` = v128.load, `26` = drop,
+ * `11` = end. It validates only on engines that accept the SIMD opcode, which
+ * is exactly the feature being detected. 29 bytes total.
  */
-const SIMD_PROBE = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 0]);
+const SIMD_PROBE = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 9, 1, 7, 0,
+  65, 0, 253, 15, 26, 11,
+]);
 
 function detectWasmSimd(): boolean {
   if (typeof WebAssembly === 'undefined' || typeof WebAssembly.validate !== 'function') return false;

@@ -74,28 +74,86 @@ describe('onnx backend (injected module)', () => {
   });
 
   it('forwards the abort signal to the engine call (cancel actually stops it)', async () => {
-    let seen: AbortSignal | undefined;
-    const backend = createOnnxBackend({
+    // Regression: backends used to accept options.signal but never pass it to
+    // session.run / model.generate, so cancel() and a caller's AbortSignal
+    // could not stop a real backend mid-run. Each engine below blocks until
+    // its signal fires, then throws — a generation that ignores the signal
+    // would hang forever and trip the test timeout.
+    const makeEngine = () => {
+      let seen: AbortSignal | undefined;
+      const stream = async function* (_prompt: string, opts: { signal?: AbortSignal }) {
+        seen = opts.signal;
+        for (let i = 0; i < 500; i++) {
+          if (opts.signal?.aborted) throw new Error('aborted');
+          await new Promise((r) => setTimeout(r, 5));
+          yield 'x';
+        }
+      };
+      return { seen: () => seen, stream };
+    };
+
+    // --- onnx ---
+    const onnx = makeEngine();
+    const onnxBackend = createOnnxBackend({
       loadModule: async () => ({
         initRuntime: async () => {},
-        createSession: async () => ({
-          async *run(_prompt: string, opts: { signal?: AbortSignal }) {
-            seen = opts.signal;
-            yield 'a';
-            yield 'b';
-          },
-          release: async () => {},
-        }),
+        createSession: async () => ({ run: onnx.stream, release: async () => {} }),
       }),
     });
-    await backend.load(ref, new ArrayBuffer(8), noopContext);
-    const controller = new AbortController();
-    const out: string[] = [];
-    for await (const { token } of backend.generate(messages, { maxTokens: 4, signal: controller.signal })) {
-      out.push(token);
-    }
-    expect(out).toEqual(['a', 'b']);
-    expect(seen).toBe(controller.signal); // regression: backends used to drop the signal
+    await onnxBackend.load(ref, new ArrayBuffer(8), noopContext);
+    const c1 = new AbortController();
+    const onnxGen = onnxBackend.generate(messages, { maxTokens: 500, signal: c1.signal });
+    setTimeout(() => c1.abort(), 20);
+    const onnxOut: string[] = [];
+    await expect(
+      (async () => {
+        for await (const { token } of onnxGen) onnxOut.push(token);
+      })(),
+    ).rejects.toThrow('aborted');
+    expect(onnxOut.length).toBeLessThan(500);
+    expect(onnx.seen()).toBe(c1.signal); // signal reached the engine call
+
+    // --- wllama ---
+    const wl = makeEngine();
+    const wlBackend = createWllamaBackend({
+      loadModule: async () => ({
+        init: async () => {},
+        loadModel: async () => ({ generate: wl.stream, release: async () => {} }),
+      }),
+    });
+    await wlBackend.load(ref, new ArrayBuffer(8), noopContext);
+    const c2 = new AbortController();
+    const wlGen = wlBackend.generate(messages, { maxTokens: 500, signal: c2.signal });
+    setTimeout(() => c2.abort(), 20);
+    const wlOut: string[] = [];
+    await expect(
+      (async () => {
+        for await (const { token } of wlGen) wlOut.push(token);
+      })(),
+    ).rejects.toThrow('aborted');
+    expect(wlOut.length).toBeLessThan(500);
+    expect(wl.seen()).toBe(c2.signal);
+
+    // --- webllm ---
+    const llm = makeEngine();
+    const llmBackend = createWebLlmBackend({
+      loadModule: async () => ({
+        init: async () => {},
+        loadModel: async () => ({ generate: llm.stream, release: async () => {} }),
+      }),
+    });
+    await llmBackend.load(ref, new ArrayBuffer(8), { ...noopContext, webgpu: true });
+    const c3 = new AbortController();
+    const llmGen = llmBackend.generate(messages, { maxTokens: 500, signal: c3.signal });
+    setTimeout(() => c3.abort(), 20);
+    const llmOut: string[] = [];
+    await expect(
+      (async () => {
+        for await (const { token } of llmGen) llmOut.push(token);
+      })(),
+    ).rejects.toThrow('aborted');
+    expect(llmOut.length).toBeLessThan(500);
+    expect(llm.seen()).toBe(c3.signal);
   });
 
   it('reports WebAssembly availability in probe', async () => {
