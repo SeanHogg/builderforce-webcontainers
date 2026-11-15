@@ -24,6 +24,33 @@ export { watchForPreviewUpdates } from './previewUpdates.js';
 export { createCacheStoragePackageCache } from './packageCache.js';
 export { ProcessHost, createWorkerProcess, servePortRequest, createPortResponder, openPortResponse, injectBridge } from './node/index.js';
 export type { NodeRuntimeOptions, ProcessHostOptions, ProcessInfo, WorkerLike, PortResponder, PortResponderOptions, OpenedPortResponse } from './node/index.js';
+export { createInferenceClient } from './inference/client.js';
+export type { InferenceClient, InferenceClientOptions, InferenceWorkerLike } from './inference/client.js';
+export { createModelCache, createMemoryModelCache } from './inference/modelCache.js';
+export type { ModelCache, ModelCacheEntry } from './inference/modelCache.js';
+export { createOnnxBackend } from './inference/backends/onnx.js';
+export type { OnnxBackendOptions, OrtWasmModule, OrtSession } from './inference/backends/onnx.js';
+export { createWllamaBackend } from './inference/backends/wllama.js';
+export type { WllamaBackendOptions, WllamaModule, WllamaModel } from './inference/backends/wllama.js';
+export { createWebLlmBackend } from './inference/backends/webllm.js';
+export type { WebLlmBackendOptions, WebLlmModule, WebLlmModel } from './inference/backends/webllm.js';
+export { createMockBackend, MOCK_VOCAB } from './inference/backends/mock.js';
+export type { MockBackendOptions } from './inference/backends/mock.js';
+export { probeRuntimeCapabilities } from './inference/capabilities.js';
+export { startInferenceWorkerHost, runInferenceWorker } from './inference/worker.js';
+export type {
+  BackendInfo,
+  BackendKind,
+  ChatMessage,
+  GenerateOptions,
+  GenerationStats,
+  InferenceBackend,
+  InferenceModel,
+  InferenceToken,
+  ModelRef,
+  Quantization,
+  RuntimeCapabilities,
+} from './inference/types.js';
 export { createSwRouter } from './swRouter.js';
 export type { SwRouter, SwRouterOptions, PortLike, PreviewTarget, RoutedResponse, RequestDetails } from './swRouter.js';
 export { previewBase, previewPrefix, PREVIEW_SEGMENT, PREVIEW_ID, PORT_SEGMENT, isPortPath } from './protocol.js';

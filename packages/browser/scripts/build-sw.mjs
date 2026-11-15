@@ -3,7 +3,8 @@
 //                    the package's ES modules at runtime);
 //   dist/relay.html  the cross-origin relay page, script inlined;
 //   dist/check/worker.js  the type-check worker;
-//   dist/node/worker.js   the process worker (Node runtime, npm, shell).
+//   dist/node/worker.js   the process worker (Node runtime, npm, shell);
+//   dist/inference/worker.js  the local inference worker (Phase 1).
 // dist/assets.js exports both as strings, so a server (a Worker, an Express app)
 // can serve them straight from the installed package without copying files.
 import { build } from 'esbuild';
@@ -41,6 +42,12 @@ await writeFile('dist/node/worker.js', processWorker);
 // process workers from `<scope>/process-worker.js`, so the server hosting
 // relay.html serves this beside it.
 await writeFile('dist/process-worker.js', processWorker);
+
+// The local inference worker (Phase 1): self-contained so it can run on a
+// dedicated worker thread. The client finds it beside dist/index.js as
+// `dist/inference/worker.js`.
+await mkdir('dist/inference', { recursive: true });
+await writeFile('dist/inference/worker.js', await bundle('src/inference/workerEntry.ts'));
 
 await writeFile('dist/sw.js', serviceWorker);
 await writeFile('dist/relay.html', relayHtml);
