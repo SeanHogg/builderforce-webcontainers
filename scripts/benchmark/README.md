@@ -79,18 +79,34 @@ invent them.
 
 ## How Phase 8 compares runs
 
-1. Before the Phase 0 gate was passed, a baseline run produced
-   `results/baseline-result.json` (kept locally; regenerate any time with
-   the command above).
-2. At Phase 8 (regression validation), rerun the same script and diff the
-   new JSON against the saved baseline:
-   - `packages[*].test.tests.passed/failed/skipped` and
-     `packages[*].test.files.*` must be **no worse** than baseline
-     (currently 352 passed / 2 skipped / 0 failed overall).
-   - `exitCode` for test, typecheck, and build must all remain `0`.
-   - `dist.*.fileCount` / `totalBytes` document the size cost of any
-     added runtime (local inference, memory integration).
-   - `durationMs` values are informational (machine-noisy); large
-     regressions (> 2×) warrant investigation, not gate failure.
-3. Compare only after normalizing `environment` — a different node/pnpm/
-   typescript version invalidates timing and possibly count comparisons.
+**Do not rerun the bare command once `results/baseline-result.json` exists.**
+A bare `node scripts/benchmark/run-baseline.mjs` overwrites that Phase 0
+file. Phase 8 writes a separate candidate and compares it:
+
+```sh
+node scripts/benchmark/run-baseline.mjs --out scripts/benchmark/results/phase8-result.json
+node scripts/benchmark/compare-baseline.mjs
+```
+
+`--out` is resolved from the current working directory. Omit it only when
+you intentionally want to regenerate the Phase 0 baseline.
+`compare-baseline.mjs` defaults to `results/baseline-result.json` and
+`results/phase8-result.json` (resolved from the script directory) and
+accepts `--baseline` / `--candidate`. It writes
+`results/phase8-comparison.json` (gitignored, like every other result) and
+exits `1` when the gate fails.
+
+Gate:
+
+- every candidate test, typecheck, and build `exitCode` is `0`;
+- `tests.failed` and `files.failed` are no higher than baseline;
+- `tests.skipped` is no higher than baseline (a new skip is a regression);
+- `tests.passed` may rise — added phase tests are coverage, not a regression.
+
+`durationMs` is informational. A ratio above 2× is printed as an
+investigate warning and does not fail the gate. A different
+node/pnpm/typescript marks the timing comparison invalid. The comparator
+never calls a timing "improved" unless the candidate is under half the
+baseline **and** the environment matches; otherwise the delta is
+measurement noise and no improvement is claimed. Dist byte growth is
+reported (absolute and percent) and is not a gate failure.

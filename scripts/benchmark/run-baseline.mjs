@@ -9,8 +9,10 @@
 //
 // Usage (from the repo root):
 //   node scripts/benchmark/run-baseline.mjs
+//   node scripts/benchmark/run-baseline.mjs --out scripts/benchmark/results/phase8-result.json
 //
-// A second run overwrites results/baseline-result.json cleanly.
+// A bare run overwrites results/baseline-result.json. Pass --out to keep the
+// Phase 0 baseline intact when Phase 8 reruns the same measurements.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -21,7 +23,20 @@ import { dirStats, timeCommand } from './lib/timing.mjs';
 const SCHEMA_VERSION = 1;
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..', '..');
-const resultsFile = join(scriptDir, 'results', 'baseline-result.json');
+const defaultResultsFile = join(scriptDir, 'results', 'baseline-result.json');
+
+// Optional `--out <path>` writes somewhere other than the Phase 0 baseline.
+// A bare run keeps writing results/baseline-result.json, which a later phase
+// must not overwrite — Phase 8 passes --out to protect that file.
+function resolveResultsFile(argv) {
+  const flag = argv.indexOf('--out');
+  if (flag === -1) return defaultResultsFile;
+  const value = argv[flag + 1];
+  if (!value || value.startsWith('--')) {
+    throw new Error('--out requires a path, e.g. --out scripts/benchmark/results/phase8-result.json');
+  }
+  return resolve(process.cwd(), value);
+}
 
 const PACKAGES = [
   { name: 'core', dir: 'packages/core' },
@@ -137,6 +152,7 @@ async function measureDist(pkg) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  const resultsFile = resolveResultsFile(process.argv);
   const suiteStart = performance.now();
 
   console.log('Phase 0 baseline — builderforce-webcontainers');
