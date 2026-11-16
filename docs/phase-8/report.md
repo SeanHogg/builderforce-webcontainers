@@ -50,7 +50,7 @@ environment facts (node / pnpm / typescript versions). The comparator then
 diffs candidate against the Phase 0 baseline on the gate rules above.
 
 - **Baseline:** `results/baseline-result.json` — 2026-11-14T18:58:30.838Z (Phase 0).
-- **Candidate:** `results/phase8-result.json` — 2026-11-16T03:43:54.035Z.
+- **Candidate:** `results/phase8-result.json` — 2026-11-16T04:53:29.712Z.
 - **Environment match:** node, pnpm, and typescript versions identical between
   the two runs, so timing comparisons are valid (still informational).
 
