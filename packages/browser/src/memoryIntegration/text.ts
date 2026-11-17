@@ -91,10 +91,8 @@ export function tokenize(text: string): string[] {
   return text.toLowerCase().split(/[\s\W]+/).filter(Boolean);
 }
 
-/** Estimated prompt tokens (~4 chars/token, the usual budgeting heuristic). */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
+/** Estimated prompt tokens (~4 chars/token) — the shared heuristic, re-exported for this module's API. */
+export { estimateTokens } from '../shared/tokens.js';
 
 /**
  * Content hash: two independent 32-bit FNV-1a lanes → 16 hex chars. Synchronous and

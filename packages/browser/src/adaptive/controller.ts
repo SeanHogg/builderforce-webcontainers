@@ -21,6 +21,17 @@ import type {
   WorkloadProfile,
 } from './types.js';
 import { planExecution } from './planner.js';
+import { estimateWeightBytes } from '../memory/estimates.js';
+import { now as nowMs } from '../shared/clock.js';
+import { estimateTokens } from '../shared/tokens.js';
+import {
+  detectCrossOriginIsolated,
+  detectSharedArrayBuffer,
+  detectWasmSimd,
+  detectWebGpu,
+  probeDeviceMemoryBytes,
+  probeHardwareConcurrency,
+} from '../shared/hardwareProbe.js';
 
 /** A linear layer graph derived from the workload, for the planner to partition. */
 function defaultGraph(workload: WorkloadProfile) {
@@ -45,30 +56,18 @@ function defaultGraph(workload: WorkloadProfile) {
   };
 }
 
+/** RAM assumed when `navigator.deviceMemory` is unreported (4 GiB). */
+const DEFAULT_RAM_BYTES = 4 * 1024 * 1024 * 1024;
+
 /** Probe hardware facts from the environment (never throws; facts not gates). */
 export function probeHardware(): HardwareProfile {
-  const nav = (globalThis as { navigator?: { hardwareConcurrency?: number; deviceMemory?: number; gpu?: unknown } })
-    .navigator;
-  const cores = nav?.hardwareConcurrency ?? 4;
-  const deviceMemory = nav?.deviceMemory ?? 4;
-  const hasGpu = typeof nav?.gpu !== 'undefined' && nav.gpu != null;
-  const g = globalThis as { crossOriginIsolated?: boolean; SharedArrayBuffer?: unknown; WebAssembly?: unknown };
-  const wasmSimd = (() => {
-    try {
-      return typeof g.WebAssembly !== 'undefined'
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        && (g.WebAssembly as any).validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 12, 11]));
-    } catch {
-      return false;
-    }
-  })();
   return {
-    cores,
-    wasmSimd,
-    webgpu: hasGpu,
-    crossOriginIsolated: g.crossOriginIsolated === true,
-    sharedArrayBuffer: typeof g.SharedArrayBuffer !== 'undefined',
-    ramBytes: deviceMemory * 1024 * 1024 * 1024,
+    cores: probeHardwareConcurrency() ?? 4,
+    wasmSimd: detectWasmSimd(),
+    webgpu: detectWebGpu(),
+    crossOriginIsolated: detectCrossOriginIsolated(),
+    sharedArrayBuffer: detectSharedArrayBuffer(),
+    ramBytes: probeDeviceMemoryBytes() ?? DEFAULT_RAM_BYTES,
   };
 }
 
@@ -100,7 +99,7 @@ export function createAdaptiveController(
       const workload: WorkloadProfile = {
         paramsB: model.paramsB,
         quantization: model.quantization,
-        promptTokens: estimateTokens(request.prompt),
+        promptTokens: Math.max(1, estimateTokens(request.prompt)),
         decodeTokens: request.maxTokens ?? 128,
         residentBytes: estimateResidentBytes(model),
       };
@@ -146,22 +145,7 @@ export function createAdaptiveController(
   };
 }
 
-/** Override the probed hardware profile (test hook, see ControllerConfig). */
-function estimateTokens(text: string): number {
-  // ~4 chars per token is a reasonable English/code average.
-  return Math.max(1, Math.ceil(text.length / 4));
-}
-
+/** Weights + ~20% KV/activation headroom, from the canonical memory estimate. */
 function estimateResidentBytes(model: { paramsB: number; quantization: string }): number {
-  const bytesPerParam = model.quantization === 'q4' ? 0.5
-    : model.quantization === 'q5' ? 0.625
-    : model.quantization === 'q8' ? 1.0
-    : 2.0;
-  // Weights + ~20% KV/activation headroom.
-  return model.paramsB * 1e9 * bytesPerParam * 1.2;
-}
-
-function nowMs(): number {
-  const g = globalThis as { performance?: { now(): number } };
-  return g.performance?.now?.() ?? Date.now();
+  return estimateWeightBytes(model.paramsB, model.quantization, 1.2);
 }

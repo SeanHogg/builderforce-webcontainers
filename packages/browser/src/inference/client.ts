@@ -14,8 +14,10 @@ import {
   type LogReply,
   type ReadyReply,
   type TokenReply,
+  type WireGenerateOptions,
 } from './protocol.js';
 import { createModelCache, type ModelCache } from './modelCache.js';
+import { createTokenStream, type TokenStream } from './tokenStream.js';
 import type {
   ChatMessage,
   GenerateOptions,
@@ -34,11 +36,18 @@ export interface InferenceWorkerLike {
 }
 
 export interface InferenceClientOptions {
-  /** Spawn the inference worker. Default: `new Worker(new URL('./inference/worker.js', import.meta.url), { type: 'module' })`. */
+  /**
+   * Spawn the inference worker. Default: a classic Worker on the bundled
+   * `worker.bundle.js` that sits beside this module in `dist/inference/`
+   * (also exported as `@seanhogg/builderforce-webcontainers/ml/worker.js`).
+   */
   createWorker?: () => InferenceWorkerLike;
   /** Model cache; default IndexedDB via `createModelCache()`. */
   cache?: ModelCache;
-  /** Fetch a model's bytes from its source URL (only called on a cache miss). */
+  /**
+   * Fetch a model's bytes from its source URL (only called on a cache miss).
+   * The returned buffer is TRANSFERRED to the worker, so do not keep using it.
+   */
   fetchModel?: (ref: ModelRef) => Promise<ArrayBuffer>;
   logger?: (message: string) => void;
 }
@@ -46,11 +55,6 @@ export interface InferenceClientOptions {
 interface Pending {
   resolve: (reply: never) => void;
   reject: (error: Error) => void;
-}
-
-interface StreamState {
-  done(stats: GenerationStats): void;
-  fail(error: Error): void;
 }
 
 export interface InferenceClient {
@@ -68,95 +72,117 @@ export interface InferenceClient {
   readonly cache: ModelCache;
 }
 
+const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
+
+function defaultFetchModel(ref: ModelRef): Promise<ArrayBuffer> {
+  if (!ref.source || ref.source.kind !== 'url') return Promise.reject(new Error(`model ${ref.id} has no url source`));
+  const url = ref.source.url;
+  return fetch(url).then((res) => {
+    if (!res.ok) throw new Error(`failed to fetch ${url}: ${res.status}`);
+    return res.arrayBuffer();
+  });
+}
+
+function defaultCreateWorker(): InferenceWorkerLike {
+  // The IIFE bundle emitted by scripts/build-sw.mjs beside dist/inference/client.js.
+  // ESM only (import.meta.url): a CommonJS consumer of ./ml must pass `createWorker`.
+  return new Worker(new URL('./worker.bundle.js', import.meta.url)) as unknown as InferenceWorkerLike;
+}
+
 export function createInferenceClient(options: InferenceClientOptions = {}): InferenceClient {
   const cache = options.cache ?? createModelCache();
-  const fetchModel =
-    options.fetchModel ??
-    (async (ref) => {
-      if (!ref.source || ref.source.kind !== 'url') throw new Error(`model ${ref.id} has no url source`);
-      const res = await fetch(ref.source.url);
-      if (!res.ok) throw new Error(`failed to fetch ${ref.source.url}: ${res.status}`);
-      return res.arrayBuffer();
-    });
-  const worker =
-    options.createWorker ??
-    (() =>
-      new Worker(new URL('./inference/worker.js', import.meta.url), {
-        type: 'module',
-      }) as unknown as InferenceWorkerLike);
+  const fetchModel = options.fetchModel ?? defaultFetchModel;
+  const spawn = options.createWorker ?? defaultCreateWorker;
 
   let activeWorker: InferenceWorkerLike | undefined;
-  const getWorker = () => (activeWorker ??= worker());
   let nextId = 1;
   const pending = new Map<number, Pending>();
-  const streams = new Map<number, StreamState>();
-  const queue = new Map<number, InferenceToken[]>();
-  const waiters = new Map<number, () => void>();
+  const streams = new Map<number, TokenStream>();
   let workerFailed: Error | undefined;
 
   const handleReply = (reply: InferenceReply) => {
-    if (reply.type === INFERENCE_LOG) {
-      options.logger?.((reply as LogReply).message);
-      return;
-    }
-    if (reply.type === INFERENCE_TOKEN) {
-      const token = reply as TokenReply;
-      const q = queue.get(token.requestId);
-      if (q) q.push({ token: token.token, index: token.index });
-      waiters.get(token.requestId)?.();
-      return;
-    }
-    if (reply.type === INFERENCE_DONE) {
-      const done = reply as DoneReply;
-      streams.get(done.requestId)?.done({
-        promptTokens: done.promptTokens,
-        generatedTokens: done.generatedTokens,
-        ttftMs: done.ttftMs,
-        decodeMs: done.decodeMs,
-        tokensPerSecond: done.tokensPerSecond,
-      });
-      waiters.get(done.requestId)?.();
-      return;
-    }
-    if (reply.type === INFERENCE_ERROR) {
-      const error = reply as ErrorReply;
-      const waiting = pending.get(error.id);
-      if (waiting) {
-        pending.delete(error.id);
-        waiting.reject(new Error(error.message));
-      } else {
-        streams.get(error.id)?.fail(new Error(error.message));
+    switch (reply.type) {
+      case INFERENCE_LOG:
+        options.logger?.((reply as LogReply).message);
+        return;
+      case INFERENCE_TOKEN: {
+        const token = reply as TokenReply;
+        streams.get(token.requestId)?.push({ token: token.token, index: token.index });
+        return;
       }
-      return;
+      case INFERENCE_DONE: {
+        const done = reply as DoneReply;
+        streams.get(done.requestId)?.done({
+          promptTokens: done.promptTokens,
+          promptTokensEstimated: done.promptTokensEstimated,
+          generatedTokens: done.generatedTokens,
+          ttftMs: done.ttftMs,
+          decodeMs: done.decodeMs,
+          tokensPerSecond: done.tokensPerSecond,
+        });
+        return;
+      }
+      case INFERENCE_ERROR: {
+        const error = reply as ErrorReply;
+        const waiting = pending.get(error.id);
+        if (waiting) {
+          pending.delete(error.id);
+          waiting.reject(new Error(error.message));
+        } else {
+          streams.get(error.id)?.fail(new Error(error.message));
+        }
+        return;
+      }
     }
-    const waiting = pending.get((reply as { id: number }).id);
+    const id = (reply as { id: number }).id;
+    const waiting = pending.get(id);
     if (waiting) {
-      pending.delete((reply as { id: number }).id);
+      pending.delete(id);
       (waiting.resolve as (value: never) => void)(reply as never);
     }
   };
 
-  const wire = (w: InferenceWorkerLike) => {
-    w.onmessage = (event) => handleReply(event.data as InferenceReply);
-    w.onerror = (event) => {
-      workerFailed = new Error(event.message ?? 'inference worker failed');
-      for (const [, p] of pending) p.reject(workerFailed);
-      for (const [, s] of streams) s.fail(workerFailed);
-      pending.clear();
-      streams.clear();
-    };
+  /** Reject every in-flight request and stream; later calls reject immediately. */
+  const failAll = (error: Error) => {
+    workerFailed = error;
+    const waiting = [...pending.values()];
+    const open = [...streams.values()];
+    pending.clear();
+    streams.clear();
+    for (const p of waiting) p.reject(error);
+    for (const s of open) s.fail(error);
   };
 
-  const request = <T>(message: Record<string, unknown>): Promise<T> =>
+  const getWorker = (): InferenceWorkerLike => {
+    if (activeWorker) return activeWorker;
+    const w = spawn();
+    w.onmessage = (event) => handleReply(event.data as InferenceReply);
+    w.onerror = (event) => failAll(new Error(event.message ?? 'inference worker failed'));
+    activeWorker = w;
+    return w;
+  };
+
+  const request = <T>(message: Record<string, unknown>, transfer?: Transferable[]): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       if (workerFailed) return reject(workerFailed);
       const id = nextId++;
-      const w = getWorker();
-      wire(w);
       pending.set(id, { resolve: resolve as (reply: never) => void, reject });
-      const transfer = message.type === INFERENCE_LOAD ? [(message.weights as ArrayBuffer).slice(0) as Transferable] : undefined;
-      w.postMessage({ ...message, id }, transfer);
+      try {
+        getWorker().postMessage({ ...message, id }, transfer);
+      } catch (error) {
+        pending.delete(id);
+        reject(toError(error));
+      }
     });
+
+  /** Ask the worker to stop one generate request (fire-and-forget). */
+  const sendCancel = (requestId: number) => {
+    try {
+      activeWorker?.postMessage({ type: INFERENCE_CANCEL, id: nextId++, requestId });
+    } catch {
+      /* worker gone: nothing to cancel */
+    }
+  };
 
   const client: InferenceClient = {
     cache,
@@ -167,77 +193,74 @@ export function createInferenceClient(options: InferenceClientOptions = {}): Inf
     },
 
     async load(ref) {
+      // Per the ModelCache ownership contract, `get` hands back a buffer we own
+      // and `put` never retains ours — so the bytes are transferred to the
+      // worker with no copy made here (IndexedDB's own clone is the only one).
       const cached = await cache.get(ref.id);
       let weights: ArrayBuffer;
       if (cached) {
         weights = cached.bytes;
       } else {
         weights = await fetchModel(ref);
-        await cache.put(ref.id, {
-          quantization: ref.quantization,
-          paramsB: ref.paramsB,
-          bytes: weights.slice(0),
-          size: weights.byteLength,
-        });
+        // Awaited BEFORE the transfer below: `put` clones the bytes (IndexedDB's
+        // structured clone runs once its store has opened), and a transfer first
+        // would hand it a detached buffer. The write is best-effort — a quota abort
+        // (or any cache failure) must not stop the model loading; it just isn't cached.
+        try {
+          await cache.put(ref.id, {
+            quantization: ref.quantization,
+            paramsB: ref.paramsB,
+            bytes: weights,
+            size: weights.byteLength,
+          });
+        } catch (error) {
+          options.logger?.(`model cache write failed for ${ref.id}: ${toError(error).message}`);
+        }
       }
-      await request({ type: INFERENCE_LOAD, ref, weights });
+      await request({ type: INFERENCE_LOAD, ref, weights }, [weights]);
     },
 
-    generate(messages, genOptions) {
+    generate(messages, genOptions = {}) {
       const id = nextId++;
-      const w = getWorker();
-      wire(w);
-      const q: InferenceToken[] = [];
-      let notify: (() => void) | undefined;
-      let streamError: Error | undefined;
-      let resolveStats!: (stats: GenerationStats) => void;
-      let rejectStats!: (error: Error) => void;
-      const stats = new Promise<GenerationStats>((resolve, reject) => {
-        resolveStats = resolve;
-        rejectStats = reject;
+      // An AbortSignal is not structured-cloneable: it stays host-side and is
+      // translated into an INFERENCE_CANCEL for this request.
+      const { signal, ...wireOptions } = genOptions;
+      const onAbort = () => sendCancel(id);
+      const stream = createTokenStream(() => {
+        streams.delete(id);
+        signal?.removeEventListener('abort', onAbort);
       });
-      stats.catch(() => {}); // The consumer may only observe the iterator; never leave this hanging.
-      queue.set(id, q);
-      waiters.set(id, () => notify?.());
-      streams.set(id, {
-        done: (s) => {
-          streams.delete(id);
-          waiters.delete(id);
-          queue.delete(id);
-          resolveStats(s);
-          notify?.();
-        },
-        fail: (error) => {
-          streams.delete(id);
-          waiters.delete(id);
-          queue.delete(id);
-          streamError = error;
-          rejectStats(error);
-          notify?.();
-        },
-      });
-      w.postMessage({ type: INFERENCE_GENERATE, id, messages, options: genOptions });
+      const result = (s: TokenStream) =>
+        Object.assign(
+          s.iterate(() => sendCancel(id)),
+          { stats: s.stats },
+        );
 
-      const iterable = (async function* (): AsyncIterable<InferenceToken> {
-        try {
-          for (;;) {
-            while (q.length) yield q.shift() as InferenceToken;
-            if (streamError) throw streamError;
-            if (!streams.has(id)) break;
-            await new Promise<void>((resolve) => {
-              notify = resolve;
-            });
-          }
-        } finally {
-          streams.delete(id);
-        }
-      })();
-
-      return Object.assign(iterable, { stats });
+      if (workerFailed) {
+        stream.fail(workerFailed);
+        return result(stream);
+      }
+      try {
+        const w = getWorker();
+        streams.set(id, stream);
+        w.postMessage({ type: INFERENCE_GENERATE, id, messages, options: wireOptions satisfies WireGenerateOptions });
+      } catch (error) {
+        stream.fail(toError(error)); // also removes the map entry
+        return result(stream);
+      }
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
+      return result(stream);
     },
 
     cancel() {
-      activeWorker?.postMessage({ type: INFERENCE_CANCEL, id: nextId++ });
+      try {
+        activeWorker?.postMessage({ type: INFERENCE_CANCEL, id: nextId++ });
+      } catch {
+        /* worker gone */
+      }
     },
 
     async dispose() {

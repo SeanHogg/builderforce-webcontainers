@@ -4,6 +4,10 @@
  * Each node is keyed by a single token id. A match walks the tree while
  * tokens equal the query; the first mismatch stops. This is EXACT prefix
  * reuse only — never semantic / approximate.
+ *
+ * Public primitive (exported from the kvcache barrel). The paged KV cache no
+ * longer stores per-sequence trees: its hash-chained page ids already index
+ * every shared prefix, inside the page LRU's byte budget.
  */
 
 export interface RadixMatch<V> {

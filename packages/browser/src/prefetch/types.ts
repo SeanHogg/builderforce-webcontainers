@@ -99,6 +99,11 @@ export type PrefetchSkipReason =
   | 'concurrency-limit'
   | 'already-loading'
   | 'already-loaded'
+  /**
+   * A prediction named an id that is not in the target index (never declared, or
+   * learned and since forgotten). Its footprint is unknown, so it is not loaded
+   * speculatively; supply it via `request(target)` / `prefetch(target)` instead.
+   */
   | 'unknown-target'
   | 'cancelled';
 
@@ -128,7 +133,7 @@ export interface PrefetchStats {
   prefetchHits: number;
   /** Total prefetch attempts (loaded + skipped + failed). */
   attempts: number;
-  /** Prefetches that completed successfully. */
+  /** Loads that completed successfully — speculative prefetches AND demand loads (`request` misses). */
   completed: number;
   /** Prefetches dropped because the environment was under pressure. */
   throttled: number;
@@ -150,7 +155,7 @@ export interface PrefetchStats {
   inFlight: number;
   /** Peak concurrent prefetches observed. */
   maxConcurrent: number;
-  /** Total bytes resident because of prefetching. */
+  /** Total bytes of every resident value (prefetched and demand-loaded). */
   residentBytes: number;
   /** Whether the self-tuner has turned prefetching off. */
   selfTunedOff: boolean;
@@ -171,6 +176,11 @@ export interface PrefetchTuningConfig {
   minSamples?: number;
   /** Re-enable automatically after this many ms. 0 disables re-enabling. Default 0. */
   retryAfterMs?: number;
+  /**
+   * Outstanding (unclaimed) speculative loads tracked individually. Older ones
+   * still count as waste but are folded into a single total. Default 256.
+   */
+  maxTrackedLoads?: number;
 }
 
 /** Prefetcher configuration. */
@@ -200,14 +210,24 @@ export interface PrefetchConfig {
   /** Master switch. Default true. */
   enabled?: boolean;
   /**
-   * Byte budget for prefetched (speculatively loaded) data. When the resident
-   * prefetch set exceeds it, the OLDEST unclaimed prefetch is dropped first, so
-   * prefetching can never grow memory without bound. Default: unbounded.
+   * Byte budget for EVERY resident value — speculative prefetches and demand
+   * loads, claimed or not. When the resident set exceeds it, unclaimed
+   * prefetches are dropped first (oldest first), then the least recently used
+   * values. Default: no byte bound (the entry cap still applies).
    */
   residentBudgetBytes?: number;
+  /** Cap on the number of resident values, evicted in the same order. Default 1024. */
+  maxResidentEntries?: number;
+  /**
+   * Cap on targets remembered at runtime (supplied to `request` / `prefetch` but
+   * not declared in `targets`). Oldest forgotten first; forgetting drops only the
+   * metadata, never a resident value. Predictions do not teach the index.
+   * Default 1024.
+   */
+  maxKnownTargets?: number;
   /** Self-tuner configuration. */
   tuning?: PrefetchTuningConfig;
-  /** Clock for tests. Default `Date.now`. */
+  /** Clock for tests. Default: the shared monotonic clock (`performance.now`, else `Date.now`). */
   now?: () => number;
   /** Event sink for explainability (also recorded in the bounded log). */
   onEvent?: (event: PrefetchEvent) => void;
@@ -244,7 +264,12 @@ export interface Prefetcher {
    * on demand otherwise. Records hit/miss and wait-time accounting.
    */
   request(target: PrefetchTarget, options?: { signal?: AbortSignal }): Promise<PrefetchRequestResult>;
-  /** Request by id; the target must be known (declared in `targets` or already seen). */
+  /**
+   * Request by id; the target must be known (declared in `targets`, or learned at
+   * runtime and not yet forgotten past `maxKnownTargets`). Rejects for an unknown id
+   * — its footprint is unknown, so it could not be held to the resident byte budget;
+   * use `request(target)` to supply (and relearn) it.
+   */
   requestById(id: string, options?: { signal?: AbortSignal }): Promise<PrefetchRequestResult>;
   /**
    * Ask the prefetcher to predict and start loading what a workload will need
@@ -253,10 +278,16 @@ export interface Prefetcher {
   predict(context: PrefetchContext, options?: { signal?: AbortSignal }): PrefetchPrediction[];
   /** Explicitly prefetch one target (bypasses prediction, not the pressure gate). */
   prefetch(target: PrefetchTarget, options?: { signal?: AbortSignal; strategy?: PrefetchReason }): Promise<PrefetchOutcome>;
-  /** Cancel every in-flight prefetch and clear the resident set. */
+  /** Cancel every in-flight prefetch and release unclaimed prefetched data. */
   cancelAll(reason?: string): void;
   /** Cancel in-flight prefetches for one target id. */
   cancel(targetId: string, reason?: string): void;
+  /**
+   * Drop a resident value — demand-loaded, claimed or prefetched — and its
+   * resident bookkeeping (bytes, recency). In-flight loads are not affected
+   * (use `cancel` for those). Returns whether something was dropped.
+   */
+  release(targetId: string): boolean;
   /** Current aggregate counters. */
   stats(): PrefetchStats;
   /** hits / (hits + misses). */

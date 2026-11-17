@@ -15,11 +15,11 @@ import {
   chunkText,
   compareHits,
   contentHash,
-  estimateTokens,
   normalizeText,
   toUnit,
   type ChunkOptions,
 } from './text.js';
+import { estimateTokens } from '../shared/tokens.js';
 import type {
   AssembledContext,
   ContextOptions,
@@ -110,7 +110,27 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
     return true;
   };
 
-  async function ingest(input: KnowledgeDocument): Promise<IngestResult> {
+  // Per-id mutation chain: ingest/remove of the same id run strictly in CALL
+  // order, so the last call wins in the index AND in persistence (a slow embed
+  // of an older version can never overwrite a newer one). Different ids run
+  // concurrently.
+  const tails = new Map<string, Promise<unknown>>();
+  function serialize<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const run = (tails.get(id) ?? Promise.resolve()).then(task, task);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    tails.set(id, tail);
+    void tail.then(() => {
+      if (tails.get(id) === tail) tails.delete(id);
+    });
+    return run;
+  }
+
+  const ingest = (input: KnowledgeDocument): Promise<IngestResult> => serialize(input.id, () => ingestNow(input));
+
+  async function ingestNow(input: KnowledgeDocument): Promise<IngestResult> {
     const text = normalizeText(input.text);
     const hash = contentHash(text);
     const prior = docs.get(input.id);
@@ -256,11 +276,13 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
     };
   }
 
-  async function remove(id: string): Promise<boolean> {
-    const had = docs.has(id);
-    unindexDoc(id);
-    await persistence?.delete(id);
-    return had;
+  function remove(id: string): Promise<boolean> {
+    return serialize(id, async () => {
+      const had = docs.has(id);
+      unindexDoc(id);
+      await persistence?.delete(id);
+      return had;
+    });
   }
 
   return {

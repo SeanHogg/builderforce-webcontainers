@@ -111,6 +111,11 @@ export interface LearnerConfig {
   /** Thermal band. `'hot'` is treated as pressure. */
   thermal?: () => 'ok' | 'warm' | 'hot';
   clock?: () => number;
+  /**
+   * Applied changes kept in `history()` (and reachable by `rollback()`),
+   * oldest dropped first. Default 256.
+   */
+  historyLimit?: number;
 }
 
 export interface ObserveResult {

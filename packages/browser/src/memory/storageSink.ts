@@ -43,10 +43,16 @@ export interface StorageSinkOptions {
   cache: ModelCache;
   /**
    * Encode an opaque payload to bytes for the model cache.
-   * Default: UTF-8 JSON. Callers with raw weight bytes should pass their own.
+   * Default: binary payloads (ArrayBuffer, SharedArrayBuffer, any TypedArray,
+   * DataView) are stored as their raw bytes and come back as the same type;
+   * everything else is UTF-8 JSON.
    */
   encode?: (payload: unknown) => ArrayBuffer;
-  /** Inverse of `encode`. Default: UTF-8 JSON parse, falling back to the raw buffer. */
+  /**
+   * Inverse of `encode` for non-binary payloads. Default: UTF-8 JSON parse,
+   * falling back to the raw buffer. Binary payloads written by the default
+   * encoder never pass through here.
+   */
   decode?: (bytes: ArrayBuffer) => unknown;
 }
 
@@ -64,15 +70,16 @@ function exactBuffer(bytes: Uint8Array): ArrayBuffer {
  * so a reload reconstructs the resident without a second store.
  */
 export function createModelCacheSink(options: StorageSinkOptions): StorageSink {
-  const encode = options.encode ?? defaultEncode;
   const decode = options.decode ?? defaultDecode;
   const cache = options.cache;
 
   return {
     async spill(entry, now) {
-      const payloadBytes = encode(entry.payload);
-      const header = encodeHeader(entry, now);
-      const bytes = concat(header, payloadBytes);
+      const encoded: EncodedPayload = options.encode
+        ? { encoding: 'custom', bytes: options.encode(entry.payload) }
+        : defaultEncode(entry.payload);
+      const header = encodeHeader(entry, now, encoded.encoding);
+      const bytes = concat(header, encoded.bytes);
       await cache.put(cacheKey(entry.id), {
         quantization: entry.component ?? 'resident',
         paramsB: entry.bytes / 1e9,
@@ -104,7 +111,7 @@ export function createModelCacheSink(options: StorageSinkOptions): StorageSink {
         reloadCostMs: record.reloadCostMs,
         reuseProbability: record.reuseProbability,
         tier: 'ram',
-        payload: decode(split.payload),
+        payload: decodePayload(header?.encoding, split.payload, decode),
       };
     },
     async delete(record) {
@@ -117,7 +124,11 @@ export function createModelCacheSink(options: StorageSinkOptions): StorageSink {
   };
 }
 
-/** In-memory sink for tests that do not want IndexedDB. Still ModelCache-shaped. */
+/**
+ * In-memory sink for tests that do not want IndexedDB. Still ModelCache-shaped.
+ * The payload is kept by reference, so binary payloads (ArrayBuffer,
+ * TypedArray) reload as the very same object — nothing is serialized.
+ */
 export function createMemorySink(): StorageSink {
   const records = new Map<string, { record: SpilledRecord; entry: ResidentEntry }>();
   return {
@@ -153,13 +164,18 @@ function cacheKey(id: string): string {
   return `${CACHE_PREFIX}${id}`;
 }
 
-/** Little-endian uint32 length prefix, then UTF-8 JSON. Independent of payload encoding. */
-function encodeHeader(entry: ResidentEntry, now: number): Uint8Array {
+/**
+ * Little-endian uint32 length prefix, then UTF-8 JSON. The header records how
+ * the payload was encoded so binary payloads are restored as binary. Headers
+ * written before `encoding` existed decode as JSON, as they always did.
+ */
+function encodeHeader(entry: ResidentEntry, now: number, encoding: PayloadEncoding): Uint8Array {
   const json = new TextEncoder().encode(JSON.stringify({
     group: entry.group,
     component: entry.component,
     bytes: entry.bytes,
     spilledAt: now,
+    encoding,
   }));
   const header = new Uint8Array(4 + json.byteLength);
   new DataView(header.buffer).setUint32(0, json.byteLength, true);
@@ -185,17 +201,79 @@ function splitHeader(bytes: ArrayBuffer): { header: string; payload: ArrayBuffer
   };
 }
 
-function decodeHeader(header: string): { group?: string; component?: string } | undefined {
+function decodeHeader(header: string): { group?: string; component?: string; encoding?: string } | undefined {
   try {
-    const parsed = JSON.parse(header) as { group?: string; component?: string };
+    const parsed = JSON.parse(header) as { group?: string; component?: string; encoding?: string };
     return parsed;
   } catch {
     return undefined;
   }
 }
 
-function defaultEncode(payload: unknown): ArrayBuffer {
-  return exactBuffer(new TextEncoder().encode(JSON.stringify(payload ?? null)));
+/**
+ * How a payload was encoded. `json` / `custom` go through `decode`; the rest
+ * are raw bytes restored as their original binary type.
+ */
+type PayloadEncoding = 'json' | 'custom' | 'arraybuffer' | 'dataview' | `typed:${string}`;
+
+interface EncodedPayload {
+  encoding: PayloadEncoding;
+  bytes: ArrayBuffer;
+}
+
+type TypedArrayCtor = new (buffer: ArrayBuffer) => ArrayBufferView;
+
+/** TypedArray constructors this realm has, by name. Resolved lazily (BigInt arrays may be absent). */
+function typedArrayCtor(name: string): TypedArrayCtor | undefined {
+  const known = [
+    'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array',
+    'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array',
+  ];
+  if (!known.includes(name)) return undefined;
+  const ctor = (globalThis as unknown as Record<string, unknown>)[name];
+  return typeof ctor === 'function' ? (ctor as TypedArrayCtor) : undefined;
+}
+
+/** Brand check that also works across realms (workers, iframes, test environments). */
+function tagOf(value: unknown): string {
+  return Object.prototype.toString.call(value);
+}
+
+function copyBytes(view: { buffer: ArrayBufferLike; byteOffset: number; byteLength: number }): ArrayBuffer {
+  const out = new Uint8Array(view.byteLength);
+  out.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+  return out.buffer as ArrayBuffer;
+}
+
+function defaultEncode(payload: unknown): EncodedPayload {
+  const tag = tagOf(payload);
+  if (tag === '[object ArrayBuffer]' || tag === '[object SharedArrayBuffer]') {
+    const buffer = payload as ArrayBufferLike;
+    return { encoding: 'arraybuffer', bytes: copyBytes({ buffer, byteOffset: 0, byteLength: buffer.byteLength }) };
+  }
+  if (ArrayBuffer.isView(payload)) {
+    const bytes = copyBytes(payload);
+    if (tag === '[object DataView]') return { encoding: 'dataview', bytes };
+    const name = payload.constructor?.name ?? '';
+    if (typedArrayCtor(name)) return { encoding: `typed:${name}`, bytes };
+    // An exotic view (a subclass): keep the bytes, restore as a plain buffer.
+    return { encoding: 'arraybuffer', bytes };
+  }
+  return { encoding: 'json', bytes: exactBuffer(new TextEncoder().encode(JSON.stringify(payload ?? null))) };
+}
+
+function decodePayload(
+  encoding: string | undefined,
+  bytes: ArrayBuffer,
+  decode: (bytes: ArrayBuffer) => unknown,
+): unknown {
+  if (encoding === 'arraybuffer') return bytes;
+  if (encoding === 'dataview') return new DataView(bytes);
+  if (encoding?.startsWith('typed:')) {
+    const ctor = typedArrayCtor(encoding.slice('typed:'.length));
+    return ctor ? new ctor(bytes) : bytes;
+  }
+  return decode(bytes);
 }
 
 function defaultDecode(bytes: ArrayBuffer): unknown {

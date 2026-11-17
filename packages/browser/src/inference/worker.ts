@@ -20,11 +20,14 @@ import {
   INFERENCE_READY,
   INFERENCE_TOKEN,
   type DoneReply,
+  type GenerateRequest,
   type InferenceReply,
   type InferenceRequest,
 } from './protocol.js';
 import { probeRuntimeCapabilities } from './capabilities.js';
-import type { BackendContext, InferenceBackend } from './types.js';
+import { detectSharedArrayBuffer, detectWasmSimd, detectWebGpu } from '../shared/hardwareProbe.js';
+import { estimateTokens } from '../shared/tokens.js';
+import type { BackendContext, ChatMessage, InferenceBackend } from './types.js';
 
 interface WorkerGlobalLike {
   postMessage(message: InferenceReply): void;
@@ -36,6 +39,13 @@ export interface InferenceWorkerHostOptions {
   /** Backends in preference order; the first available one is used. */
   backends: InferenceBackend[];
   now?: () => number;
+}
+
+/** Prompt size: the backend's tokenizer count when it has one, else the shared estimate. */
+function countPrompt(backend: InferenceBackend, messages: ChatMessage[]): { tokens: number; estimated: boolean } {
+  const exact = backend.countPromptTokens?.(messages);
+  if (typeof exact === 'number' && Number.isFinite(exact) && exact >= 0) return { tokens: exact, estimated: false };
+  return { tokens: messages.reduce((n, m) => n + estimateTokens(m.content), 0), estimated: true };
 }
 
 /**
@@ -52,18 +62,19 @@ export function startInferenceWorkerHost(
   const context: BackendContext = {
     log: (message) => worker.postMessage({ type: INFERENCE_LOG, id: -1, message }),
     get sharedArrayBuffer() {
-      return typeof SharedArrayBuffer !== 'undefined';
+      return detectSharedArrayBuffer();
     },
     get wasmSimd() {
-      return probeRuntimeCapabilities().wasmSimd;
+      return detectWasmSimd();
     },
     get webgpu() {
-      return typeof navigator !== 'undefined' && 'gpu' in navigator;
+      return detectWebGpu();
     },
   };
 
   let active: InferenceBackend | undefined;
   let activeAbort: AbortController | undefined;
+  let activeRequestId: number | undefined;
 
   const reply = (message: InferenceReply) => worker.postMessage(message);
   const fail = (id: number, error: unknown) =>
@@ -77,27 +88,30 @@ export function startInferenceWorkerHost(
     throw new Error('no inference backend available in this environment');
   }
 
-  async function handleGenerate(id: number, request: Extract<InferenceRequest, { type: typeof INFERENCE_GENERATE }>) {
-    if (!active) throw new Error('no model loaded');
+  /** Abort any running generation and release the loaded model. */
+  async function releaseActive(): Promise<void> {
+    activeAbort?.abort();
+    const previous = active;
+    active = undefined;
+    await previous?.dispose();
+  }
+
+  async function handleGenerate(id: number, request: GenerateRequest) {
+    const backend = active;
+    if (!backend) throw new Error('no model loaded');
     activeAbort?.abort();
     const abort = new AbortController();
     activeAbort = abort;
-    // A caller-supplied signal wins; otherwise the worker-side controller
-    // (cancel request / next generate) drives cancellation. When the caller's
-    // signal fires we also fire ours so the backend sees a single signal.
-    const callerSignal = request.options?.signal;
-    if (callerSignal) {
-      if (callerSignal.aborted) abort.abort();
-      else callerSignal.addEventListener('abort', () => abort.abort(), { once: true });
-    }
-    const signal = abort.signal;
+    activeRequestId = id;
     const started = now();
     let firstTokenAt = -1;
     let generated = 0;
     try {
-      for await (const { token, index } of active.generate(request.messages, {
+      // The wire options never carry a signal (not cloneable); the worker-side
+      // controller is the ONE cancellation source (cancel request / next generate).
+      for await (const { token, index } of backend.generate(request.messages, {
         ...request.options,
-        signal,
+        signal: abort.signal,
       })) {
         if (firstTokenAt < 0) firstTokenAt = now();
         generated++;
@@ -106,11 +120,13 @@ export function startInferenceWorkerHost(
       const finished = now();
       const ttftMs = firstTokenAt >= 0 ? firstTokenAt - started : finished - started;
       const decodeMs = firstTokenAt >= 0 ? finished - firstTokenAt : 0;
+      const prompt = countPrompt(backend, request.messages);
       const done: DoneReply = {
         type: INFERENCE_DONE,
         id,
         requestId: id,
-        promptTokens: request.messages.reduce((n, m) => n + m.content.length, 0),
+        promptTokens: prompt.tokens,
+        promptTokensEstimated: prompt.estimated,
         generatedTokens: generated,
         ttftMs,
         decodeMs,
@@ -118,7 +134,10 @@ export function startInferenceWorkerHost(
       };
       reply(done);
     } finally {
-      if (activeAbort === abort) activeAbort = undefined;
+      if (activeAbort === abort) {
+        activeAbort = undefined;
+        activeRequestId = undefined;
+      }
     }
   }
 
@@ -135,8 +154,12 @@ export function startInferenceWorkerHost(
             break;
           }
           case INFERENCE_LOAD: {
-            active = await selectBackend();
-            await active.load(request.ref, request.weights, context);
+            // Abort + dispose the previous model BEFORE loading the next, so two
+            // models are never resident and no stale generation keeps decoding.
+            await releaseActive();
+            const next = await selectBackend();
+            await next.load(request.ref, request.weights, context);
+            active = next;
             reply({ type: INFERENCE_READY, id, capabilities: probeRuntimeCapabilities(backends) });
             break;
           }
@@ -144,12 +167,10 @@ export function startInferenceWorkerHost(
             await handleGenerate(id, request);
             break;
           case INFERENCE_CANCEL:
-            activeAbort?.abort();
+            if (request.requestId === undefined || request.requestId === activeRequestId) activeAbort?.abort();
             break;
           case INFERENCE_DISPOSE_MODEL: {
-            activeAbort?.abort();
-            await active?.dispose();
-            active = undefined;
+            await releaseActive();
             reply({ type: INFERENCE_READY, id, capabilities: probeRuntimeCapabilities(backends) });
             break;
           }

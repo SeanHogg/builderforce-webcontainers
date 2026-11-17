@@ -127,6 +127,7 @@ export interface KvCacheStats {
   pages: number;
   bytes: number;
   evictions: number;
+  /** Distinct recently seen session ids (bounded by `maxSessions`). */
   sessions: number;
 }
 
@@ -148,6 +149,11 @@ export interface KvCacheRuntimeOptions {
   draftAccuracy?: number;
   /** Target format when `preconvertQuant` is on. Default `q4`. */
   preconvertTo?: KvQuantization;
+  /**
+   * Distinct session ids remembered for `stats().sessions`, least recently
+   * seen forgotten first. Default 1024.
+   */
+  maxSessions?: number;
 }
 
 export interface KvCacheRuntime {

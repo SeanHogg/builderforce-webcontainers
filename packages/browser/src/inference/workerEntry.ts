@@ -1,7 +1,8 @@
 /**
  * Phase 1 — Local CPU Inference Engine: worker entry.
  *
- * Bundled to `dist/inference/worker.js` (see `scripts/build-sw.mjs`). Backends
+ * Bundled to `dist/inference/worker.bundle.js` (see `scripts/build-sw.mjs`;
+ * exported as `@seanhogg/builderforce-webcontainers/ml/worker.js`). Backends
  * are listed in preference order; `mock` is last so a real backend always
  * wins when its module is present. The ONNX/Wllama/WebLLM adapters take an
  * injected `loadModule()` so this package stays dependency-free — a host app

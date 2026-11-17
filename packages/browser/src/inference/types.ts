@@ -55,7 +55,10 @@ export interface InferenceToken {
 
 /** Final stats for one `generate()` call. */
 export interface GenerationStats {
+  /** Prompt length in tokens: the backend's tokenizer count, or the ~4 chars/token estimate (see `promptTokensEstimated`). */
   promptTokens: number;
+  /** True when `promptTokens` is the heuristic estimate because the backend reports no count. */
+  promptTokensEstimated: boolean;
   generatedTokens: number;
   /** Wall-clock ms from generate() call to first token. */
   ttftMs: number;
@@ -96,6 +99,8 @@ export interface InferenceBackend {
   probe(): Promise<BackendInfo>;
   load(model: ModelRef, weights: ArrayBuffer, context: BackendContext): Promise<void>;
   generate(messages: ChatMessage[], options?: GenerateOptions): AsyncIterable<InferenceToken>;
+  /** Exact prompt token count from the loaded model's tokenizer, when the backend has one. */
+  countPromptTokens?(messages: ChatMessage[]): number;
   dispose(): Promise<void>;
 }
 

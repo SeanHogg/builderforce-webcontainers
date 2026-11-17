@@ -4,7 +4,7 @@
 //   dist/relay.html  the cross-origin relay page, script inlined;
 //   dist/check/worker.js  the type-check worker;
 //   dist/node/worker.js   the process worker (Node runtime, npm, shell);
-//   dist/inference/worker.js  the local inference worker (Phase 1).
+//   dist/inference/worker.bundle.js  the local inference worker (Phase 1).
 // dist/assets.js exports both as strings, so a server (a Worker, an Express app)
 // can serve them straight from the installed package without copying files.
 import { build } from 'esbuild';
@@ -44,10 +44,12 @@ await writeFile('dist/node/worker.js', processWorker);
 await writeFile('dist/process-worker.js', processWorker);
 
 // The local inference worker (Phase 1): self-contained so it can run on a
-// dedicated worker thread. The client finds it beside dist/index.js as
-// `dist/inference/worker.js`.
+// dedicated worker thread. It gets its OWN path — dist/inference/worker.js is
+// tsc's ES module (startInferenceWorkerHost / runInferenceWorker, re-exported
+// by ./ml) and must not be overwritten. The client finds the bundle beside
+// dist/inference/client.js; package.json exports it as `./ml/worker.js`.
 await mkdir('dist/inference', { recursive: true });
-await writeFile('dist/inference/worker.js', await bundle('src/inference/workerEntry.ts'));
+await writeFile('dist/inference/worker.bundle.js', await bundle('src/inference/workerEntry.ts'));
 
 await writeFile('dist/sw.js', serviceWorker);
 await writeFile('dist/relay.html', relayHtml);

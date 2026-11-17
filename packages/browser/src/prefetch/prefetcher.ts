@@ -19,66 +19,40 @@
  *     nobody used is released. This is what keeps prefetching from thrashing
  *     memory or competing with active inference.
  *   - At most `maxConcurrent` speculative prefetches run at once.
+ *   - Every resident value (demand or prefetched, claimed or not) lives inside
+ *     the resident byte budget and entry cap; the known-target index and the
+ *     self-tuner's bookkeeping are bounded too.
  *   - The self-tuner disables prefetching when the MEASURED benefit is
  *     repeatedly negative (wasted speculative work outweighs avoided waits).
+ *
+ * This file composes the pieces; each concern lives in its own module:
+ *   admission.ts (the one admission gate) · loadRegistry.ts (in-flight loads)
+ *   residentStore.ts (budgeted resident values) · selfTuner.ts (benefit
+ *   measurement) · stats.ts (counters + event log) · targetIndex.ts.
  *
  * Browser-compatible only: pure TypeScript, no native code, no dependencies.
  */
 
+import { now as clockNow } from '../shared/clock.js';
+import { createAdmissionGate } from './admission.js';
+import { createLoadRegistry, type LoadRecord } from './loadRegistry.js';
+import { mergePredictions, predictFromContext, predictFromGraph, predictFromHistory } from './predictor.js';
+import { createResidentStore, type ResidentValue } from './residentStore.js';
+import { createSelfTuner } from './selfTuner.js';
+import { createPrefetchLedger } from './stats.js';
+import { createTargetIndex } from './targetIndex.js';
 import type {
   PrefetchConfig,
   PrefetchContext,
-  PrefetchEvent,
   PrefetchOutcome,
   PrefetchPrediction,
   PrefetchReason,
   PrefetchRequestResult,
-  PrefetchSkipReason,
   PrefetchStats,
   PrefetchTarget,
   Prefetcher,
   ShouldThrottle,
 } from './types.js';
-import {
-  mergePredictions,
-  predictFromContext,
-  predictFromGraph,
-  predictFromHistory,
-  type TargetIndex,
-} from './predictor.js';
-
-interface LoadRecord {
-  id: string;
-  controller: AbortController;
-  promise: Promise<unknown>;
-  bytes: number;
-  /** Which strategy produced this load (for the explainable event log). */
-  strategy: PrefetchReason;
-  /** True when the load was started speculatively (a prefetch). */
-  speculative: boolean;
-  /** True when a request has attached to this in-flight load. */
-  joined: boolean;
-  /** True when a request consumed the loaded data. */
-  claimed: boolean;
-  completed: boolean;
-  /** Wall-clock ms the load took. */
-  loadMs: number;
-  startedAt: number;
-}
-
-interface ResidentEntry {
-  value: unknown;
-  bytes: number;
-  loadedAt: number;
-  loadMs: number;
-  /** 'prefetch' when the data was loaded speculatively, 'demand' otherwise. */
-  source: 'prefetch' | 'demand';
-  /** True when a request consumed the loaded data. */
-  claimed: boolean;
-}
-
-/** Internal result of trying to start a speculative load. */
-type StartResult = 'started' | 'duplicate' | 'throttled';
 
 const DEFAULT_MAX_CONCURRENT = 2;
 const DEFAULT_MAX_TARGETS_PER_REQUEST = 8;
@@ -87,6 +61,9 @@ const DEFAULT_MIN_CONFIDENCE = 0.2;
 const DEFAULT_EVENT_LIMIT = 128;
 const DEFAULT_DISABLE_AFTER = 3;
 const DEFAULT_MIN_SAMPLES = 3;
+const DEFAULT_MAX_RESIDENT_ENTRIES = 1024;
+const DEFAULT_MAX_KNOWN_TARGETS = 1024;
+const DEFAULT_MAX_TRACKED_LOADS = 256;
 
 export function createPrefetcher(config: PrefetchConfig): Prefetcher {
   const loader = config.loader;
@@ -98,61 +75,58 @@ export function createPrefetcher(config: PrefetchConfig): Prefetcher {
   const maxTargetsPerRequest = Math.max(1, config.maxTargetsPerRequest ?? DEFAULT_MAX_TARGETS_PER_REQUEST);
   const historyWindow = Math.max(2, config.historyWindow ?? DEFAULT_HISTORY_WINDOW);
   const minConfidence = config.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
-  const eventLogLimit = Math.max(1, config.eventLogLimit ?? DEFAULT_EVENT_LIMIT);
-  const now = config.now ?? defaultNow;
-  const disableAfter = Math.max(1, config.tuning?.disableAfter ?? DEFAULT_DISABLE_AFTER);
-  const minSamples = Math.max(1, config.tuning?.minSamples ?? DEFAULT_MIN_SAMPLES);
-  const retryAfterMs = Math.max(0, config.tuning?.retryAfterMs ?? 0);
-  const residentBudgetBytes = config.residentBudgetBytes ?? Number.POSITIVE_INFINITY;
+  const now = config.now ?? clockNow;
 
-  const index: TargetIndex = new Map();
-  for (const target of config.targets ?? []) index.set(target.id, target);
-
-  const resident = new Map<string, ResidentEntry>();
-  const inFlight = new Map<string, LoadRecord>();
+  const targets = createTargetIndex(config.targets ?? [], config.maxKnownTargets ?? DEFAULT_MAX_KNOWN_TARGETS);
+  const index = targets.index;
   const history: string[] = [];
-  const eventLog: PrefetchEvent[] = [];
-
-  let hits = 0;
-  let misses = 0;
-  let prefetchHits = 0;
-  let attempts = 0;
-  let completed = 0;
-  let throttled = 0;
-  let cancelled = 0;
-  let failed = 0;
-  let skipped = 0;
-  let totalWaitMs = 0;
-  let waitSamples = 0;
-  let totalLoadMs = 0;
-  let loadSamples = 0;
-  let peakConcurrent = 0;
+  const ledger = createPrefetchLedger({
+    now,
+    eventLogLimit: Math.max(1, config.eventLogLimit ?? DEFAULT_EVENT_LIMIT),
+    onEvent: config.onEvent,
+  });
+  const counters = ledger.counters;
+  const resident = createResidentStore({
+    budgetBytes: config.residentBudgetBytes ?? Number.POSITIVE_INFINITY,
+    maxEntries: config.maxResidentEntries ?? DEFAULT_MAX_RESIDENT_ENTRIES,
+  });
+  const tuner = createSelfTuner({
+    now,
+    disableAfter: Math.max(1, config.tuning?.disableAfter ?? DEFAULT_DISABLE_AFTER),
+    minSamples: Math.max(1, config.tuning?.minSamples ?? DEFAULT_MIN_SAMPLES),
+    retryAfterMs: Math.max(0, config.tuning?.retryAfterMs ?? 0),
+    maxTrackedLoads: config.tuning?.maxTrackedLoads ?? DEFAULT_MAX_TRACKED_LOADS,
+  });
+  const loads = createLoadRegistry({
+    loader,
+    now,
+    onLoaded(rec, value) {
+      counters.completed += 1;
+      ledger.noteLoad(rec.loadMs);
+      resident.set(rec.id, {
+        value,
+        bytes: rec.bytes,
+        loadedAt: now(),
+        loadMs: rec.loadMs,
+        source: rec.speculative ? 'prefetch' : 'demand',
+        claimed: false,
+      });
+      if (rec.speculative) tuner.noteSpeculativeLoad(rec.id, rec.loadMs);
+      ledger.record({ id: rec.id, strategy: rec.strategy, outcome: 'loaded', durationMs: rec.loadMs });
+    },
+    onFailed(rec, aborted) {
+      if (aborted) counters.cancelled += 1;
+      else counters.failed += 1;
+      ledger.record({
+        id: rec.id,
+        strategy: rec.strategy,
+        outcome: aborted ? 'cancelled' : 'failed',
+        durationMs: rec.loadMs,
+      });
+    },
+  });
 
   let enabled = config.enabled !== false;
-  let selfTunedOff = false;
-  let selfTuneTrips = 0;
-
-  // Self-tuner state. The measurement is CUMULATIVE, not per-window: the
-  // benefit a prefetch delivered (the wait it saved) against the cost of the
-  // speculative loads nobody ever used. A speculative load stays "waste"
-  // until a request claims it, so a prefetch that is never used keeps
-  // counting against the tuner for as long as it is outstanding.
-  let avoidedMs = 0;
-  let measuredRequests = 0;
-  let negativeStreak = 0;
-  let disabledAt = 0;
-  const unclaimedLoads: LoadRecord[] = [];
-
-  function recordEvent(event: Omit<PrefetchEvent, 'at'>): void {
-    const full: PrefetchEvent = { ...event, at: now() };
-    eventLog.push(full);
-    if (eventLog.length > eventLogLimit) eventLog.splice(0, eventLog.length - eventLogLimit);
-    config.onEvent?.(full);
-  }
-
-  function rememberTarget(target: PrefetchTarget): void {
-    if (!index.has(target.id)) index.set(target.id, target);
-  }
 
   function isPressure(): boolean {
     try {
@@ -163,212 +137,66 @@ export function createPrefetcher(config: PrefetchConfig): Prefetcher {
     }
   }
 
-  function speculativeCount(): number {
-    let count = 0;
-    for (const rec of inFlight.values()) if (rec.speculative) count += 1;
-    return count;
+  /** Drop speculative work and the prefetched data nobody asked for. */
+  function relievePressure(): void {
+    loads.dropUnjoined();
+    resident.releaseUnclaimed();
   }
 
-  function residentBytes(): number {
-    let total = 0;
-    for (const entry of resident.values()) total += entry.bytes;
-    return total;
-  }
+  const decideAdmission = createAdmissionGate({
+    ledger,
+    maxConcurrent,
+    isEnabled: () => enabled,
+    isPressure,
+    relievePressure,
+    isKnown: (id) => index.has(id),
+    isResident: (id) => resident.has(id),
+    isLoading: (id) => loads.has(id),
+    speculativeCount: () => loads.speculativeCount(),
+  });
 
-  /** Release prefetched data nobody asked for — the memory-pressure relief. */
-  function releaseUnclaimed(): number {
-    let released = 0;
-    for (const [id, entry] of [...resident.entries()]) {
-      if (entry.source !== 'prefetch' || entry.claimed) continue;
-      resident.delete(id);
-      released += 1;
-    }
-    return released;
-  }
-
-  /** Keep the resident set inside its budget by dropping unclaimed prefetches. */
-  function enforceResidentBudget(): void {
-    if (residentBytes() <= residentBudgetBytes) return;
-    const candidates = [...resident.entries()]
-      .filter(([, entry]) => entry.source === 'prefetch' && !entry.claimed)
-      .sort((a, b) => a[1].loadedAt - b[1].loadedAt);
-    for (const [id] of candidates) {
-      if (residentBytes() <= residentBudgetBytes) break;
-      resident.delete(id);
-    }
-  }
-
-  /** Drop speculative loads that nobody joined (pressure relief). */
-  function dropUnjoinedPrefetches(): number {
-    let dropped = 0;
-    for (const rec of [...inFlight.values()]) {
-      if (!rec.speculative || rec.joined) continue;
-      rec.controller.abort();
-      dropped += 1;
-    }
-    return dropped;
-  }
-
-  function onLoaded(rec: LoadRecord, value: unknown): void {
-    rec.completed = true;
-    rec.loadMs = Math.max(0, now() - rec.startedAt);
-    inFlight.delete(rec.id);
-    totalLoadMs += rec.loadMs;
-    loadSamples += 1;
-    completed += 1;
-    resident.set(rec.id, {
-      value,
-      bytes: rec.bytes,
-      loadedAt: now(),
-      loadMs: rec.loadMs,
-      source: rec.speculative ? 'prefetch' : 'demand',
-      claimed: false,
-    });
-    if (rec.speculative) unclaimedLoads.push(rec);
-    recordEvent({
-      id: rec.id,
-      strategy: rec.strategy,
-      outcome: 'loaded',
-      durationMs: rec.loadMs,
-    });
-    enforceResidentBudget();
-  }
-
-  function onFailed(rec: LoadRecord, error: unknown): void {
-    rec.completed = true;
-    rec.loadMs = Math.max(0, now() - rec.startedAt);
-    inFlight.delete(rec.id);
-    const aborted = rec.controller.signal.aborted
-      || (error instanceof Error && error.name === 'AbortError');
-    if (aborted) {
-      cancelled += 1;
-      recordEvent({
-        id: rec.id,
-        strategy: rec.strategy,
-        outcome: 'cancelled',
-        durationMs: rec.loadMs,
-      });
-      return;
-    }
-    failed += 1;
-    recordEvent({
-      id: rec.id,
-      strategy: rec.strategy,
-      outcome: 'failed',
-      durationMs: rec.loadMs,
-    });
-  }
-
-  function startLoad(
-    target: PrefetchTarget,
-    options: { speculative: boolean; strategy: PrefetchReason; signal?: AbortSignal },
-  ): LoadRecord {
-    const controller = new AbortController();
-    const startedAt = now();
-    const forward = () => controller.abort();
-    options.signal?.addEventListener('abort', forward, { once: true });
-    const promise = (async () => loader(target, controller.signal))();
-    const rec: LoadRecord = {
-      id: target.id,
-      controller,
-      promise,
-      bytes: target.bytes,
-      strategy: options.strategy,
-      speculative: options.speculative,
-      joined: false,
-      claimed: false,
-      completed: false,
-      loadMs: 0,
-      startedAt,
-    };
-    inFlight.set(target.id, rec);
-    promise.then(
-      (value) => {
-        options.signal?.removeEventListener('abort', forward);
-        onLoaded(rec, value);
-      },
-      (error: unknown) => {
-        options.signal?.removeEventListener('abort', forward);
-        onFailed(rec, error);
-      },
-    );
+  function startSpeculative(target: PrefetchTarget, strategy: PrefetchReason, signal?: AbortSignal): LoadRecord {
+    const rec = loads.start(target, { speculative: true, strategy, signal });
+    ledger.noteConcurrency(loads.speculativeCount());
     return rec;
   }
 
-  function noteConcurrency(): void {
-    const count = speculativeCount();
-    if (count > peakConcurrent) peakConcurrent = count;
-  }
-
-  /** Total ms of speculative load time that no request has claimed. */
-  function unclaimedWasteMs(): number {
-    let total = 0;
-    for (const rec of unclaimedLoads) {
-      if (!rec.claimed) total += rec.loadMs;
-    }
-    return total;
-  }
-
-  /** Evaluate the self-tuner. Called after each measured request. */
   function evaluateTuner(): void {
-    measuredRequests += 1;
-
-    // A self-tuned-off prefetcher may be re-enabled by the retry window.
-    if (!enabled && selfTunedOff && retryAfterMs > 0 && now() - disabledAt >= retryAfterMs) {
+    const action = tuner.evaluate(enabled);
+    if (action === 'reenable') {
       enabled = true;
-      selfTunedOff = false;
-      negativeStreak = 0;
-      avoidedMs = 0;
-      unclaimedLoads.length = 0;
       return;
     }
-
-    if (measuredRequests < minSamples) return;
-    const waste = unclaimedWasteMs();
-    // Negative means the speculative work cost more than it saved. The
-    // comparison is cumulative: waste only falls when a request claims the
-    // load, and avoided only rises when a prefetch actually saved a wait.
-    negativeStreak = waste > avoidedMs ? negativeStreak + 1 : 0;
-    if (negativeStreak >= disableAfter && !selfTunedOff) {
-      selfTunedOff = true;
-      selfTuneTrips += 1;
+    if (action === 'disable') {
       enabled = false;
-      disabledAt = now();
-      dropUnjoinedPrefetches();
-      releaseUnclaimed();
-      recordEvent({
-        id: '*',
-        strategy: 'explicit',
-        outcome: 'throttled',
-        durationMs: 0,
-        skipReason: 'disabled',
-      });
+      relievePressure();
+      ledger.record({ id: '*', strategy: 'explicit', outcome: 'throttled', durationMs: 0, skipReason: 'disabled' });
     }
-  }
-
-  /** Credit the wait a prefetch saved the caller. */
-  function creditAvoidedWait(entry: ResidentEntry | undefined, actualWaitMs: number): void {
-    if (!entry || entry.source !== 'prefetch') return;
-    // A demand load of the same data would have cost about `loadMs`; the
-    // prefetch saved the caller whatever it did not have to wait for.
-    avoidedMs += Math.max(0, entry.loadMs - actualWaitMs);
   }
 
   function markClaimed(id: string): void {
-    // A claimed load was not waste: remove it from the outstanding set.
-    for (let i = unclaimedLoads.length - 1; i >= 0; i -= 1) {
-      const rec = unclaimedLoads[i]!;
-      if (rec.id !== id) continue;
-      rec.claimed = true;
-      unclaimedLoads.splice(i, 1);
-    }
-    const entry = resident.get(id);
-    if (entry) entry.claimed = true;
+    // A claimed load was not waste.
+    tuner.markClaimed(id);
+    resident.markClaimed(id);
   }
 
   function pushHistory(id: string): void {
     history.push(id);
     while (history.length > historyWindow) history.shift();
+  }
+
+  function startPredictions(predictions: readonly PrefetchPrediction[]): PrefetchPrediction[] {
+    const acted: PrefetchPrediction[] = [];
+    for (const prediction of predictions) {
+      if (acted.length >= maxTargetsPerRequest) break;
+      // Predictions never teach the target index: a predicted target is either
+      // already indexed or a 0-byte placeholder for an unknown id, and learning
+      // the placeholder would evict real metadata and record a false footprint.
+      const verdict = decideAdmission(prediction.target, prediction.strategy);
+      if (verdict.admit) startSpeculative(prediction.target, prediction.strategy);
+      if (verdict.admit || verdict.result === 'duplicate') acted.push(prediction);
+    }
+    return acted;
   }
 
   function autoPredict(targetId: string): PrefetchPrediction[] {
@@ -377,111 +205,25 @@ export function createPrefetcher(config: PrefetchConfig): Prefetcher {
       [predictFromGraph(targetId, config.graph, index), predictFromHistory(history, index)],
       minConfidence,
     );
-    if (predictions.length === 0) return [];
-    return startPredictions(predictions);
+    return predictions.length === 0 ? [] : startPredictions(predictions);
   }
 
-  function startPredictions(predictions: readonly PrefetchPrediction[]): PrefetchPrediction[] {
-    const acted: PrefetchPrediction[] = [];
-    for (const prediction of predictions) {
-      if (acted.length >= maxTargetsPerRequest) break;
-      const result = startPrefetch(prediction);
-      if (result === 'started' || result === 'duplicate') acted.push(prediction);
-    }
-    return acted;
-  }
-
-  function skipReasonFor(result: StartResult): PrefetchSkipReason {
-    switch (result) {
-      case 'duplicate':
-        return 'already-loaded';
-      case 'throttled':
-        return 'pressure';
-      default:
-        return 'unknown-target';
-    }
-  }
-
-  function startPrefetch(prediction: PrefetchPrediction): StartResult {
-    const target = prediction.target;
-    rememberTarget(target);
-    attempts += 1;
-    if (!enabled) {
-      skipped += 1;
-      recordEvent({
-        id: target.id,
-        strategy: prediction.strategy,
-        outcome: 'skipped',
-        durationMs: 0,
-        skipReason: 'disabled',
-      });
-      return 'throttled';
-    }
-    if (isPressure()) {
-      throttled += 1;
-      dropUnjoinedPrefetches();
-      releaseUnclaimed();
-      enforceResidentBudget();
-      recordEvent({
-        id: target.id,
-        strategy: prediction.strategy,
-        outcome: 'throttled',
-        durationMs: 0,
-        skipReason: 'pressure',
-      });
-      return 'throttled';
-    }
-    if (resident.has(target.id)) {
-      skipped += 1;
-      recordEvent({
-        id: target.id,
-        strategy: prediction.strategy,
-        outcome: 'duplicate',
-        durationMs: 0,
-        skipReason: 'already-loaded',
-      });
-      return 'duplicate';
-    }
-    const existing = inFlight.get(target.id);
-    if (existing) {
-      skipped += 1;
-      recordEvent({
-        id: target.id,
-        strategy: prediction.strategy,
-        outcome: 'duplicate',
-        durationMs: 0,
-        skipReason: 'already-loading',
-      });
-      return 'duplicate';
-    }
-    if (speculativeCount() >= maxConcurrent) {
-      skipped += 1;
-      recordEvent({
-        id: target.id,
-        strategy: prediction.strategy,
-        outcome: 'skipped',
-        durationMs: 0,
-        skipReason: 'concurrency-limit',
-      });
-      return 'throttled';
-    }
-    startLoad(target, { speculative: true, strategy: prediction.strategy });
-    noteConcurrency();
-    return 'started';
+  function demandLoad(target: PrefetchTarget, signal: AbortSignal | undefined): Promise<unknown> {
+    return loads.start(target, { speculative: false, strategy: 'explicit', signal }).promise;
   }
 
   async function request(
     target: PrefetchTarget,
     options?: { signal?: AbortSignal },
   ): Promise<PrefetchRequestResult> {
-    rememberTarget(target);
+    targets.remember(target);
     const startedAt = now();
     let hit = false;
     let value: unknown;
-    let creditEntry: ResidentEntry | undefined;
+    let creditEntry: ResidentValue | undefined;
 
     const residentEntry = resident.get(target.id);
-    const inFlightRecord = inFlight.get(target.id);
+    const inFlightRecord = loads.get(target.id);
 
     if (residentEntry) {
       hit = true;
@@ -495,31 +237,29 @@ export function createPrefetcher(config: PrefetchConfig): Prefetcher {
       inFlightRecord.joined = true;
       try {
         value = await inFlightRecord.promise;
-        creditEntry = resident.get(target.id);
+        creditEntry = resident.peek(target.id);
         markClaimed(target.id);
       } catch {
         // The prefetch was cancelled (e.g. under pressure) — fall back to a
         // fresh on-demand load so the caller is never left without data.
         hit = false;
-        const rec = startLoad(target, { speculative: false, strategy: 'explicit', signal: options?.signal });
-        value = await rec.promise;
+        value = await demandLoad(target, options?.signal);
       }
     } else {
-      hit = false;
-      const rec = startLoad(target, { speculative: false, strategy: 'explicit', signal: options?.signal });
-      value = await rec.promise;
+      value = await demandLoad(target, options?.signal);
     }
 
     const waitMs = Math.max(0, now() - startedAt);
     if (hit) {
-      hits += 1;
-      if (creditEntry?.source === 'prefetch') prefetchHits += 1;
+      counters.hits += 1;
+      if (creditEntry?.source === 'prefetch') counters.prefetchHits += 1;
     } else {
-      misses += 1;
+      counters.misses += 1;
     }
-    totalWaitMs += waitMs;
-    waitSamples += 1;
-    creditAvoidedWait(creditEntry, waitMs);
+    ledger.noteWait(waitMs);
+    // A demand load of the same data would have cost about `loadMs`; the
+    // prefetch saved the caller whatever it did not have to wait for.
+    if (creditEntry?.source === 'prefetch') tuner.creditAvoidedWait(creditEntry.loadMs, waitMs);
 
     pushHistory(target.id);
     evaluateTuner();
@@ -527,13 +267,7 @@ export function createPrefetcher(config: PrefetchConfig): Prefetcher {
     // Predict what the workload will need NEXT and start it in the
     // background. The caller never waits for this.
     const predicted = autoPredict(target.id);
-
     return { hit, value, waitMs, predicted };
-  }
-
-  function requestById(id: string, options?: { signal?: AbortSignal }): Promise<PrefetchRequestResult> {
-    const known = index.get(id);
-    return request(known ?? { id, bytes: 0 }, options);
   }
 
   function predict(context: PrefetchContext, options?: { signal?: AbortSignal }): PrefetchPrediction[] {
@@ -546,15 +280,15 @@ export function createPrefetcher(config: PrefetchConfig): Prefetcher {
       minConfidence,
     );
     if (predictions.length === 0) return [];
-    if (options?.signal?.aborted) return [];
+    const signal = options?.signal;
+    if (signal?.aborted) return [];
     const acted = startPredictions(predictions);
     // A prediction can be invalidated: aborting the signal cancels the
     // speculative loads that were started for it.
-    const signal = options?.signal;
     if (signal) {
       const started: LoadRecord[] = [];
       for (const prediction of acted) {
-        const rec = inFlight.get(prediction.target.id);
+        const rec = loads.get(prediction.target.id);
         if (rec && rec.speculative) started.push(rec);
       }
       if (started.length > 0) {
@@ -574,69 +308,11 @@ export function createPrefetcher(config: PrefetchConfig): Prefetcher {
     target: PrefetchTarget,
     options?: { signal?: AbortSignal; strategy?: PrefetchReason },
   ): Promise<PrefetchOutcome> {
-    rememberTarget(target);
-    attempts += 1;
+    targets.remember(target);
     const strategy: PrefetchReason = options?.strategy ?? 'explicit';
-    if (!enabled) {
-      skipped += 1;
-      recordEvent({
-        id: target.id,
-        strategy,
-        outcome: 'skipped',
-        durationMs: 0,
-        skipReason: 'disabled',
-      });
-      return Promise.resolve('throttled');
-    }
-    if (isPressure()) {
-      throttled += 1;
-      dropUnjoinedPrefetches();
-      releaseUnclaimed();
-      enforceResidentBudget();
-      recordEvent({
-        id: target.id,
-        strategy,
-        outcome: 'throttled',
-        durationMs: 0,
-        skipReason: 'pressure',
-      });
-      return Promise.resolve('throttled');
-    }
-    if (resident.has(target.id)) {
-      skipped += 1;
-      recordEvent({
-        id: target.id,
-        strategy,
-        outcome: 'duplicate',
-        durationMs: 0,
-        skipReason: 'already-loaded',
-      });
-      return Promise.resolve('duplicate');
-    }
-    if (inFlight.has(target.id)) {
-      skipped += 1;
-      recordEvent({
-        id: target.id,
-        strategy,
-        outcome: 'duplicate',
-        durationMs: 0,
-        skipReason: 'already-loading',
-      });
-      return Promise.resolve('duplicate');
-    }
-    if (speculativeCount() >= maxConcurrent) {
-      skipped += 1;
-      recordEvent({
-        id: target.id,
-        strategy,
-        outcome: 'skipped',
-        durationMs: 0,
-        skipReason: 'concurrency-limit',
-      });
-      return Promise.resolve('throttled');
-    }
-    const rec = startLoad(target, { speculative: true, strategy, signal: options?.signal });
-    noteConcurrency();
+    const verdict = decideAdmission(target, strategy);
+    if (!verdict.admit) return Promise.resolve(verdict.result);
+    const rec = startSpeculative(target, strategy, options?.signal);
     return rec.promise.then(
       () => 'loaded' as PrefetchOutcome,
       () => (rec.controller.signal.aborted ? 'cancelled' as PrefetchOutcome : 'failed' as PrefetchOutcome),
@@ -644,71 +320,50 @@ export function createPrefetcher(config: PrefetchConfig): Prefetcher {
   }
 
   function cancelAll(): void {
-    for (const rec of [...inFlight.values()]) {
-      if (!rec.speculative) continue;
-      rec.controller.abort();
-    }
-    releaseUnclaimed();
+    loads.abortSpeculative();
+    resident.releaseUnclaimed();
   }
 
   function cancel(targetId: string): void {
-    const rec = inFlight.get(targetId);
+    const rec = loads.get(targetId);
     if (rec && rec.speculative) rec.controller.abort();
-    const entry = resident.get(targetId);
+    const entry = resident.peek(targetId);
     if (entry && entry.source === 'prefetch' && !entry.claimed) resident.delete(targetId);
   }
 
   function stats(): PrefetchStats {
-    const total = hits + misses;
-    return {
-      hits,
-      misses,
-      prefetchHits,
-      attempts,
-      completed,
-      throttled,
-      cancelled,
-      failed,
-      skipped,
-      hitRate: total === 0 ? 0 : hits / total,
-      totalWaitMs,
-      waitMs: waitSamples === 0 ? 0 : totalWaitMs / waitSamples,
-      avgLoadMs: loadSamples === 0 ? 0 : totalLoadMs / loadSamples,
-      inFlight: inFlight.size,
-      maxConcurrent: peakConcurrent,
-      residentBytes: residentBytes(),
-      selfTunedOff,
-      selfTuneTrips,
-    };
+    return ledger.snapshot({
+      inFlight: loads.size,
+      residentBytes: resident.bytes(),
+      selfTunedOff: tuner.selfTunedOff,
+      selfTuneTrips: tuner.trips,
+    });
   }
 
   return {
     request,
-    requestById,
+    requestById(id, options) {
+      const target = index.get(id);
+      // An unknown id has no footprint: loading it as a 0-byte placeholder would hide
+      // the value from the resident byte budget. The caller must supply the target.
+      if (!target) return Promise.reject(new Error(`unknown prefetch target: ${id} (use request(target))`));
+      return request(target, options);
+    },
     predict,
     prefetch,
     cancelAll,
     cancel,
+    release: (targetId) => resident.delete(targetId),
     stats,
     hitRate: () => stats().hitRate,
     waitMs: () => stats().waitMs,
-    events: () => eventLog,
-    residentIds: () => [...resident.keys()],
+    events: () => ledger.events(),
+    residentIds: () => resident.ids(),
     isEnabled: () => enabled,
     setEnabled(next: boolean) {
       enabled = next;
       if (!enabled) cancelAll();
     },
-    /** Resolve once no loads are in flight (test / diagnostic helper). */
-    async whenIdle(): Promise<void> {
-      while (inFlight.size > 0) {
-        await Promise.allSettled([...inFlight.values()].map((rec) => rec.promise));
-      }
-    },
+    whenIdle: () => loads.whenIdle(),
   };
-}
-
-function defaultNow(): number {
-  const g = globalThis as { performance?: { now(): number } };
-  return g.performance?.now?.() ?? Date.now();
 }

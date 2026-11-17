@@ -10,80 +10,40 @@
  * Default policy is epsilon-greedy over per-strategy running means (explainable).
  * UCB1 is opt-in via `contextualBandit` and only consults arms that already
  * have a row in the table.
+ *
+ * This file composes: selection.ts (pool, exploit/explore, UCB1, the ONE
+ * auto-revert rule) · ledger.ts (apply / rollback, bounded history) ·
+ * fingerprint.ts (workload signatures) · stats.ts (running means).
  */
 
-import type { ExecutionOutcome } from '../adaptive/types.js';
-import { emptyStat, observeStat, ucb1, type RunningStat } from './stats.js';
+import { now as clockNow } from '../shared/clock.js';
+import { copyDeltas, createChangeLedger } from './ledger.js';
+import { banditPick, candidatePool, exploit, explore, revertCheck, type StrategyPick } from './selection.js';
+import { emptyStat, observeStat, type RunningStat } from './stats.js';
 import type {
-  ConfigDeltaField,
   HistoryEntry,
   Learner,
   LearnerConfig,
   LearningStats,
   ObserveResult,
-  OutcomeObservation,
   Recommendation,
   SafeStrategy,
-  WorkloadFingerprintInput,
 } from './types.js';
+
+export { fingerprintWorkload, observationFromExecution } from './fingerprint.js';
 
 const DEFAULT_EPSILON = 0.1;
 const DEFAULT_MIN_SAMPLES = 3;
 const DEFAULT_UNDERPERFORM_RATIO = 1.15;
-
-function bucket(value: number, edges: readonly number[]): string {
-  let lower = 0;
-  for (const edge of edges) {
-    if (value < edge) return `${lower}-${edge}`;
-    lower = edge;
-  }
-  const last = edges[edges.length - 1] ?? 0;
-  return `${last}+`;
-}
-
-/** Stable signature for a workload. Same buckets always produce the same key. */
-export function fingerprintWorkload(input: WorkloadFingerprintInput): string {
-  const params = bucket(input.paramsB ?? 0, [1, 3, 8]);
-  const prompt = bucket(input.promptTokens ?? 0, [128, 512, 2048]);
-  const decode = bucket(input.decodeTokens ?? 0, [64, 256, 1024]);
-  const quant = input.quantization && input.quantization.length > 0 ? input.quantization : 'unknown';
-  return `p${params}|q:${quant}|prompt:${prompt}|decode:${decode}`;
-}
-
-/**
- * Map a Phase 2 `ExecutionOutcome` into an observation. Type-only coupling:
- * this does not import the controller, and it does not apply anything.
- */
-export function observationFromExecution(outcome: ExecutionOutcome, correct = true): OutcomeObservation {
-  const workload = outcome.decision.workload;
-  return {
-    signature: fingerprintWorkload({
-      paramsB: workload.paramsB,
-      quantization: workload.quantization,
-      promptTokens: workload.promptTokens,
-      decodeTokens: workload.decodeTokens,
-    }),
-    strategy: outcome.decision.plan.strategy,
-    costMs: outcome.measuredCostMs,
-    overheadMs: outcome.overheadMs,
-    benefitMs: outcome.benefitMs,
-    correct,
-  };
-}
-
-function copyDeltas(deltas: ReadonlyArray<ConfigDeltaField> | undefined): ConfigDeltaField[] {
-  if (!deltas) return [];
-  return deltas.map((d) => ({ field: d.field, value: d.value }));
-}
+const DEFAULT_HISTORY_LIMIT = 256;
 
 export function createLearner(config: LearnerConfig = {}): Learner {
   const strategies = new Map<string, SafeStrategy>();
   const table = new Map<string, Map<string, RunningStat>>();
-  const applied = new Map<string, string>();
   const incumbentOf = new Map<string, string>();
-  const history: HistoryEntry[] = [];
+  const ledger = createChangeLedger(config.historyLimit ?? DEFAULT_HISTORY_LIMIT);
   const rng = config.rng ?? Math.random;
-  const now = config.now ?? (() => performance.now());
+  const now = config.now ?? clockNow;
   const clock = config.clock ?? (() => Date.now());
   const epsilon = config.epsilon ?? DEFAULT_EPSILON;
   const minSamples = config.minSamples ?? DEFAULT_MIN_SAMPLES;
@@ -97,18 +57,14 @@ export function createLearner(config: LearnerConfig = {}): Learner {
   let lastOverheadMs = 0;
   let totalOverheadMs = 0;
   let lastRevertReason = '';
+  let recStart = 0;
 
-  function rowFor(signature: string): Map<string, RunningStat> {
+  function statFor(signature: string, strategy: string): RunningStat {
     let row = table.get(signature);
     if (!row) {
       row = new Map();
       table.set(signature, row);
     }
-    return row;
-  }
-
-  function statFor(signature: string, strategy: string): RunningStat {
-    const row = rowFor(signature);
     let stat = row.get(strategy);
     if (!stat) {
       stat = emptyStat();
@@ -122,33 +78,26 @@ export function createLearner(config: LearnerConfig = {}): Learner {
     return config.thermal?.() === 'hot';
   }
 
-  function recordDecision(overheadMs: number): void {
+  function finish(rec: Omit<Recommendation, 'overheadMs'>): Recommendation {
+    const overheadMs = Math.max(0, now() - recStart);
     lastOverheadMs = overheadMs;
     totalOverheadMs += overheadMs;
     decisions += 1;
-  }
-
-  function finish(rec: Omit<Recommendation, 'overheadMs'>): Recommendation {
-    const overheadMs = Math.max(0, now() - recStart);
-    recordDecision(overheadMs);
     return { ...rec, overheadMs };
   }
 
-  let recStart = 0;
+  function revertReason(signature: string, candidate: string, baseline: string): string | undefined {
+    return revertCheck({ row: table.get(signature), candidate, baseline, minSamples, underperformRatio });
+  }
 
+  /** Revert the applied strategy for `signature` when it measurably underperforms its incumbent. */
   function maybeAutoRevert(signature: string): boolean {
-    const current = applied.get(signature);
+    const current = ledger.active(signature);
     const previous = incumbentOf.get(signature);
-    if (!current || !previous || current === previous) return false;
-    const row = table.get(signature);
-    const cur = row?.get(current);
-    const prev = row?.get(previous);
-    if (!cur || !prev || cur.n < minSamples || prev.n < minSamples) return false;
-    if (!(cur.mean > prev.mean * underperformRatio)) return false;
-    const reason =
-      `auto-revert: ${current} mean ${cur.mean.toFixed(1)}ms exceeds incumbent ${previous} ` +
-      `mean ${prev.mean.toFixed(1)}ms by more than ${Math.round((underperformRatio - 1) * 100)}%`;
-    history.push({
+    if (!current || !previous) return false;
+    const reason = revertReason(signature, current, previous);
+    if (!reason) return false;
+    ledger.record({
       signature,
       from: current,
       to: previous,
@@ -158,123 +107,54 @@ export function createLearner(config: LearnerConfig = {}): Learner {
       at: clock(),
       auto: true,
     });
-    applied.set(signature, previous);
     lastRevertReason = reason;
     return true;
   }
 
-  function candidates(signature: string, incumbent: string): string[] {
-    const ids = [...strategies.keys()];
-    if (!strategies.has(incumbent)) return [incumbent];
-    const pressured = underPressure();
-    const filtered = pressured ? ids.filter((id) => !strategies.get(id)?.pressureSensitive) : ids;
-    if (filtered.length === 0) return [incumbent];
-    // Keep the signature in the closure so a future per-signature allow-list can narrow this.
-    void signature;
-    return filtered;
-  }
-
-  function exploit(signature: string, incumbent: string, pool: readonly string[]): { strategy: string; reason: string } {
+  function selectStrategy(signature: string, incumbent: string, pool: readonly string[]): StrategyPick {
     const row = table.get(signature);
-    let best: string | null = null;
-    let bestMean = Number.POSITIVE_INFINITY;
-    for (const id of pool) {
-      const stat = row?.get(id);
-      if (!stat || stat.n < minSamples) continue;
-      if (stat.mean < bestMean) {
-        bestMean = stat.mean;
-        best = id;
-      }
-    }
-    if (!best) {
+    if (bandit) return banditPick(row, incumbent, pool);
+    if (rng() < epsilon) {
+      const explored = explore(pool, incumbent, rng);
       return {
-        strategy: incumbent,
-        reason: `staying with ${incumbent}: no registered strategy has ${minSamples} samples yet`,
+        strategy: explored,
+        reason:
+          explored === incumbent
+            ? `epsilon-greedy explored but no alternative to ${incumbent} is available`
+            : `epsilon-greedy exploring prevalidated strategy ${explored} (ε=${epsilon})`,
       };
     }
-    const inc = row?.get(incumbent);
-    const incText = inc && inc.n > 0 ? `${inc.mean.toFixed(1)}ms (n=${inc.n})` : 'no samples';
-    if (best === incumbent) {
-      return {
-        strategy: incumbent,
-        reason: `${incumbent} has the lowest mean cost (${bestMean.toFixed(1)}ms) among strategies with ≥${minSamples} samples`,
-      };
-    }
-    return {
-      strategy: best,
-      reason:
-        `${best} mean ${bestMean.toFixed(1)}ms beats incumbent ${incumbent} (${incText}) ` +
-        `after ≥${minSamples} samples`,
-    };
+    return exploit(row, incumbent, pool, minSamples);
   }
 
-  function explore(pool: readonly string[], incumbent: string): string {
-    const others = pool.filter((id) => id !== incumbent);
-    if (others.length === 0) return incumbent;
-    const idx = Math.min(others.length - 1, Math.floor(rng() * others.length));
-    return others[idx] ?? incumbent;
-  }
-
-  function banditPick(signature: string, incumbent: string, pool: readonly string[]): { strategy: string; reason: string } {
-    const row = table.get(signature);
-    const totalN = row ? [...row.values()].reduce((sum, s) => sum + s.n, 0) : 0;
-    if (totalN <= 0) {
+  function applyPressure(picked: StrategyPick, incumbent: string, pool: readonly string[]): StrategyPick {
+    if (strategies.get(picked.strategy)?.pressureSensitive) {
       return {
         strategy: incumbent,
-        reason: 'contextual bandit held: no baseline observations yet — staying with incumbent',
+        reason: `pressure/thermal hot — not recommending pressure-sensitive ${picked.strategy}; staying with ${incumbent}`,
       };
     }
-    const unsampled = pool.filter((id) => (row?.get(id)?.n ?? 0) === 0);
-    const next = unsampled.find((id) => id !== incumbent);
-    if (next) {
-      return {
-        strategy: next,
-        reason: `UCB1 exploring unsampled prevalidated strategy ${next} (baseline n=${totalN})`,
-      };
+    if (picked.strategy !== incumbent) {
+      return { ...picked, reason: `${picked.reason}; pressure/thermal excluded pressure-sensitive strategies` };
     }
-    let best = incumbent;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    for (const id of pool) {
-      const stat = row?.get(id) ?? emptyStat();
-      const score = ucb1(stat, totalN);
-      if (score > bestScore) {
-        bestScore = score;
-        best = id;
-      }
+    if (pool.every((id) => id === incumbent || !strategies.get(id)?.pressureSensitive) && !picked.reason.includes('pressure')) {
+      return { ...picked, reason: `${picked.reason}; pressure/thermal hot, pressure-sensitive strategies excluded` };
     }
-    return {
-      strategy: best,
-      reason: `UCB1 selected ${best} (score ${Number.isFinite(bestScore) ? bestScore.toFixed(4) : 'inf'}) over ${pool.length} prevalidated strategies`,
-    };
+    return picked;
   }
 
   function recommendBody(signature: string, incumbent: string): Recommendation {
     if (!incumbentOf.has(signature)) incumbentOf.set(signature, incumbent);
+    const passThrough = (reason: string) =>
+      finish({ signature, strategy: incumbent, from: incumbent, reason, deltas: [], autoReverted: false });
 
-    if (disabled) {
-      return finish({
-        signature,
-        strategy: incumbent,
-        from: incumbent,
-        reason: 'learning disabled — pass-through',
-        deltas: [],
-        autoReverted: false,
-      });
-    }
-
+    if (disabled) return passThrough('learning disabled — pass-through');
     if (!strategies.has(incumbent)) {
-      return finish({
-        signature,
-        strategy: incumbent,
-        from: incumbent,
-        reason: `refusing to switch: incumbent ${incumbent} is not a registered prevalidated strategy`,
-        deltas: [],
-        autoReverted: false,
-      });
+      return passThrough(`refusing to switch: incumbent ${incumbent} is not a registered prevalidated strategy`);
     }
 
     const reverted = maybeAutoRevert(signature);
-    const active = applied.get(signature);
+    const active = ledger.active(signature);
     if (reverted && active) {
       return finish({
         signature,
@@ -286,61 +166,17 @@ export function createLearner(config: LearnerConfig = {}): Learner {
       });
     }
 
-    const pool = candidates(signature, incumbent);
     const pressured = underPressure();
-    let picked: { strategy: string; reason: string };
-
-    if (bandit) {
-      picked = banditPick(signature, incumbent, pool);
-    } else if (rng() < epsilon) {
-      const explored = explore(pool, incumbent);
-      picked = {
-        strategy: explored,
-        reason:
-          explored === incumbent
-            ? `epsilon-greedy explored but no alternative to ${incumbent} is available`
-            : `epsilon-greedy exploring prevalidated strategy ${explored} (ε=${epsilon})`,
-      };
-    } else {
-      picked = exploit(signature, incumbent, pool);
-    }
-
-    if (pressured && strategies.get(picked.strategy)?.pressureSensitive) {
-      picked = {
-        strategy: incumbent,
-        reason: `pressure/thermal hot — not recommending pressure-sensitive ${picked.strategy}; staying with ${incumbent}`,
-      };
-    } else if (pressured && picked.strategy !== incumbent) {
-      picked = {
-        ...picked,
-        reason: `${picked.reason}; pressure/thermal excluded pressure-sensitive strategies`,
-      };
-    } else if (pressured && pool.every((id) => id === incumbent || !strategies.get(id)?.pressureSensitive)) {
-      if (!picked.reason.includes('pressure')) {
-        picked = { ...picked, reason: `${picked.reason}; pressure/thermal hot, pressure-sensitive strategies excluded` };
-      }
-    }
+    const pool = candidatePool(strategies, incumbent, pressured);
+    let picked = selectStrategy(signature, incumbent, pool);
+    if (pressured) picked = applyPressure(picked, incumbent, pool);
 
     // Guard at decision time too: do not recommend a measured underperformer.
-    const row = table.get(signature);
-    const chosenStat = row?.get(picked.strategy);
     const baseId = incumbentOf.get(signature) ?? incumbent;
-    const baseStat = row?.get(baseId);
-    let autoReverted = false;
-    if (
-      picked.strategy !== baseId &&
-      chosenStat &&
-      baseStat &&
-      chosenStat.n >= minSamples &&
-      baseStat.n >= minSamples &&
-      chosenStat.mean > baseStat.mean * underperformRatio
-    ) {
-      const reason =
-        `auto-revert: ${picked.strategy} mean ${chosenStat.mean.toFixed(1)}ms exceeds incumbent ${baseId} ` +
-        `mean ${baseStat.mean.toFixed(1)}ms by more than ${Math.round((underperformRatio - 1) * 100)}%`;
-      picked = { strategy: baseId, reason };
-      autoReverted = true;
-      lastRevertReason = reason;
+    const revert = revertReason(signature, picked.strategy, baseId);
+    if (revert) {
+      picked = { strategy: baseId, reason: revert };
+      lastRevertReason = revert;
     }
 
     return finish({
@@ -349,7 +185,7 @@ export function createLearner(config: LearnerConfig = {}): Learner {
       from: incumbent,
       reason: picked.reason,
       deltas: picked.strategy === incumbent ? [] : copyDeltas(strategies.get(picked.strategy)?.deltas),
-      autoReverted,
+      autoReverted: revert !== undefined,
     });
   }
 
@@ -391,15 +227,12 @@ export function createLearner(config: LearnerConfig = {}): Learner {
 
     apply(recommendation) {
       if (disabled) return null;
-      if (recommendation.strategy === recommendation.from && !recommendation.autoReverted) {
-        if (!incumbentOf.has(recommendation.signature)) {
-          incumbentOf.set(recommendation.signature, recommendation.from);
-        }
-        applied.set(recommendation.signature, recommendation.strategy);
-        return null;
-      }
       if (!incumbentOf.has(recommendation.signature)) {
         incumbentOf.set(recommendation.signature, recommendation.from);
+      }
+      if (recommendation.strategy === recommendation.from && !recommendation.autoReverted) {
+        ledger.setActive(recommendation.signature, recommendation.strategy);
+        return null;
       }
       const entry: HistoryEntry = {
         signature: recommendation.signature,
@@ -411,17 +244,14 @@ export function createLearner(config: LearnerConfig = {}): Learner {
         at: clock(),
         auto: recommendation.autoReverted,
       };
-      history.push(entry);
-      applied.set(recommendation.signature, recommendation.strategy);
+      ledger.record(entry);
       return entry;
     },
 
     rollback() {
-      const last = history[history.length - 1];
+      const last = ledger.popLast();
       if (!last) return null;
-      history.pop();
-      applied.set(last.signature, last.from);
-      const inverse: HistoryEntry = {
+      return {
         signature: last.signature,
         from: last.to,
         to: last.from,
@@ -431,15 +261,14 @@ export function createLearner(config: LearnerConfig = {}): Learner {
         at: clock(),
         auto: false,
       };
-      return inverse;
     },
 
     history() {
-      return history;
+      return ledger.history();
     },
 
     active(signature) {
-      return applied.get(signature);
+      return ledger.active(signature);
     },
 
     overheadMs() {

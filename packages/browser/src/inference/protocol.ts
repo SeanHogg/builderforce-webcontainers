@@ -8,6 +8,9 @@
 
 import type { ChatMessage, GenerateOptions, ModelRef, RuntimeCapabilities } from './types.js';
 
+/** Generate options as they cross the wire: an AbortSignal is not structured-cloneable, so it never does. */
+export type WireGenerateOptions = Omit<GenerateOptions, 'signal'>;
+
 export const INFERENCE_PROBE = 'inference:probe';
 export const INFERENCE_LOAD = 'inference:load';
 export const INFERENCE_GENERATE = 'inference:generate';
@@ -37,12 +40,14 @@ export interface GenerateRequest {
   type: typeof INFERENCE_GENERATE;
   id: number;
   messages: ChatMessage[];
-  options?: GenerateOptions;
+  options?: WireGenerateOptions;
 }
 
 export interface CancelRequest {
   type: typeof INFERENCE_CANCEL;
   id: number;
+  /** The generate request to cancel; absent = whatever generation is running. */
+  requestId?: number;
 }
 
 export interface DisposeModelRequest {
@@ -88,6 +93,8 @@ export interface DoneReply {
   id: number;
   requestId: number;
   promptTokens: number;
+  /** True when `promptTokens` is the ~4 chars/token heuristic, not the backend's tokenizer count. */
+  promptTokensEstimated: boolean;
   generatedTokens: number;
   ttftMs: number;
   decodeMs: number;
@@ -104,6 +111,7 @@ export type InferenceReply =
 /** Stats part of a DoneReply, shared with the public API. */
 export interface GenerationStatsPayload {
   promptTokens: number;
+  promptTokensEstimated: boolean;
   generatedTokens: number;
   ttftMs: number;
   decodeMs: number;

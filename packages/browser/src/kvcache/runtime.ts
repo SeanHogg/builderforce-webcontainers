@@ -37,6 +37,8 @@ const DEFAULT_COSTS: KvCostModel = {
   verifyPerToken: 0.25,
 };
 
+const DEFAULT_MAX_SESSIONS = 1024;
+
 const DEFAULT_CAPS: AdvancedCapabilities = {
   speculativeDecoding: false,
   continuousBatching: false,
@@ -82,12 +84,23 @@ export function createKvCacheRuntime(options: KvCacheRuntimeOptions = {}): KvCac
   const draftLen = options.draftLen ?? 4;
   const draftAccuracy = options.draftAccuracy ?? 0.8;
   const preconvertTo = options.preconvertTo ?? 'q4';
-  const sessions = new Set<string>();
+  const maxSessions = Math.max(1, options.maxSessions ?? DEFAULT_MAX_SESSIONS);
+  // Recently seen session ids, least recently seen first (Map insertion order).
+  const sessions = new Map<string, true>();
+
+  function noteSession(sessionId: string): void {
+    sessions.delete(sessionId);
+    sessions.set(sessionId, true);
+    for (const oldest of sessions.keys()) {
+      if (sessions.size <= maxSessions) break;
+      sessions.delete(oldest);
+    }
+  }
 
   function generateOne(request: KvGenerateRequest, batchShare = 1): KvGenerateResult {
     const compat = partsOf(request);
     const encoded = encodeCompatibilityKey(compat);
-    if (request.sessionId) sessions.add(request.sessionId);
+    if (request.sessionId) noteSession(request.sessionId);
 
     const quantPlan = planQuantization({
       native: request.model.quantization,
@@ -204,7 +217,7 @@ export function createKvCacheRuntime(options: KvCacheRuntimeOptions = {}): KvCac
     },
 
     isEnabled(flag) {
-      return isEnabled(flags, flag) || flags[flag] === true;
+      return isEnabled(flags, flag);
     },
 
     stats(): KvCacheStats {

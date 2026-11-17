@@ -6,14 +6,8 @@
  * never implicit: the native format is used unless a flag + target justify it.
  */
 
+import { bytesPerParam } from '../memory/estimates.js';
 import type { KvBackendKind, KvQuantization, QuantPlan } from './types.js';
-
-const BYTES: Record<KvQuantization, number> = {
-  q4: 0.5,
-  q5: 0.625,
-  q8: 1,
-  fp16: 2,
-};
 
 /** Relative quality vs fp16, used by the default scorer. */
 const QUALITY: Record<KvQuantization, number> = {
@@ -22,10 +16,6 @@ const QUALITY: Record<KvQuantization, number> = {
   q5: 0.97,
   q4: 0.94,
 };
-
-export function bytesPerParam(q: KvQuantization): number {
-  return BYTES[q];
-}
 
 export function nativeQuality(q: KvQuantization): number {
   return QUALITY[q];
@@ -45,22 +35,22 @@ export function planQuantization(input: {
   const native = input.native;
   const target = input.preconvertTo ?? 'q4';
   const justified =
-    input.preconvert && BYTES[target] < BYTES[native] && backendSupports(input.backend, target);
+    input.preconvert && bytesPerParam(target) < bytesPerParam(native) && backendSupports(input.backend, target);
   if (!justified) {
     return {
       native,
       runtime: native,
       converted: false,
       conversionCost: 0,
-      bytesPerParam: BYTES[native],
+      bytesPerParam: bytesPerParam(native),
     };
   }
   return {
     native,
     runtime: target,
     converted: true,
-    conversionCost: BYTES[native] - BYTES[target],
-    bytesPerParam: BYTES[target],
+    conversionCost: bytesPerParam(native) - bytesPerParam(target),
+    bytesPerParam: bytesPerParam(target),
   };
 }
 
