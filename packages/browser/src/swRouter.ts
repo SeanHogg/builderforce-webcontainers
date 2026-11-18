@@ -1,4 +1,4 @@
-import { PREVIEW_ID, isPortPath, isWireReply, previewPrefix, type WireCancel, type WireResponse } from './protocol.js';
+import { PREVIEW_ID, attachProofOf, isPortPath, isWireReply, previewPrefix, type AttachProof, type WireAttached, type WireCancel, type WireResponse } from './protocol.js';
 import type { AttachClient, AttachMode, IngressRejection } from './swBindings.js';
 import { createIngressGuard } from './swGuard.js';
 
@@ -105,8 +105,8 @@ export function createSwRouter(options: SwRouterOptions) {
     port.close?.();
   }
 
-  /** Install a port `acceptAttach` has admitted, releasing the one it replaces. */
-  function attach(id: string, port: PortLike): void {
+  /** Install a port `acceptAttach` has admitted (acknowledging `nonce` on it), releasing the one it replaces. */
+  function attach(id: string, port: PortLike, nonce: string): void {
     const previous = ports.get(id);
     if (previous && previous !== port) releasePort(id, previous);
     ports.set(id, port);
@@ -129,17 +129,21 @@ export function createSwRouter(options: SwRouterOptions) {
         streams.delete(reply.reqId); // the reader already went away
       }
     };
+    // The page advances its nonce chain only on this, so a dropped attach never desyncs it.
+    port.postMessage({ type: 'attached', nonce } satisfies WireAttached);
     for (const wake of waiters.get(id) ?? []) wake(port);
     waiters.delete(id);
   }
 
   /**
-   * An attach from `client` (`event.source`), decided by the guard (attacher,
-   * binding, unique id per tab). A refused port is closed.
+   * An attach from `client` (`event.source`) carrying `proof` (`attachProofOf`),
+   * decided by the guard (nonce, attacher, binding, unique id per tab). A refused
+   * port is closed (a stale nonce from the bound client also asks it for a fresh
+   * attach). An attach carries no egress: that is the worker's own configuration.
    */
-  async function acceptAttach(id: string, port: PortLike, client: AttachClient | null | undefined): Promise<boolean> {
-    if (await guard.checkAttach(id, client)) {
-      attach(id, port);
+  async function acceptAttach(id: string, port: PortLike, client: AttachClient | null | undefined, proof: AttachProof | null | undefined): Promise<boolean> {
+    if (await guard.checkAttach(id, client, proof)) {
+      attach(id, port, attachProofOf(proof)!.nonce);
       return true;
     }
     port.close?.();

@@ -49,6 +49,23 @@ describe('listenToPreview', () => {
     messages.dispose();
   });
 
+  it("refuses a page on one application's origin claiming another application's address", () => {
+    const win = fakeWindow();
+    const A = 'https://a.preview.test';
+    const B = 'https://b.preview.test';
+    const messages = listenToPreview(win, (origin) => origin === A || origin === B, '/__bfwc/p1/');
+    const logs: PreviewConsoleMessage[] = [];
+    const errors: PreviewError[] = [];
+    messages.onConsole((m) => logs.push(m));
+    messages.onError((e) => errors.push(e));
+    win.post(A, { type: CONSOLE_MESSAGE_TYPE, level: 'log', text: 'spoof', href: `${B}/__bfwc/p1/` });
+    win.post(A, { type: ERROR_MESSAGE_TYPE, message: 'spoof', href: `${B}/__bfwc/p1/` });
+    win.post(B, { type: CONSOLE_MESSAGE_TYPE, level: 'log', text: 'real', href: `${B}/__bfwc/p1/` });
+    expect(logs).toEqual([{ level: 'log', text: 'real', href: `${B}/__bfwc/p1/` }]);
+    expect(errors).toEqual([]);
+    messages.dispose();
+  });
+
   it('carries the error source, and reads an unknown one as an uncaught error', () => {
     const win = fakeWindow();
     const messages = listenToPreview(win, 'https://preview.test', '/__bfwc/p1/');

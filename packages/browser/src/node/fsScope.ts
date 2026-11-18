@@ -88,6 +88,13 @@ export function isJournalOp(op: unknown): op is VfsOp {
   return kind === 'remove' || kind === 'mkdir';
 }
 
+/** What a refused journal op may report (its kind and path, never its content). */
+export function opEvidence(op: unknown): Record<string, string> {
+  if (typeof op !== 'object' || op === null) return { op: typeof op };
+  const { op: kind, path } = op as { op?: unknown; path?: unknown };
+  return { op: typeof kind === 'string' ? kind : typeof kind, path: typeof path === 'string' ? path : typeof path };
+}
+
 /** `inner` lies strictly inside `outer`. */
 const strictlyInside = (inner: string, outer: string) => inner !== outer && isInsideDir(inner, outer);
 

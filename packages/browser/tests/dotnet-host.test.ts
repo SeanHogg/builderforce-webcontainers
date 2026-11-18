@@ -9,7 +9,7 @@
  * kind, and the Worker supply's .NET spawns (always cold).
  */
 import { describe, expect, it } from 'vitest';
-import { VfsSnapshots, VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
+import { VfsSnapshots, VirtualFileSystem, WORKSPACE_CONTEXT } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerLike } from '../src/node/processHost.js';
 import { NODE_ONLY } from '../src/node/processKinds.js';
 import type { WorkerKind } from '../src/node/protocol.js';
@@ -207,11 +207,11 @@ describe('.NET Worker kind', () => {
     expect(kinds.route('./app.cs', ['a'], context)).toEqual({ kind: DOTNET_KIND, command: 'dotnet', args: ['/app.cs', 'a'] });
     expect(kinds.route('php', ['-v'], context).kind).toBe('php');
     expect(kinds.route('node', [], context).kind).toBe('node');
-    expect(kinds.startOptions(DOTNET_KIND)).toEqual({ dotnet: { bundleUrl: 'https://cdn.test/dotnet/' } });
-    expect(kinds.startOptions('php')).toHaveProperty('php');
+    expect(kinds.startOptions(DOTNET_KIND, WORKSPACE_CONTEXT)).toEqual({ dotnet: { bundleUrl: 'https://cdn.test/dotnet/' } });
+    expect(kinds.startOptions('php', WORKSPACE_CONTEXT)).toHaveProperty('php');
     expect(new RegExp(kinds.foreignCommands!).test('dotnet')).toBe(true);
     expect(new RegExp(kinds.foreignCommands!).test('php')).toBe(true);
-    expect(kinds.receive(DOTNET_KIND, { type: 'python-installed' })).toBe(false);
+    expect(kinds.receive(DOTNET_KIND, { type: 'python-installed' }, WORKSPACE_CONTEXT)).toBe(false);
   });
 
   it('the relay is asked for a dotnet Worker, and starts dotnet-worker.js', () => {

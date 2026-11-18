@@ -11,6 +11,7 @@ import type { HostToWorker, WorkerToHost } from './protocol.js';
 import { EXITED, type Proc } from './procRecord.js';
 import { sendResponse } from './responseWire.js';
 import { notListening } from './servedPorts.js';
+import { IngressLimit } from '../security/ingressLimit.js';
 
 export class ProcessPorts {
   private nextReq = 1;
@@ -19,6 +20,8 @@ export class ProcessPorts {
     private readonly ports: PortRegistry,
     private readonly post: (proc: Proc, message: HostToWorker) => void,
     private readonly identityOf: (pid: number) => SecurityContext | undefined,
+    /** Loopback bodies over the limit are answered 413 before any server sees them. */
+    private readonly ingress: IngressLimit = new IngressLimit(),
   ) {}
 
   listen(proc: Proc, message: Extract<WorkerToHost, { type: 'listen' }>): void {
@@ -47,7 +50,10 @@ export class ProcessPorts {
   /** The process asks a server in the runtime (any process's, or the page's), as itself. */
   loopback(proc: Proc, message: Extract<WorkerToHost, { type: 'loopback' }>): void {
     const { reqId } = message;
-    const cancel = sendResponse((reply) => this.post(proc, reply), reqId, this.ports.request(message.port, message.request, this.identityOf(proc.pid)), () => proc.loopbacks.delete(reqId));
+    const caller = this.identityOf(proc.pid);
+    const refused = this.ingress.refuse(message.port, message.request, caller, 'loopback');
+    const response = refused ? Promise.resolve(refused) : this.ports.request(message.port, message.request, caller);
+    const cancel = sendResponse((reply) => this.post(proc, reply), reqId, response, () => proc.loopbacks.delete(reqId));
     proc.loopbacks.set(reqId, cancel);
   }
 

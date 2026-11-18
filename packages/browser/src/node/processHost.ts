@@ -25,8 +25,9 @@ import {
   DEFAULT_ENV,
   PortRegistry,
   ServerEvents,
-  WORKSPACE_APPLICATION,
+  PLATFORM_CONTEXT,
   allocatePid,
+  bufferResponse,
   createIpcEndpoint,
   runArguments,
   signalExitCode,
@@ -54,6 +55,8 @@ import { WorkerSupply } from './workerSupply.js';
 import { FsSync } from './fsSync.js';
 import { ProcessIdentities, type ProcessShieldOptions, type SpawnOptions, type SpawnOrigin } from './processIdentity.js';
 import { ProcessPorts } from './processPorts.js';
+import { opEvidence } from './fsScope.js';
+import { IngressLimit } from '../security/ingressLimit.js';
 import { ViewSupplies } from './viewSupply.js';
 import type { Proc } from './procRecord.js';
 
@@ -69,12 +72,14 @@ export interface ProcessHostOptions {
   fs: VirtualFileSystem;
   /** Where a process starts when `run` names no `cwd`. Default `/`. */
   cwd?: string;
-  /** A process Worker of `kind` (as `kinds` routes the command). */
-  createWorker(kind: WorkerKind): WorkerLike;
+  /** A process Worker of `kind` (as `kinds` routes the command), for an application's process (`applicationId`) or the workspace's (undefined). */
+  createWorker(kind: WorkerKind, applicationId?: string): WorkerLike;
   /** Which Worker kind runs a command, and what that kind needs. Default: every process is Node. */
   kinds?: ProcessKindPolicy;
   /** Origin and base path previews are served under (`/__bfwc/<id>/`). */
   previewOrigin: string;
+  /** The preview origin of an application's processes and ports (W10 control 1). Default: `previewOrigin` for all. Throws to refuse the application. */
+  previewOriginOf?(applicationId: string): string;
   previewBase: string;
   /** The dev server's preview URL, for the `vite`/`react-scripts start` handoff. */
   previewUrl?: string;
@@ -105,7 +110,10 @@ export interface ProcessInfo {
 export class ProcessHost {
   /** The port policy: applications register their service graph here (`startApplicationRuntime`'s `portPolicy`). */
   readonly portPolicy = new ServiceGraphPolicy();
-  readonly ports = new PortRegistry({ policy: this.portPolicy });
+  /** Its refusals go to the shield's telemetry as the page-side caller. */
+  readonly ports: PortRegistry;
+  /** The request-body limit on loopback and host-API HTTP (control 3; the service worker bounds its own path). */
+  private readonly ingress: IngressLimit;
   /** Servers listening, ports opening and closing. */
   readonly servers = new ServerEvents();
   private readonly procs = new Set<Proc>();
@@ -124,13 +132,16 @@ export class ProcessHost {
 
   constructor(private readonly options: ProcessHostOptions) {
     this.kinds = options.kinds ?? NODE_ONLY;
+    const telemetry = options.security?.telemetry;
+    this.ports = new PortRegistry({ policy: this.portPolicy, onDecision: telemetry?.portDecision });
+    this.ingress = new IngressLimit({ telemetry, maxBodyBytes: options.security?.maxBodyBytes });
     this.identities = new ProcessIdentities(options.cwd ?? '/', options.security);
-    const onRefused = (context: SecurityContext | undefined, _op: unknown, decision: ShieldDecision) => context && this.identities.report(context, decision);
+    const onRefused = (context: SecurityContext | undefined, op: unknown, decision: ShieldDecision) => context && this.identities.report(context, decision, opEvidence(op));
     this.fsSync = new FsSync(options.fs, { send: (proc, ops) => this.post(proc, { type: 'fs', ops }), onRefused });
-    const createWorker = (kind: WorkerKind) => options.createWorker(kind);
-    this.workers = new WorkerSupply(createWorker, this.fsSync.snapshots, options.warmWorker !== false);
-    this.views = new ViewSupplies(options.fs, createWorker, options.warmWorker !== false);
-    this.served = new ProcessPorts(this.ports, (proc, message) => this.post(proc, message), (pid) => this.identityOf(pid));
+    this.workers = new WorkerSupply((kind) => options.createWorker(kind), this.fsSync.snapshots, options.warmWorker !== false);
+    // An application's Workers start on its own preview origin when it has one.
+    this.views = new ViewSupplies(options.fs, (kind, applicationId) => options.createWorker(kind, applicationId), options.warmWorker !== false);
+    this.served = new ProcessPorts(this.ports, (proc, message) => this.post(proc, message), (pid) => this.identityOf(pid), this.ingress);
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
       // Only to processes that may reach it: a process cannot list ports its policy hides (W10 control 4).
@@ -148,7 +159,12 @@ export class ProcessHost {
   }
 
   serverUrl(port: number): string {
-    return new URL(portPath(this.options.previewBase, port), this.options.previewOrigin).href;
+    return new URL(portPath(this.options.previewBase, port), this.originOf(this.ports.ownerOf(port)?.applicationId)).href;
+  }
+
+  /** The preview origin an application's processes and ports use (the shared one for the workspace and the platform). */
+  private originOf(applicationId: string | undefined): string {
+    return applicationId === undefined || !this.options.previewOriginOf ? this.options.previewOrigin : this.options.previewOriginOf(applicationId);
   }
 
   /** Start a command in its own Web Worker, as a stream-based {@link RuntimeProcess}. */
@@ -179,9 +195,13 @@ export class ProcessHost {
   private spawn(origin: SpawnOrigin, requested: string, requestedArgs: string[], options: ProcessOptions): ChildHandle {
     const cwd = options.cwd ?? this.options.cwd ?? '/';
     const admitted = this.identities.admit(origin, cwd);
+    // Decided before the process exists: an application refused a preview origin (previewOriginOf throws) leaves no record behind.
+    const previewOrigin = this.originOf(admitted.context.applicationId);
     const pid = allocatePid();
     const env = { ...DEFAULT_ENV, ...this.options.env, ...options.env };
-    const { kind, command, args } = this.kinds.route(requested, requestedArgs, { fs: this.options.fs, cwd, env });
+    // An application process's command is routed (shebangs, scripts read) on its view's mirror: nothing outside its subtree is read for it.
+    const routeFs = admitted.view ? this.views.mirrorFor(admitted.view) : this.options.fs;
+    const { kind, command, args } = this.kinds.route(requested, requestedArgs, { fs: routeFs, cwd, env });
     // An application process starts from its own view's supply: nothing outside the view is in its pack or spare.
     const { worker, snapshot } = (admitted.view ? this.views.supplyFor(admitted.view) : this.workers).take(kind);
     let resolveExit!: (code: number) => void;
@@ -230,14 +250,14 @@ export class ProcessHost {
       thread: options.thread,
       snapshot,
       ports: ((self) => (self ? this.ports.reachablePorts(self) : []))(this.identityOf(pid)), // only what it may reach (W10 control 4)
-      previewOrigin: this.options.previewOrigin,
+      previewOrigin,
       previewBase: this.options.previewBase,
       previewUrl: this.options.previewUrl,
       registry: this.options.registry,
       // The shared tarball cache is off for application processes: one application must not seed another's installs.
       packageCache: this.options.packageCache !== false && !admitted.view,
       foreignCommands: this.kinds.foreignCommands,
-      ...this.kinds.startOptions(kind),
+      ...this.kinds.startOptions(kind, this.identityOf(pid) ?? admitted.context),
     });
 
     return {
@@ -253,19 +273,28 @@ export class ProcessHost {
     };
   }
 
+  /** Post a process-kind message (a training checkpoint, a save acknowledgement) to process `pid`; false when it is gone. */
+  notify(pid: number, message: unknown): boolean {
+    const proc = [...this.procs].find((candidate) => candidate.pid === pid);
+    if (!proc || proc.exited) return false;
+    this.post(proc, message as HostToWorker);
+    return true;
+  }
+
   /** Every process still running, oldest first — children started by a shell included. */
   list(): ProcessInfo[] {
     return [...this.procs].map((proc) => ({ ...proc.info, args: [...proc.info.args], ports: [...proc.registrations.keys()] }));
   }
 
-  /** Dispatch an HTTP request to the server on `port` and wait for the whole response. `caller`: who asks (the port registry decides). */
-  request(port: number, request: HttpRequestData, caller?: SecurityContext): Promise<HttpResponseData | undefined> {
-    return this.ports.requestBuffered(port, request, caller);
+  /** Dispatch an HTTP request to the server on `port` and wait for the whole response. `caller`: who asks (the port registry decides). A body over the limit is answered 413. */
+  async request(port: number, request: HttpRequestData, caller?: SecurityContext): Promise<HttpResponseData | undefined> {
+    const refused = this.ingress.refuse(port, request, caller ?? PLATFORM_CONTEXT, 'host');
+    return refused ? bufferResponse(refused) : this.ports.requestBuffered(port, request, caller);
   }
 
-  /** Dispatch an HTTP request to the server on `port` (the preview's `/__port/<port>/` path); resolves at the head, the body streaming. */
-  requestStream(port: number, request: HttpRequestData, caller?: SecurityContext): Promise<HttpStreamResponse | undefined> {
-    return this.ports.request(port, request, caller);
+  /** Dispatch an HTTP request to the server on `port` (the preview's `/__port/<port>/` path); resolves at the head, the body streaming. A body over the limit is answered 413. */
+  async requestStream(port: number, request: HttpRequestData, caller?: SecurityContext): Promise<HttpStreamResponse | undefined> {
+    return this.ingress.refuse(port, request, caller ?? PLATFORM_CONTEXT, 'host') ?? this.ports.request(port, request, caller);
   }
 
   /** Open an upgraded connection (a WebSocket) to the server on `port`; returns the client end. */
@@ -349,14 +378,22 @@ export class ProcessHost {
         return this.served.loopback(proc, message);
       case 'request-cancel':
         return proc.loopbacks.get(message.reqId)?.();
-      case 'listening':
-        this.servers.announce({ port: message.port, url: message.url });
+      case 'listening': {
+        // The URL is the page's, never the Worker's: a port this process registered is served at its owner's
+        // preview origin (serverUrl); anything else is the dev-server handoff, served at the runtime's preview URL.
+        const port = Number(message.port);
+        const url = proc.registrations.has(port) ? this.serverUrl(port) : this.options.previewUrl;
+        if (url && Number.isInteger(port) && port > 0 && port < 65536) this.servers.announce({ port, url });
         return;
+      }
       default:
-        // A message of one process kind (python-installed): its policy decides, knowing who sent it. What it
-        // records (the session's pip installs, the PHP platform) seeds every later process, so only a
-        // workspace process may report it: one application must not seed another's (or the terminal's) installs.
-        if (this.identityOf(proc.pid)?.applicationId === WORKSPACE_APPLICATION) this.kinds.receive(proc.kind, message);
+        // A message of one process kind (python-installed): its policy decides, knowing who sent it — from the
+        // page-side record of this Worker, never the message. Each application writes only its own record
+        // (keyed by its applicationId), so one cannot seed another's (or the terminal's) installs.
+        {
+          const identity = this.identityOf(proc.pid);
+          if (identity) this.kinds.receive(proc.kind, message, identity);
+        }
     }
   }
 }

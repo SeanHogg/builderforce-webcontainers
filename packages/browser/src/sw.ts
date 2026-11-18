@@ -11,13 +11,17 @@
  * cannot share a compilation with the DOM lib the rest of the package needs.
  */
 import { attachModeOf, createSwRouter, type AttachClient, type BodySource, type PortLike, type PreviewTarget, type RoutedResponse } from './swRouter.js';
-import { ATTACH, REATTACH, isPortPath, type AttachMessage } from './protocol.js';
+import { ATTACH, REATTACH, attachProofOf, isPortPath, type AttachMessage } from './protocol.js';
+import { previewDocumentPolicy, stampPreviewResponse, type PreviewStamp } from './previewCsp.js';
+import { relayConfigOf } from './relayConfig.js';
 
 /** A `Client` (window or worker) as `event.source`, `clients.get` and `clients.matchAll` hand it over. */
 interface ClientLike {
   id: string;
   url: string;
   type: string;
+  /** Window clients only. */
+  frameType?: string;
   postMessage(message: unknown): void;
 }
 
@@ -54,6 +58,18 @@ interface ServiceWorkerGlobalLike {
 const worker = globalThis as unknown as ServiceWorkerGlobalLike;
 const scope = new URL(worker.registration.scope);
 
+/**
+ * What every response this worker serves is stamped with, fixed at start from
+ * the worker's OWN script URL (`relayConfig`: host-side configuration the
+ * embedder's server vouches for) — never from a message, which a preview can forge.
+ */
+const config = relayConfigOf(worker.location.href);
+const stamp: PreviewStamp = {
+  policy: previewDocumentPolicy(config.egress, { host: scope.host, report: config.report !== undefined }),
+  reportUrl: config.report,
+  host: scope.hostname,
+};
+
 const router = createSwRouter({
   scopePath: scope.pathname,
   attachMode: attachModeOf(worker.location.href),
@@ -69,7 +85,7 @@ const router = createSwRouter({
 function asClient(source: MessageEventLike['source']): AttachClient | null {
   const client = source as Partial<ClientLike> | null;
   return client && typeof client.id === 'string' && typeof client.url === 'string' && typeof client.type === 'string'
-    ? { id: client.id, url: client.url, type: client.type }
+    ? { id: client.id, url: client.url, type: client.type, ...(typeof client.frameType === 'string' ? { frameType: client.frameType } : {}) }
     : null;
 }
 
@@ -86,7 +102,8 @@ worker.addEventListener('message', (event) => {
   const port = event.ports[0] as PortLike | undefined;
   if (message?.type !== ATTACH || !port) return;
   if (typeof message.id !== 'string') return port.close?.();
-  void router.acceptAttach(message.id, port, asClient(event.source));
+  // Only the id and the proof are read: whatever else an attach carries (egress included) is ignored.
+  void router.acceptAttach(message.id, port, asClient(event.source), attachProofOf(message));
 });
 
 /** Statuses whose responses must not carry a body. */
@@ -117,7 +134,8 @@ async function serve(event: FetchEventLike, target: PreviewTarget): Promise<Resp
   const r = refused ?? (toServer ? await toVirtualServer(target, request, event.clientId) : await router.respond(target));
   // A virtual server's body is a stream fed as the server writes (SSE, chunked progress).
   if (NULL_BODY.has(r.status) && r.body instanceof ReadableStream) void r.body.cancel();
-  return new Response(NULL_BODY.has(r.status) ? null : r.body, { status: r.status, headers: r.headers });
+  // EVERY response — any type or none, any status, refusals included — carries the preview CSP (beside any the app set), nosniff and Origin-Agent-Cluster.
+  return new Response(NULL_BODY.has(r.status) ? null : r.body, { status: r.status, headers: stampPreviewResponse(r.headers, stamp) });
 }
 
 worker.addEventListener('fetch', (event) => {

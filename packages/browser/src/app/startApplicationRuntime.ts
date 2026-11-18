@@ -17,6 +17,7 @@ import {
   type ServiceSpec,
   type StateChange,
 } from '@seanhogg/builderforce-webcontainers-core/app';
+import { hashAlgorithm } from '@seanhogg/builderforce-webcontainers-core';
 import { messageOf } from './asyncHelpers.js';
 import { ServiceFailure } from './awaitReadiness.js';
 import { createListeners } from './listeners.js';
@@ -40,9 +41,17 @@ async function settle(starts: Array<[string, Promise<void>]>): Promise<void> {
   if (failures.length > 0) throw new ApplicationStartError(failures);
 }
 
-/** A fresh application identity: unique per runtime instance, never `workspace` or `platform`. */
-function mintApplicationId(projectId: string): string {
-  return `app:${projectId}:${crypto.randomUUID()}`;
+/**
+ * The application's STABLE identity, derived here from the project and the
+ * application's services (their ids and directories) — the same on every start,
+ * so its preview origin (keyed on it) and that origin's storage are too; two
+ * applications in one project live in different service directories, so they
+ * never share one. Never `workspace` or `platform`.
+ */
+function mintApplicationId(spec: ApplicationSpec): string {
+  const services = spec.services.map((service) => `${service.id}\u0000${service.root ?? '/'}`).sort().join('\u0001');
+  const digest = hashAlgorithm('sha256').digest(new TextEncoder().encode(services));
+  return `app:${spec.projectId}:${Array.from(digest.subarray(0, 8), (b) => b.toString(16).padStart(2, '0')).join('')}`;
 }
 
 export function startApplicationRuntime(spec: ApplicationSpec, options: ApplicationRuntimeOptions): ApplicationRuntime {
@@ -53,8 +62,8 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   const errors = createListeners<ServiceError>();
   const services = new Map<string, SupervisedService>();
   let disposed = false;
-  // Minted here, never taken from the spec: every service's processes carry it (W10 principle 3).
-  const applicationId = mintApplicationId(spec.projectId);
+  // Derived here, never a value the spec sets: every service's processes carry it (W10 principle 3).
+  const applicationId = mintApplicationId(spec);
   /** A client's login for a database: generated and held by the database's provider (W10 control 5). */
   const databaseCredentials = (database: ServiceSpec, client: ServiceSpec) => {
     const resolution = registry.resolve(database);

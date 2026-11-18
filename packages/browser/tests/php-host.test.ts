@@ -6,7 +6,7 @@
  * `php …`, both routed to a PHP Worker by the process host.
  */
 import { describe, expect, it } from 'vitest';
-import { VfsSnapshots, VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
+import { VfsSnapshots, VirtualFileSystem, WORKSPACE_CONTEXT } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from '../src/node/processHost.js';
 import type { WorkerKind } from '../src/node/protocol.js';
 import { WorkerSupply } from '../src/node/workerSupply.js';
@@ -62,8 +62,8 @@ describe('PHP Worker kind', () => {
     expect(kinds.route('composer', ['install'], context)).toMatchObject({ kind: 'php' });
     expect(kinds.route('python3', ['a.py'], context)).toMatchObject({ kind: 'python' });
     expect(kinds.route('node', ['a.js'], context)).toMatchObject({ kind: 'node' });
-    expect(kinds.startOptions('php')).toEqual({ php: { phpVersion: '8.2' } });
-    expect(kinds.startOptions('python')).toMatchObject({ python: {} });
+    expect(kinds.startOptions('php', WORKSPACE_CONTEXT)).toEqual({ php: { phpVersion: '8.2' } });
+    expect(kinds.startOptions('python', WORKSPACE_CONTEXT)).toMatchObject({ python: {} });
     const foreign = new RegExp(kinds.foreignCommands!);
     expect(['php', 'composer', 'python', 'pip'].every((name) => foreign.test(name))).toBe(true);
     expect(foreign.test('node')).toBe(false);
@@ -81,11 +81,11 @@ describe('the PHP platform the provider checks against', () => {
     expect(expectedPlatform({ php: { phpVersion: '8.1' } }).phpVersion).toBe('8.1.34');
     // 8.3.36 meets >=8.3.30; the images have no intl.
     expect(acceptsPhpService(service, fs, expectedPlatform({ php, platform: kinds.platform }))).toMatchObject({ ok: false, reason: expect.stringContaining('ext-intl') });
-    expect(kinds.receive('node', { type: 'php-platform', phpVersion: '8.3.36', extensions: ['intl'] })).toBe(true); // taken, and refused
+    expect(kinds.receive('node', { type: 'php-platform', phpVersion: '8.3.36', extensions: ['intl'] }, WORKSPACE_CONTEXT)).toBe(true); // taken, and refused
     expect(kinds.platform.current()).toBeUndefined();
-    expect(kinds.receive('php', { type: 'php-platform', phpVersion: 'nonsense', extensions: [] })).toBe(true);
+    expect(kinds.receive('php', { type: 'php-platform', phpVersion: 'nonsense', extensions: [] }, WORKSPACE_CONTEXT)).toBe(true);
     expect(kinds.platform.current()).toBeUndefined();
-    kinds.receive('php', { type: 'php-platform', phpVersion: '8.3.36', extensions: ['Core', 'intl'] });
+    kinds.receive('php', { type: 'php-platform', phpVersion: '8.3.36', extensions: ['Core', 'intl'] }, WORKSPACE_CONTEXT);
     expect(acceptsPhpService(service, fs, expectedPlatform({ php, platform: kinds.platform }))).toEqual({ ok: true });
   });
 });

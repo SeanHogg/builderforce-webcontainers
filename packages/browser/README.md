@@ -14,7 +14,7 @@ headers, no session caps, MIT licensed.
 ```ts
 import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
 
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: projectId });
 runtime.writeTree(files);
 if (runtime.profile().supported) iframe.src = runtime.url;
 else showFallback(runtime.profile().reason);
@@ -23,8 +23,88 @@ else showFallback(runtime.profile().reason);
 To run untrusted code (AI-written, arbitrary packages), isolate the preview on its
 own origin with `startPreviewRuntime({ relayUrl })`. That origin serves
 `relay.html`, `sw.js` and `process-worker.js` (strings in `@seanhogg/builderforce-webcontainers/assets`)
-with `Content-Security-Policy: frame-ancestors` limited to your app. See the
-[root README](../../README.md#isolating-the-preview-relay-mode).
+with the headers below. Same-origin mode (above) needs `unprotectedSameOrigin: true`,
+or the runtime refuses to boot (`ingress.same_origin_refused`); the relay must be
+https. Applications (`startApplicationRuntime`) need their own origin
+(`previewOrigin`, which needs wildcard DNS and a host route serving the relay files
+on `<key>.preview.example.com`): an application started without one is refused
+(`PreviewShieldError`, `ingress.app_origin_required`) unless you opt out by name
+with `sharedPreviewOrigin: 'unprotected'` (a console warning and an
+`ingress.shared_preview_origin` event on every application start). The workspace
+and the instant preview need none. See the
+[root README](../../README.md#one-origin-per-application-previeworigin).
+
+### Preview origin headers
+
+The trust boundary is the application: its previews, relay frame and process
+Workers share its origin. These headers keep applications apart from each other
+and from your app, and keep egress inside your policy. `<host>` is your app's
+origin; `<self>` is the preview origin's own host; `<egress>` is the application's
+`previewEgress` (it must include your package CDN — `https://esm.sh` by default —
+since previews now load scripts only from `'self'` and their egress).
+
+- **`relay.html`** (the relay never fetches, so a preview that scripts it gains no egress):
+
+  ```
+  Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; worker-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors <host>
+  X-Content-Type-Options: nosniff
+  Origin-Agent-Cluster: ?1
+  Cache-Control: no-store
+  ```
+
+  (`script-src` may name the inline script's `sha256-…` hash instead of `'unsafe-inline'`.)
+  `frame-ancestors` must be your app's origin only. The relay refuses to run
+  unframed, and the service worker takes attaches only from it as a nested frame.
+
+- **`sw.js`** — its query carries the origin's configuration (`?mode=relay&policy=<id>&egress=<sources>&report=<url>`),
+  which the worker stamps into every response it serves. Never take it on trust:
+  serve `sw.js` only when `policy` verifies (signed by you, bound to this
+  origin's key and the application) and `egress`/`report` are exactly what that
+  policy grants; without a `policy`, only with no `egress`. Otherwise answer 403.
+
+  ```
+  Content-Type: text/javascript
+  Content-Security-Policy: default-src 'none'; connect-src 'self'
+  X-Content-Type-Options: nosniff
+  Cache-Control: no-cache
+  ```
+
+- **Process Worker scripts** (`process-worker.js`, `python-worker.js`,
+  `php-worker.js`, `dotnet-worker.js`, `rust-worker.js`, `?policy=<id>`): the
+  policy's CSP, cached per policy id (`Vary`/cache key on the query). A missing
+  or unverifiable id gets the most restrictive policy.
+
+  ```
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' blob: <egress>; worker-src 'self' blob:; connect-src <egress>; report-to bfwc-csp
+  Reporting-Endpoints: bfwc-csp="<cspReportUrl>"
+  X-Content-Type-Options: nosniff
+  ```
+
+- **Every other response from a preview origin** (anything the service worker
+  does not serve: 404s, a page loaded before the worker took control, a
+  forgotten client's pass-through), the same policy the worker stamps:
+
+  ```
+  Content-Security-Policy: default-src 'self' <egress>; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: <egress>; style-src 'self' 'unsafe-inline' blob: data: <egress>; img-src 'self' data: blob: <egress>; font-src 'self' data: <egress>; media-src 'self' data: blob: <egress>; connect-src 'self' ws://<self> wss://<self> blob: data: <egress>; frame-src 'self' blob:; form-action 'self' <egress>; worker-src 'self' blob:; frame-ancestors <host>; report-to bfwc-csp
+  Reporting-Endpoints: bfwc-csp="<cspReportUrl>"
+  X-Content-Type-Options: nosniff
+  Origin-Agent-Cluster: ?1
+  ```
+
+The service worker stamps every response it serves — any type or none, any
+status — with that policy (beside any the app set, never replacing it),
+`X-Content-Type-Options: nosniff` and `Origin-Agent-Cluster: ?1`, and removes a
+`Set-Cookie` `Domain=` broader than the preview's exact host. Its egress and
+report endpoint come only from its own script URL, never from a message a
+preview could forge. Set `cspReportUrl` to have violations reported (`report-to bfwc-csp`).
+
+Put the preview parent domain (`preview.example.com`) on the
+[Public Suffix List](https://publicsuffix.org/), so browsers treat each
+`<key>.preview.example.com` as its own site: no cookie set on the parent domain
+reaches a sibling application, whatever an application's own code does.
+
+A custom `node.createWorker` is called as `createWorker(kind, applicationId, { origin, policy })`:
+it must start an application's Worker on `origin` under `policy`.
 
 `runtime.build({ base })` returns a deployable static site (`{ files: [{ path, data }] }`),
 and `createChecker()` from `@seanhogg/builderforce-webcontainers/check` type-checks
@@ -101,7 +181,7 @@ src/app/app.scss
 ```
 
 ```ts
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: projectId });
 runtime.writeTree(files); // the tree above
 runtime.profile(); // { supported: true, kind: 'angular', framework: 'angular', entry: '/src/main.ts', … }
 iframe.src = runtime.url;
@@ -139,7 +219,7 @@ a plain `ApplicationSpec`:
 import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
 import { startApplicationRuntime, createNodeProvider } from '@seanhogg/builderforce-webcontainers/app';
 
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: projectId });
 runtime.writeTree(files);
 
 const app = startApplicationRuntime(
@@ -389,7 +469,7 @@ import { createPgliteProvider, createPhpProvider, startApplicationRuntime } from
 
 // One options object: the runtime's PHP processes and the provider's checks read the same version.
 const phpOptions = { phpVersion: '8.3' };
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId, php: phpOptions });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: projectId, php: phpOptions });
 await runtime.run('composer', ['install', '--no-dev'], { cwd: '/api' }).wait();
 const app = startApplicationRuntime(
   {
@@ -510,6 +590,7 @@ import { createDotnetProvider, createPgliteProvider, startApplicationRuntime } f
 
 const runtime = await startPreviewRuntime({
   serviceWorkerUrl: '/__bfwc/sw.js',
+  unprotectedSameOrigin: true, // trusted code only; see relay mode
   id: projectId,
   dotnet: { bundleUrl: 'https://assets.example.com/bfwc-dotnet/' }, // the built bundle's directory
 });

@@ -26,7 +26,7 @@ export function createDotnetProcessKind(options: DotnetHostOptions = {}, next: P
       const program = shebangRoute(command, args, context, isDotnetCommand);
       return program ? { kind: DOTNET_KIND, ...program } : next.route(command, args, context);
     },
-    startOptions: (kind) => (kind === DOTNET_KIND ? { dotnet: { ...options } } : next.startOptions(kind)),
-    receive: (kind, message) => kind !== DOTNET_KIND && next.receive(kind, message),
+    startOptions: (kind, context) => (kind === DOTNET_KIND ? { dotnet: { ...options } } : next.startOptions(kind, context)),
+    receive: (kind, message, context) => kind !== DOTNET_KIND && next.receive(kind, message, context),
   };
 }

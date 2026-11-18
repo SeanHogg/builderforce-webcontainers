@@ -41,20 +41,26 @@ export interface PreviewMessages {
   dispose(): void;
 }
 
+/** The preview origin messages must come from: one origin, or a test (a runtime with per-application origins has several). */
+export type PreviewOriginMatch = string | ((origin: string) => boolean);
+
 const LEVELS = new Set<string>(['log', 'info', 'warn', 'error', 'debug']);
 
 /**
  * The preview page a window message came from, when it is one of THIS runtime's:
- * sent from the preview origin, by a page under `base`, carrying `nonce` when
- * the runtime has one. Undefined otherwise.
+ * sent from the preview origin, by a page under `base` ON THAT SAME ORIGIN (the
+ * `href` a message claims is the app's word; `event.origin` is the browser's,
+ * so application A cannot pass its errors or console off as B's), carrying
+ * `nonce` when the runtime has one. Undefined otherwise.
  */
-export function previewPageOf(event: MessageEvent, origin: string, base: string, nonce?: string): URL | undefined {
+export function previewPageOf(event: MessageEvent, origin: PreviewOriginMatch, base: string, nonce?: string): URL | undefined {
   const data = event.data as { href?: unknown; nonce?: unknown } | null;
   const href = data?.href;
-  if (typeof href !== 'string' || event.origin !== origin) return undefined;
+  if (typeof href !== 'string' || !(typeof origin === 'string' ? event.origin === origin : origin(event.origin))) return undefined;
   if (nonce !== undefined && data!.nonce !== nonce) return undefined;
   try {
     const page = new URL(href);
+    if (page.origin !== event.origin) return undefined; // a page claiming another origin's address
     return page.pathname.startsWith(base) ? page : undefined; // else: another runtime's preview
   } catch {
     return undefined;
@@ -66,7 +72,7 @@ function subscribe<T>(set: Set<(value: T) => void>, listener: (value: T) => void
   return () => set.delete(listener);
 }
 
-export function listenToPreview(target: Pick<Window, 'addEventListener' | 'removeEventListener'>, origin: string, base: string, nonce?: string): PreviewMessages {
+export function listenToPreview(target: Pick<Window, 'addEventListener' | 'removeEventListener'>, origin: PreviewOriginMatch, base: string, nonce?: string): PreviewMessages {
   const errors = new Set<(error: PreviewError) => void>();
   const consoles = new Set<(message: PreviewConsoleMessage) => void>();
 

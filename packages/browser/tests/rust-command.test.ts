@@ -6,7 +6,7 @@
  * virtual TCP and flow control, and the one dial choke point.
  */
 import { describe, expect, it } from 'vitest';
-import { VirtualFileSystem, createChannelPair, readBody, type ByteChannel } from '@seanhogg/builderforce-webcontainers-core';
+import { VirtualFileSystem, WORKSPACE_CONTEXT, createChannelPair, readBody, type ByteChannel } from '@seanhogg/builderforce-webcontainers-core';
 import type { ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
 import type { WorkerToHost } from '../src/node/protocol.js';
 import { createWorkerDialer } from '../src/node/workerConnections.js';
@@ -71,12 +71,12 @@ describe('Rust process kind', () => {
     expect(kinds.route('cargo', ['run'], context).kind).toBe(RUST_KIND);
     expect(kinds.route('dotnet', ['run'], context).kind).toBe('dotnet');
     expect(kinds.route('node', ['x.js'], context).kind).toBe('node');
-    expect(kinds.startOptions(RUST_KIND)).toEqual({});
-    expect(kinds.startOptions('dotnet')).toEqual({ dotnet: { bundleUrl: 'https://x.test/' } });
+    expect(kinds.startOptions(RUST_KIND, WORKSPACE_CONTEXT)).toEqual({});
+    expect(kinds.startOptions('dotnet', WORKSPACE_CONTEXT)).toEqual({ dotnet: { bundleUrl: 'https://x.test/' } });
     const foreign = new RegExp(kinds.foreignCommands!);
     for (const name of ['cargo', 'api.wasm', 'wasmtime', 'dotnet']) expect(foreign.test(name), name).toBe(true);
     expect(foreign.test('node')).toBe(false);
-    expect(kinds.receive(RUST_KIND, { type: 'php-platform' })).toBe(false);
+    expect(kinds.receive(RUST_KIND, { type: 'php-platform' }, WORKSPACE_CONTEXT)).toBe(false);
   });
 
   it('the relay starts rust-worker.js for a rust Worker', () => {

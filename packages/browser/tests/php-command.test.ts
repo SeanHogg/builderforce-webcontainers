@@ -4,7 +4,7 @@
  * the `php` provider's accept/decline. No php-wasm.
  */
 import { describe, expect, it } from 'vitest';
-import { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
+import { VirtualFileSystem, WORKSPACE_CONTEXT } from '@seanhogg/builderforce-webcontainers-core';
 import { NODE_ONLY } from '../src/node/processKinds.js';
 import {
   PHP_KIND,
@@ -75,8 +75,8 @@ describe('PHP command lines', () => {
     expect(kinds.route('php', ['a.php'], { fs, cwd: '/', env: {} })).toEqual({ kind: PHP_KIND, command: 'php', args: ['a.php'] });
     expect(kinds.route('./artisan', ['serve'], { fs, cwd: '/', env: {} })).toEqual({ kind: PHP_KIND, command: 'php', args: ['/artisan', 'serve'] });
     expect(kinds.route('node', ['x.js'], { fs, cwd: '/', env: {} })).toEqual({ kind: 'node', command: 'node', args: ['x.js'] });
-    expect(kinds.startOptions(PHP_KIND)).toEqual({ php: { phpVersion: '8.2' } });
-    expect(kinds.startOptions('node')).toEqual({});
+    expect(kinds.startOptions(PHP_KIND, WORKSPACE_CONTEXT)).toEqual({ php: { phpVersion: '8.2' } });
+    expect(kinds.startOptions('node', WORKSPACE_CONTEXT)).toEqual({});
     expect(new RegExp(kinds.foreignCommands!).test('composer')).toBe(true);
   });
 

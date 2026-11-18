@@ -12,7 +12,8 @@ import { fakeProvider, settle, stubRuntime, until } from './app-fakeProvider.js'
 
 const svc = (id: string, extra: Partial<ServiceSpec> = {}): ServiceSpec => ({ id, type: 'application', runtime: 'fake', command: 'run', ...extra });
 const app = (...services: ServiceSpec[]): ApplicationSpec => ({ projectId: 'p1', services });
-const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000, runtime: stubRuntime() };
+// A fresh runtime per application started: an application's identity is stable, so one runtime holds it once at a time.
+const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000, get runtime() { return stubRuntime(); } };
 
 function recordingProcesses() {
   const kills: Array<[string, string | undefined]> = [];
@@ -32,6 +33,21 @@ describe('application identity', () => {
     const other = startApplicationRuntime(app(svc('api')), { providers: [fake.provider], ...fast });
     expect(other.applicationId).not.toBe(runtime.applicationId);
     await runtime.dispose();
+  });
+
+  it('keeps an application its identity across starts (so its preview origin and storage), and never shares it with another application of the project', () => {
+    const fake = fakeProvider();
+    const shop = () => app(svc('api', { root: '/apps/shop' }), svc('web', { root: '/apps/shop/web' }));
+    const first = startApplicationRuntime(shop(), { providers: [fake.provider], ...fast });
+    const again = startApplicationRuntime({ ...shop(), services: [...shop().services].reverse() }, { providers: [fake.provider], ...fast });
+    expect(again.applicationId).toBe(first.applicationId);
+    // Another application of the same project, with the same service ids in its own directories.
+    const blog = startApplicationRuntime(app(svc('api', { root: '/apps/blog' }), svc('web', { root: '/apps/blog/web' })), { providers: [fake.provider], ...fast });
+    expect(blog.applicationId).not.toBe(first.applicationId);
+    // The same services in another project.
+    const elsewhere = startApplicationRuntime({ ...shop(), projectId: 'p2' }, { providers: [fake.provider], ...fast });
+    expect(elsewhere.applicationId).not.toBe(first.applicationId);
+    expect(first.applicationId).toMatch(/^app:p1:[0-9a-f]{16}$/);
   });
 
   it('the node provider spawns, and probes readiness, as the service, from its directory', async () => {

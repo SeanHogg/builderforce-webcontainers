@@ -68,6 +68,12 @@ class PDO extends \PDO
         $this->wire = Wire::fromConfig($config, $username, $password);
     }
 
+    /** @internal The wire client (Pdo\Pgsql::getPid). */
+    protected function bfwcWire(): Wire
+    {
+        return $this->wire;
+    }
+
     /** @internal Run one statement; failures follow the error mode (null when not thrown). */
     public function bfwcRun(string $sql, array $params, ?object $reporter = null): ?array
     {

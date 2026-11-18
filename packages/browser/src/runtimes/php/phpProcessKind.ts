@@ -12,6 +12,7 @@
  * process ({@link PhpProcessKind.platform}), which `createPhpProvider` checks
  * services against.
  */
+import { WORKSPACE_APPLICATION } from '@seanhogg/builderforce-webcontainers-core';
 import { NODE_ONLY, unionCommandPatterns, type ProcessKindPolicy, type ProcessRoute } from '../../node/processKinds.js';
 import { shebangRoute } from '../shebangRoute.js';
 import type { Platform } from './composer/platform.js';
@@ -51,11 +52,12 @@ export function createPhpProcessKind(options: PhpHostOptions = {}, next: Process
       const script = shebangRoute(command, args, context, isPhpCommand);
       return script ? { kind: PHP_KIND, ...script } : next.route(command, args, context);
     },
-    startOptions: (kind) => (kind === PHP_KIND ? { php: { ...options } } : next.startOptions(kind)),
-    receive(kind, message) {
-      if ((message as { type?: unknown })?.type !== 'php-platform') return next.receive(kind, message);
-      // Only a PHP process speaks for PHP; anything malformed is dropped.
-      const report = kind === PHP_KIND ? platformReport(message) : undefined;
+    startOptions: (kind, context) => (kind === PHP_KIND ? { php: { ...options } } : next.startOptions(kind, context)),
+    receive(kind, message, context) {
+      if ((message as { type?: unknown })?.type !== 'php-platform') return next.receive(kind, message, context);
+      // Only a workspace PHP process speaks for the shared PHP platform (an application's report would set it for
+      // everyone, the terminal included); anything malformed is dropped. `context` is the page-side record of the sender.
+      const report = kind === PHP_KIND && context.applicationId === WORKSPACE_APPLICATION ? platformReport(message) : undefined;
       if (report) platform = report;
       return true;
     },

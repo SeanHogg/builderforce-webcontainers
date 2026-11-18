@@ -46,7 +46,7 @@ import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
 
 // 1. Serve node_modules/@seanhogg/builderforce-webcontainers/dist/sw.js at /__bfwc/sw.js
 // 2. Start, write files, preview:
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: 'my-project' });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: 'my-project' });
 runtime.writeTree({
   'package.json': JSON.stringify({ dependencies: { react: '^18.3.1', 'react-dom': '^18.3.1' } }),
   'index.html': '<div id="root"></div><script type="module" src="/src/main.tsx"></script>',
@@ -63,7 +63,10 @@ runtime.fs.writeFile('/src/main.tsx', '...');
 ```
 
 Requirements: a secure context (https or localhost) for the service worker. That
-is all.
+is all. `unprotectedSameOrigin: true` is required for this mode: the Security
+Shield refuses to boot a preview on your page's own origin otherwise
+(`PreviewShieldError`, reason `ingress.same_origin_refused`). For anything but
+code your own user wrote, use [relay mode](#isolating-the-preview-relay-mode).
 
 ### Vue and Svelte
 
@@ -317,7 +320,74 @@ origin and relays ports and reloads. Processes started with `run` run there
 too: the relay starts each process worker from `process-worker.js` on the preview
 origin, so npm packages and the user's own server never share your app's
 storage or session. `frame-ancestors` is what stops other sites from driving
-your relay, so always set it.
+your relay, so always set it. A relay on your page's own origin is refused.
+
+#### One origin per application (`previewOrigin`)
+
+One preview origin keeps previews away from your app, but not from each other:
+every application started with `startApplicationRuntime` shares its storage,
+Cache Storage, BroadcastChannels and service worker. Give each application its
+own origin:
+
+```ts
+import { previewOriginTemplate, startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
+
+const runtime = await startPreviewRuntime({
+  id: projectId, // keys every application's origin: pass a stable, unique project id
+  relayUrl: 'https://preview.example.com/__bfwc/relay.html',
+  previewOrigin: previewOriginTemplate('https://{key}.preview.example.com'),
+  previewEgress: (applicationId) => (applicationId ? declaredApis(applicationId) : []),
+  workerPolicy: (applicationId) => signedPolicyId(applicationId),
+  security: { sink: { emit: (event) => report(event.reasonCode, event) } },
+});
+```
+
+`{key}` is 32 lowercase hex characters: the first 128 bits of SHA-256 over
+(runtime `id`, application id), so it is unique per project and application
+across a browser profile and never a raw, user-controlled name
+(`previewOriginKey(id, applicationId)` computes it). An application's first
+process opens a hidden relay at `https://<key>.preview.example.com` plus
+`relayUrl`'s path; its processes run there and its servers' URLs point there.
+The page serves an application's ports only through its own origin (and the
+workspace's only through `relayUrl`'s): any other request is a 403
+(`ingress.app_origin_mismatch`). An origin that is not a bare https origin, or
+that equals your page's, `relayUrl`'s or another application's, refuses the
+application's process (`ingress.preview_origin_invalid`). Without
+`previewOrigin`, an application's first process is refused the same way, unless
+you opt out by name with `sharedPreviewOrigin: 'unprotected'` — then
+applications share `relayUrl`'s origin, and the runtime warns once per page and
+reports `ingress.shared_preview_origin`.
+
+Deployment: a wildcard DNS record (`*.preview.example.com`) and a wildcard TLS
+certificate, and a host route that serves the same files on every
+`<key>.preview.example.com` as on `preview.example.com` — `relay.html` (with
+`frame-ancestors` limited to your app), `sw.js` and the process worker scripts —
+at the same path.
+
+Every preview document the service worker routes gets a Content-Security-Policy
+of `connect-src 'self' blob: data: <previewEgress>; worker-src 'self' blob:`,
+added beside (never replacing) any the app sets, so it can only tighten. Process
+Worker scripts are requested with `?policy=<workerPolicy>` (an opaque id you sign;
+`[A-Za-z0-9._~-]`, at most 512 characters); workspace processes and spares made
+before an application is known carry none — serve those the most restrictive
+policy. Every attach of a preview to the service worker carries a fresh nonce
+chained to the previous one, so a page that can post as the relay but never saw
+the host's messages cannot rebind a preview (`ingress.attach_rejected`).
+
+#### Security events (`security.sink`)
+
+Every refusal the runtime makes on the page side — a port the service graph
+does not allow, a database login or name refused, a write outside an
+application's directory, a spawn over quota, a request body over 32 MiB (also on
+in-runtime loopback HTTP and `runtime.request`, answered 413), an origin
+mismatch — becomes one `SecurityEvent` (`@seanhogg/builderforce-webcontainers/security`):
+`{ category, ruleId, severity, reasonCode, action, context, evidence, occurredAt }`.
+`context` is who the runtime assigned the actor at spawn, never what a process
+claims; `evidence` is redacted (no passwords, tokens, cookies or bodies) and at
+most 4 KB. Events go to `security.sink` (called synchronously, never awaited; a
+throwing sink is ignored) and into a bounded ring: `runtime.security().events()`
+and `runtime.security().health()` (`enforcement` and `telemetry`, reported
+separately).
 
 ## How it works
 

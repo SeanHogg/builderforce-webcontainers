@@ -9,12 +9,12 @@
  * (about:blank, srcdoc, blob: workers) and process workers cannot pick a preview
  * to reach.
  *
- * NOT A BOUNDARY YET. Until W10 control 1 (origin separation) ships, previews,
- * the relay page and the process workers share one origin, so a preview document
- * can script its sibling relay frame (`parent[i]`) and act as it, or
- * `history.pushState` to another preview's path before a forgotten client is
- * looked up again. Origin separation is the fix; this guard is defence in depth
- * until then (see `swBindings` for the attach side of the same hole).
+ * Within one origin this is defence in depth: a preview document can script
+ * its sibling relay frame (`parent[i]`) and act as it, or `history.pushState` to
+ * another preview's path before a forgotten client is looked up again. The
+ * boundary between applications is per-application origins (`previewOrigin`,
+ * W10 control 1), with the page serving an application's ports only through its
+ * own origin (see `swBindings` for the attach side).
  */
 import {
   ATTACH_MESSAGES,
@@ -27,7 +27,7 @@ import {
   type AttachRefusal,
   type IngressRejection,
 } from './swBindings.js';
-import { PREVIEW_ID, previewPrefix } from './protocol.js';
+import { PREVIEW_ID, attachProofOf, previewPrefix, type AttachProof } from './protocol.js';
 
 /** How long a host page's "may reach any preview" (or a "nothing") verdict is reused before `clients.get` is asked again. */
 const VERDICT_TTL_MS = 5_000;
@@ -74,6 +74,8 @@ export interface IngressGuardOptions {
   /** `clients.get(id)`. Without it every unbound client is refused and a live attach binding never moves. */
   getClient?(clientId: string): Promise<AttachClient | undefined>;
   onReject?(rejection: IngressRejection): void;
+  /** Ask the attacher pages for a fresh attach of `id` (after a stale nonce from its bound client). */
+  requestReattach?(id: string): Promise<void> | void;
   /** The preview id a URL is served for (the router's `match`), or null. */
   previewIdOf(url: URL): string | null;
   /** Told when a client is bound from its own URL (after a lookup), so routing state can be rebuilt. */
@@ -116,18 +118,29 @@ export function createIngressGuard(options: IngressGuardOptions) {
   const mayAttach = (client: AttachClient) => isAttacher(client, scopePath, mode);
 
   /**
-   * Whether `client` may attach `id`: an attacher, for an id that is free, already
-   * theirs, or whose owner is gone. Preview ids must therefore be unique per tab:
+   * Whether `client` may attach `id` with `proof`: a well-formed nonce, from an
+   * attacher, for an id that is free, already theirs (proven by the nonce of their
+   * last attach), or whose owner is gone. Preview ids must therefore be unique per tab:
    * a second tab attaching the same id (a fixed `options.id`) is refused while
    * the first is open.
    */
-  async function checkAttach(id: string, client: AttachClient | null | undefined): Promise<boolean> {
-    let detail: AttachRefusal | undefined;
+  async function checkAttach(id: string, client: AttachClient | null | undefined, proof: AttachProof | null | undefined): Promise<boolean> {
+    let detail: AttachRefusal | null;
+    const valid = attachProofOf(proof);
     if (!PREVIEW_ID.test(id)) detail = 'bad_id';
+    else if (!valid) detail = 'bad_nonce';
     else if (!client || !mayAttach(client)) detail = 'not_attacher';
-    else if (!(await owners.claim(id, client.id))) detail = 'duplicate_id';
+    else detail = await owners.claim(id, client.id, valid);
     if (!detail) return true;
     report({ reason: 'ingress.attach_rejected', id, clientId: client?.id, detail, message: ATTACH_MESSAGES[detail](id) });
+    // The bound client's chain parted from ours (a dropped attach): recover with a fresh attach, never a lockout.
+    if (detail === 'stale_nonce') {
+      try {
+        await options.requestReattach?.(id);
+      } catch {
+        // the next request for `id` asks again
+      }
+    }
     return false;
   }
 
