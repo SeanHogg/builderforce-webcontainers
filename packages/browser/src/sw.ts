@@ -11,7 +11,8 @@
  * cannot share a compilation with the DOM lib the rest of the package needs.
  */
 import { attachModeOf, createSwRouter, type AttachClient, type BodySource, type PortLike, type PreviewTarget, type RoutedResponse } from './swRouter.js';
-import { ATTACH, REATTACH, isPortPath, type AttachMessage } from './protocol.js';
+import { ATTACH, REATTACH, attachProofOf, isPortPath, type AttachMessage } from './protocol.js';
+import { isDocumentResponse, stampPreviewCsp } from './previewCsp.js';
 
 /** A `Client` (window or worker) as `event.source`, `clients.get` and `clients.matchAll` hand it over. */
 interface ClientLike {
@@ -86,7 +87,7 @@ worker.addEventListener('message', (event) => {
   const port = event.ports[0] as PortLike | undefined;
   if (message?.type !== ATTACH || !port) return;
   if (typeof message.id !== 'string') return port.close?.();
-  void router.acceptAttach(message.id, port, asClient(event.source));
+  void router.acceptAttach(message.id, port, asClient(event.source), attachProofOf(message), message.egress);
 });
 
 /** Statuses whose responses must not carry a body. */
@@ -117,7 +118,9 @@ async function serve(event: FetchEventLike, target: PreviewTarget): Promise<Resp
   const r = refused ?? (toServer ? await toVirtualServer(target, request, event.clientId) : await router.respond(target));
   // A virtual server's body is a stream fed as the server writes (SSE, chunked progress).
   if (NULL_BODY.has(r.status) && r.body instanceof ReadableStream) void r.body.cancel();
-  return new Response(NULL_BODY.has(r.status) ? null : r.body, { status: r.status, headers: r.headers });
+  // Every preview document carries the preview's CSP, added to (never replacing) any the app set.
+  const headers = isDocumentResponse(r.headers) ? stampPreviewCsp(r.headers, router.documentPolicy(target.id)) : r.headers;
+  return new Response(NULL_BODY.has(r.status) ? null : r.body, { status: r.status, headers });
 }
 
 worker.addEventListener('fetch', (event) => {

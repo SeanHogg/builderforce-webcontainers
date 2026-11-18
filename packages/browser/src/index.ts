@@ -7,13 +7,17 @@ export type {
   PreviewRuntime,
   RuntimeBuildOptions,
 } from './host.js';
+export { PreviewShieldError, previewOriginTemplate, previewOriginKey } from './previewOrigin.js';
+export type { PreviewOriginOption, PreviewOriginContext, ShieldEvent, ShieldEventSink } from './previewOrigin.js';
 export { listenToPreview } from './previewMessages.js';
+export type { PreviewOriginMatch } from './previewMessages.js';
 export { createSnapshotStore } from './snapshotStore.js';
 export type { SnapshotStore, SnapshotStoreOptions } from './snapshotStore.js';
 export type { PreviewError, PreviewErrorSource, PreviewConsoleMessage, ConsoleLevel, PreviewMessages } from './previewMessages.js';
 export { listenToPreviewBridge } from './previewBridge.js';
 export type { PreviewBridge, PreviewBridgeOptions, BridgePort } from './previewBridge.js';
 export type { PreviewTransport } from './transport.js';
+export type { AttachProof } from './protocol.js';
 export { createEsbuildWasmTransformer, createEsbuildWasmBundler, loadEsbuildWasm } from './esbuildWasm.js';
 export type { EsbuildWasmOptions } from './esbuildWasm.js';
 export { createCdnComponentCompilers, defaultVueCompilerUrl, defaultSvelteCompilerUrl } from './componentCompilers.js';

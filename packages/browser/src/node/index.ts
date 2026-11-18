@@ -36,9 +36,11 @@ export interface NodeRuntimeOptions {
    * Build each process Worker yourself (CSP, a test double, the relay's
    * `PreviewTransport.createWorker`). It is told the Worker kind the command
    * needs: `python` for Python commands, `php` for PHP ones, `dotnet` for .NET
-   * ones, else `node`. Wins over the URLs.
+   * ones, else `node`. Wins over the URLs. `applicationId` is the application
+   * whose process it is (undefined for the workspace's): with per-application
+   * preview origins, start it on that application's origin.
    */
-  createWorker?: (kind: WorkerKind) => WorkerLike;
+  createWorker?: (kind: WorkerKind, applicationId?: string) => WorkerLike;
   /** Build each database Worker yourself. It must run on the host origin, never the preview origin. Wins over `workerUrl`. */
   createDatabaseWorker?: () => WorkerLike;
   /** npm registry. Default https://registry.npmjs.org (it sends CORS headers). */
@@ -69,7 +71,7 @@ const BUNDLED_RUNTIME_WORKERS: Readonly<Record<Exclude<WorkerKind, 'node'>, (opt
 };
 
 /** How this runtime starts a process Worker of a kind: the option (in relay mode, the relay's, on the preview origin), else the bundled script. */
-export function workerFactory(options: NodeRuntimeOptions = {}): (kind: WorkerKind) => WorkerLike {
+export function workerFactory(options: NodeRuntimeOptions = {}): (kind: WorkerKind, applicationId?: string) => WorkerLike {
   if (options.createWorker) return options.createWorker;
   const node = bundledWorker(options, 'bfwc-process');
   return (kind) => (kind === 'node' ? node() : BUNDLED_RUNTIME_WORKERS[kind](options));
@@ -106,13 +108,14 @@ export function trackWorkers(create: () => WorkerLike): { create(): WorkerLike; 
   };
 }
 
-export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions; kinds?: ProcessKindPolicy; security?: ProcessShieldOptions }): ProcessHost {
+export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; originOf?: (applicationId: string) => string; previewUrl: string; options?: NodeRuntimeOptions; kinds?: ProcessKindPolicy; security?: ProcessShieldOptions }): ProcessHost {
   const { options = {} } = args;
   return new ProcessHost({
     fs: args.fs,
     cwd: args.cwd,
     createWorker: workerFactory(options),
     previewOrigin: args.origin,
+    previewOriginOf: args.originOf,
     previewBase: args.base,
     previewUrl: args.previewUrl,
     registry: options.registry,

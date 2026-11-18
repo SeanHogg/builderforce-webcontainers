@@ -45,7 +45,8 @@ export class ViewSupplies {
 
   constructor(
     private readonly fs: VirtualFileSystem,
-    private readonly createWorker: (kind: WorkerKind) => WorkerLike,
+    /** Told the view's application, so its Workers start on that application's preview origin. */
+    private readonly createWorker: (kind: WorkerKind, applicationId: string) => WorkerLike,
     /** Keep a primed spare per view, like the unscoped supply. */
     private readonly warm: boolean,
   ) {
@@ -63,7 +64,7 @@ export class ViewSupplies {
     if (!entry) {
       const mirror = mirrorOf(this.fs, view);
       const snapshots = new VfsSnapshots(mirror);
-      entry = { mirror, snapshots, supply: new WorkerSupply(this.createWorker, snapshots, this.warm), revision: view.revision };
+      entry = { mirror, snapshots, supply: new WorkerSupply((kind) => this.createWorker(kind, view.applicationId), snapshots, this.warm), revision: view.revision };
       this.entries.set(view, entry);
     }
     return entry.supply;

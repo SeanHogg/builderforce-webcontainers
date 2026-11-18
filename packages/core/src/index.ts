@@ -47,6 +47,8 @@ export type { VueCompilerSfcLike, VueDescriptor } from './vueCompiler.js';
 export { createSvelteCompiler } from './svelteCompiler.js';
 export type { SvelteCompilerLike } from './svelteCompiler.js';
 export { contentHash } from './hash.js';
+/** Synchronous digests (md5, sha1, sha2): the browser runtime derives per-application preview origins with sha256. */
+export { hashAlgorithm } from './node/hashes.js';
 export { rewriteImports } from './rewriteImports.js';
 export { resolveLocal, resolveAlias, isBareSpecifier, splitPackageSpecifier, resolvePackage, RESOLVE_EXTENSIONS } from './resolve.js';
 export { compileScript, compileModule, isScriptPath, mapSpecifier, moduleUrl, buildDefine } from './compileScript.js';

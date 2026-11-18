@@ -27,7 +27,7 @@ import {
   type PortCookieJars,
   type WebSocketConnection,
 } from '@seanhogg/builderforce-webcontainers-core';
-import { previewPageOf } from './previewMessages.js';
+import { previewPageOf, type PreviewOriginMatch } from './previewMessages.js';
 
 export interface PreviewBridgeOptions {
   /** Open an upgraded connection to the server on `port` (`ProcessHost.upgrade`). */
@@ -36,6 +36,12 @@ export interface PreviewBridgeOptions {
   cookies?: PortCookieJars;
   /** The runtime's nonce: pages must carry it (see `previewPageOf`). */
   nonce?: string;
+  /**
+   * Whether a page on `origin` (the message's real origin, never the href it
+   * claims) may reach the server on `port` — its WebSocket and its cookies. With
+   * per-application preview origins only the owner's origin may. Default: any.
+   */
+  admitPort?(origin: string, port: number): boolean;
 }
 
 /** The slice of MessagePort the bridge uses. */
@@ -64,18 +70,20 @@ interface BridgeMessage {
 
 export function listenToPreviewBridge(
   target: Pick<Window, 'addEventListener' | 'removeEventListener'>,
-  origin: string,
+  origin: PreviewOriginMatch,
   base: string,
   options: PreviewBridgeOptions,
 ): PreviewBridge {
   const sockets = new Set<WebSocketConnection>();
   const cookiePages = new Map<number, Array<{ port: BridgePort; path: string }>>();
 
-  function openSocket(channel: BridgePort, data: BridgeMessage, page: URL): void {
+  const admits = (from: string, port: number) => !options.admitPort || options.admitPort(from, port);
+
+  function openSocket(channel: BridgePort, data: BridgeMessage, page: URL, from: string): void {
     const port = Number(data.port);
     const path = typeof data.path === 'string' && data.path.startsWith('/') ? data.path : undefined;
     const protocols = Array.isArray(data.protocols) ? data.protocols.filter((p): p is string => typeof p === 'string') : [];
-    if (!Number.isInteger(port) || port < 1 || port > 65535 || !path) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !path || !admits(from, port)) {
       channel.postMessage({ kind: 'close', code: 1006, reason: '', wasClean: false });
       return channel.close();
     }
@@ -121,10 +129,10 @@ export function listenToPreviewBridge(
     };
   }
 
-  function syncCookies(channel: BridgePort, page: URL): void {
+  function syncCookies(channel: BridgePort, page: URL, from: string): void {
     const cookies = options.cookies;
     const server = parsePortPath(page.pathname.slice(base.length - 1));
-    if (!cookies || !server) return channel.close();
+    if (!cookies || !server || !admits(from, server.port)) return channel.close();
     const pages = cookiePages.get(server.port) ?? [];
     pages.push({ port: channel, path: server.path });
     if (pages.length > COOKIE_PAGES_PER_PORT) pages.shift()?.port.close();
@@ -147,8 +155,8 @@ export function listenToPreviewBridge(
     const channel = event.ports?.[0] as BridgePort | undefined;
     const page = channel && data ? previewPageOf(event, origin, base, options.nonce) : undefined;
     if (!page) return;
-    if (data!.type === SOCKET_MESSAGE_TYPE) openSocket(channel!, data!, page);
-    else if (data!.type === COOKIE_MESSAGE_TYPE) syncCookies(channel!, page);
+    if (data!.type === SOCKET_MESSAGE_TYPE) openSocket(channel!, data!, page, event.origin);
+    else if (data!.type === COOKIE_MESSAGE_TYPE) syncCookies(channel!, page, event.origin);
   };
   target.addEventListener('message', onMessage as EventListener);
 

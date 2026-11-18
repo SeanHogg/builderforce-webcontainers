@@ -69,12 +69,14 @@ export interface ProcessHostOptions {
   fs: VirtualFileSystem;
   /** Where a process starts when `run` names no `cwd`. Default `/`. */
   cwd?: string;
-  /** A process Worker of `kind` (as `kinds` routes the command). */
-  createWorker(kind: WorkerKind): WorkerLike;
+  /** A process Worker of `kind` (as `kinds` routes the command), for an application's process (`applicationId`) or the workspace's (undefined). */
+  createWorker(kind: WorkerKind, applicationId?: string): WorkerLike;
   /** Which Worker kind runs a command, and what that kind needs. Default: every process is Node. */
   kinds?: ProcessKindPolicy;
   /** Origin and base path previews are served under (`/__bfwc/<id>/`). */
   previewOrigin: string;
+  /** The preview origin of an application's processes and ports (W10 control 1). Default: `previewOrigin` for all. Throws to refuse the application. */
+  previewOriginOf?(applicationId: string): string;
   previewBase: string;
   /** The dev server's preview URL, for the `vite`/`react-scripts start` handoff. */
   previewUrl?: string;
@@ -127,9 +129,9 @@ export class ProcessHost {
     this.identities = new ProcessIdentities(options.cwd ?? '/', options.security);
     const onRefused = (context: SecurityContext | undefined, _op: unknown, decision: ShieldDecision) => context && this.identities.report(context, decision);
     this.fsSync = new FsSync(options.fs, { send: (proc, ops) => this.post(proc, { type: 'fs', ops }), onRefused });
-    const createWorker = (kind: WorkerKind) => options.createWorker(kind);
-    this.workers = new WorkerSupply(createWorker, this.fsSync.snapshots, options.warmWorker !== false);
-    this.views = new ViewSupplies(options.fs, createWorker, options.warmWorker !== false);
+    this.workers = new WorkerSupply((kind) => options.createWorker(kind), this.fsSync.snapshots, options.warmWorker !== false);
+    // An application's Workers start on its own preview origin when it has one.
+    this.views = new ViewSupplies(options.fs, (kind, applicationId) => options.createWorker(kind, applicationId), options.warmWorker !== false);
     this.served = new ProcessPorts(this.ports, (proc, message) => this.post(proc, message), (pid) => this.identityOf(pid));
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
@@ -148,7 +150,12 @@ export class ProcessHost {
   }
 
   serverUrl(port: number): string {
-    return new URL(portPath(this.options.previewBase, port), this.options.previewOrigin).href;
+    return new URL(portPath(this.options.previewBase, port), this.originOf(this.ports.ownerOf(port)?.applicationId)).href;
+  }
+
+  /** The preview origin an application's processes and ports use (the shared one for the workspace and the platform). */
+  private originOf(applicationId: string | undefined): string {
+    return applicationId === undefined || !this.options.previewOriginOf ? this.options.previewOrigin : this.options.previewOriginOf(applicationId);
   }
 
   /** Start a command in its own Web Worker, as a stream-based {@link RuntimeProcess}. */
@@ -230,7 +237,7 @@ export class ProcessHost {
       thread: options.thread,
       snapshot,
       ports: ((self) => (self ? this.ports.reachablePorts(self) : []))(this.identityOf(pid)), // only what it may reach (W10 control 4)
-      previewOrigin: this.options.previewOrigin,
+      previewOrigin: this.originOf(admitted.context.applicationId),
       previewBase: this.options.previewBase,
       previewUrl: this.options.previewUrl,
       registry: this.options.registry,

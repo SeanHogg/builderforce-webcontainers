@@ -14,7 +14,7 @@ headers, no session caps, MIT licensed.
 ```ts
 import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
 
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: projectId });
 runtime.writeTree(files);
 if (runtime.profile().supported) iframe.src = runtime.url;
 else showFallback(runtime.profile().reason);
@@ -23,8 +23,12 @@ else showFallback(runtime.profile().reason);
 To run untrusted code (AI-written, arbitrary packages), isolate the preview on its
 own origin with `startPreviewRuntime({ relayUrl })`. That origin serves
 `relay.html`, `sw.js` and `process-worker.js` (strings in `@seanhogg/builderforce-webcontainers/assets`)
-with `Content-Security-Policy: frame-ancestors` limited to your app. See the
-[root README](../../README.md#isolating-the-preview-relay-mode).
+with `Content-Security-Policy: frame-ancestors` limited to your app. Same-origin
+mode (above) needs `unprotectedSameOrigin: true`, or the runtime refuses to boot
+(`ingress.same_origin_refused`). To give each application its own origin as well
+(`previewOrigin`, which needs wildcard DNS and a host route serving the relay files
+on `<key>.preview.example.com`), see the
+[root README](../../README.md#one-origin-per-application-previeworigin).
 
 `runtime.build({ base })` returns a deployable static site (`{ files: [{ path, data }] }`),
 and `createChecker()` from `@seanhogg/builderforce-webcontainers/check` type-checks
@@ -101,7 +105,7 @@ src/app/app.scss
 ```
 
 ```ts
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: projectId });
 runtime.writeTree(files); // the tree above
 runtime.profile(); // { supported: true, kind: 'angular', framework: 'angular', entry: '/src/main.ts', … }
 iframe.src = runtime.url;
@@ -139,7 +143,7 @@ a plain `ApplicationSpec`:
 import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
 import { startApplicationRuntime, createNodeProvider } from '@seanhogg/builderforce-webcontainers/app';
 
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: projectId });
 runtime.writeTree(files);
 
 const app = startApplicationRuntime(
@@ -389,7 +393,7 @@ import { createPgliteProvider, createPhpProvider, startApplicationRuntime } from
 
 // One options object: the runtime's PHP processes and the provider's checks read the same version.
 const phpOptions = { phpVersion: '8.3' };
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId, php: phpOptions });
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true, id: projectId, php: phpOptions });
 await runtime.run('composer', ['install', '--no-dev'], { cwd: '/api' }).wait();
 const app = startApplicationRuntime(
   {
@@ -510,6 +514,7 @@ import { createDotnetProvider, createPgliteProvider, startApplicationRuntime } f
 
 const runtime = await startPreviewRuntime({
   serviceWorkerUrl: '/__bfwc/sw.js',
+  unprotectedSameOrigin: true, // trusted code only; see relay mode
   id: projectId,
   dotnet: { bundleUrl: 'https://assets.example.com/bfwc-dotnet/' }, // the built bundle's directory
 });

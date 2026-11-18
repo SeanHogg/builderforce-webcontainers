@@ -1,6 +1,7 @@
-import { PREVIEW_ID, isPortPath, isWireReply, previewPrefix, type WireCancel, type WireResponse } from './protocol.js';
+import { PREVIEW_ID, isPortPath, isWireReply, previewPrefix, type AttachProof, type WireCancel, type WireResponse } from './protocol.js';
 import type { AttachClient, AttachMode, IngressRejection } from './swBindings.js';
 import { createIngressGuard } from './swGuard.js';
+import { previewDocumentPolicy } from './previewCsp.js';
 
 export type { LookupRequest } from './swGuard.js';
 import { DEFAULT_MAX_BODY_BYTES, readBoundedBody, type BodySource } from './swBody.js';
@@ -87,6 +88,10 @@ export function createSwRouter(options: SwRouterOptions) {
   const streams = new Map<number, ReadableStreamDefaultController<Uint8Array>>();
   let nextId = 0;
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  /** Preview id → the CSP its documents get (from the accepted attach's declared egress). */
+  const policies = new Map<string, string>();
+  /** The CSP preview `id`'s documents get: its attach's, or — with none known — only its own origin. */
+  const documentPolicy = (id: string) => policies.get(id) ?? previewDocumentPolicy([]);
   const guard = createIngressGuard({
     ...options,
     previewIdOf: (url) => match(url)?.id ?? null,
@@ -134,11 +139,13 @@ export function createSwRouter(options: SwRouterOptions) {
   }
 
   /**
-   * An attach from `client` (`event.source`), decided by the guard (attacher,
-   * binding, unique id per tab). A refused port is closed.
+   * An attach from `client` (`event.source`) carrying `proof` (`attachProofOf`),
+   * decided by the guard (nonce, attacher, binding, unique id per tab). A refused
+   * port is closed. An accepted one sets the preview's document CSP from `egress`.
    */
-  async function acceptAttach(id: string, port: PortLike, client: AttachClient | null | undefined): Promise<boolean> {
-    if (await guard.checkAttach(id, client)) {
+  async function acceptAttach(id: string, port: PortLike, client: AttachClient | null | undefined, proof: AttachProof | null | undefined, egress?: unknown): Promise<boolean> {
+    if (await guard.checkAttach(id, client, proof)) {
+      policies.set(id, previewDocumentPolicy(egress));
       attach(id, port);
       return true;
     }
@@ -245,7 +252,7 @@ export function createSwRouter(options: SwRouterOptions) {
     return matchForClient(url, clientId, origin);
   }
 
-  return { acceptAttach, mayAttach: guard.mayAttach, admit, readBody, match, matchForClient, needsClientLookup: guard.needsLookup, resolveForClient, rememberClient, respond, detach };
+  return { acceptAttach, documentPolicy, mayAttach: guard.mayAttach, admit, readBody, match, matchForClient, needsClientLookup: guard.needsLookup, resolveForClient, rememberClient, respond, detach };
 }
 
 export type SwRouter = ReturnType<typeof createSwRouter>;

@@ -8,7 +8,7 @@
  * must restrict that with `Content-Security-Policy: frame-ancestors <host origins>`.
  */
 import { ATTACH, REATTACH, RELAY_ATTACH, RELAY_READY, RELAY_REATTACH, RELAY_SPAWN, RELAY_UPDATE } from './protocol.js';
-import { bridgeWorker, relayWorkerScript } from './relayWorker.js';
+import { bridgeWorker, relayWorkerUrl } from './relayWorker.js';
 import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 import { broadcastUpdate, waitForActive } from './worker.js';
 
@@ -27,15 +27,17 @@ async function start(): Promise<void> {
 
   addEventListener('message', (event) => {
     if (event.source !== host) return;
-    const data = event.data as { type?: string; id?: unknown; base?: unknown; update?: PreviewUpdate } | null;
+    const data = event.data as { type?: string; id?: unknown; base?: unknown; update?: PreviewUpdate; nonce?: unknown; previous?: unknown; egress?: unknown } | null;
     if (data?.type === RELAY_ATTACH && typeof data.id === 'string' && event.ports[0]) {
-      registration.active?.postMessage({ type: ATTACH, id: data.id }, [event.ports[0]]);
+      // The host's attach nonce goes on as it came; the worker judges it (a malformed one is refused there).
+      registration.active?.postMessage({ type: ATTACH, id: data.id, nonce: data.nonce, previous: data.previous, egress: data.egress }, [event.ports[0]]);
     } else if (data?.type === RELAY_UPDATE && typeof data.base === 'string') {
       broadcastUpdate(data.base, data.update ?? { type: 'reload' });
     } else if (data?.type === RELAY_SPAWN && event.ports[0]) {
       // Process code runs HERE, on the preview origin, never on the host's — Node's, Python's, PHP's or .NET's.
-      const script = relayWorkerScript((data as { worker?: unknown }).worker);
-      bridgeWorker(event.ports[0], new Worker(new URL(`./${script.file}`, location.href), { name: script.name }));
+      const spawn = data as { worker?: unknown; policy?: unknown };
+      const script = relayWorkerUrl(spawn.worker, spawn.policy, location.href);
+      bridgeWorker(event.ports[0], new Worker(script.url, { name: script.name }));
     }
   });
 

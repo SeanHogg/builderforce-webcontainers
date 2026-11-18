@@ -51,10 +51,14 @@ export function bridgeWorker(port: MessagePort, worker: Worker): void {
   };
 }
 
-/** Host side: ask the relay (through `post`) to start a Worker of `kind` on the preview origin; the Worker as a `WorkerLike`. */
-export function spawnOverRelay(post: (message: unknown, transfer: Transferable[]) => void, kind: WorkerKind = 'node'): WorkerLike {
+/**
+ * Host side: ask the relay (through `post`) to start a Worker of `kind` on the
+ * preview origin, under egress policy `policy` (an opaque signed id the embedder
+ * minted; absent = the most restrictive policy); the Worker as a `WorkerLike`.
+ */
+export function spawnOverRelay(post: (message: unknown, transfer: Transferable[]) => void, kind: WorkerKind = 'node', policy?: string): WorkerLike {
   const channel = new MessageChannel();
-  post({ type: RELAY_SPAWN, worker: kind }, [channel.port2]);
+  post({ type: RELAY_SPAWN, worker: kind, ...(policy === undefined ? {} : { policy }) }, [channel.port2]);
   return workerOverPort(channel.port1);
 }
 
@@ -85,4 +89,21 @@ const RELAY_WORKER_SCRIPTS: Readonly<Record<WorkerKind, { file: string; name: st
 /** The script the relay starts for a Worker kind (anything unknown is a Node process Worker). */
 export function relayWorkerScript(kind: unknown): { file: string; name: string } {
   return typeof kind === 'string' && Object.hasOwn(RELAY_WORKER_SCRIPTS, kind) ? RELAY_WORKER_SCRIPTS[kind as WorkerKind] : RELAY_WORKER_SCRIPTS.node;
+}
+
+/** What an egress policy id may be: an opaque URL-safe token (a signed id, base64url or similar), at most 512 characters. */
+export const WORKER_POLICY_ID = /^[A-Za-z0-9._~-]{1,512}$/;
+
+/**
+ * The URL the relay starts a Worker of `kind` from, beside `relayHref`, carrying
+ * `?policy=<id>` (W10 control 6) so the server can serve the script with that
+ * policy's CSP and caches vary by it. A missing or malformed id is left off: the
+ * server then serves the most restrictive policy.
+ */
+export function relayWorkerUrl(kind: unknown, policy: unknown, relayHref: string): { url: URL; name: string } {
+  const script = relayWorkerScript(kind);
+  const url = new URL(`./${script.file}`, relayHref);
+  // Verbatim (every allowed character is URL-safe), so the signature the server checks is the one it minted.
+  if (typeof policy === 'string' && WORKER_POLICY_ID.test(policy)) url.search = `?policy=${policy}`;
+  return { url, name: script.name };
 }

@@ -24,7 +24,7 @@ export const REATTACH = 'bfwc:reattach';
  */
 /** relay → host: the worker is active; send ports. */
 export const RELAY_READY = 'bfwc:relay-ready';
-/** host → relay, with a MessagePort: forward as ATTACH for `id`. */
+/** host → relay, with a MessagePort: forward as ATTACH for `id`, with its `nonce` and `previous` (`AttachProof`). */
 export const RELAY_ATTACH = 'bfwc:relay-attach';
 /** relay → host: the worker asked for `id` again. */
 export const RELAY_REATTACH = 'bfwc:relay-reattach';
@@ -33,9 +33,42 @@ export const RELAY_UPDATE = 'bfwc:relay-reload';
 /** host → relay, with a MessagePort: start a process worker on the preview origin, bridged over the port. */
 export const RELAY_SPAWN = 'bfwc:relay-spawn';
 
-export interface AttachMessage {
+/**
+ * What an attach proves (W10 control 2): `nonce` is fresh for this attach, minted
+ * by the host page; `previous` is the nonce of the host's last attach of the same
+ * id. The worker binds the nonce to the attaching client, and a later attach of
+ * that id from that client must present it as `previous` — so a script that can
+ * post as the relay client but never saw the host's messages cannot rebind it.
+ * Both travel only by postMessage to the exact relay origin and the worker, never
+ * in a URL a preview can read.
+ */
+export interface AttachProof {
+  nonce: string;
+  previous?: string;
+}
+
+/** 128 random bits, lowercase hex: an attach nonce. */
+export const ATTACH_NONCE = /^[0-9a-f]{32}$/;
+
+/** 128 random bits from the platform CSPRNG, hex (attach nonces and the preview-message nonce). */
+export function randomNonce(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** The proof carried by an attach message, or null when it carries none that is well-formed. */
+export function attachProofOf(message: { nonce?: unknown; previous?: unknown } | null | undefined): AttachProof | null {
+  if (!message || typeof message.nonce !== 'string' || !ATTACH_NONCE.test(message.nonce)) return null;
+  if (message.previous === undefined) return { nonce: message.nonce };
+  return typeof message.previous === 'string' && ATTACH_NONCE.test(message.previous) ? { nonce: message.nonce, previous: message.previous } : null;
+}
+
+export interface AttachMessage extends AttachProof {
   type: typeof ATTACH;
   id: string;
+  /** The external sources preview `id`'s documents may connect to (`previewCsp`); absent = none beyond their own origin. */
+  egress?: readonly string[];
 }
 
 export interface ReattachMessage {

@@ -14,232 +14,34 @@ import {
   importZip,
   normalizePath,
   textResponse,
-  type BuildResult,
-  type Bundler,
-  type ByteChannel,
-  type ComponentCompilers,
-  type ConnectionHandler,
-  type FileTree,
-  type HttpRequestData,
-  type HttpResponseData,
-  type PackageCdnFactory,
-  type PortChange,
+  type PreviewUpdate,
   type ProcessOptions,
-  type ProjectProfile,
-  type RuntimeProcess,
-  type SecurityContext,
-  type ServerAddress,
-  type StyleCompilers,
-  type Transformer,
-  type ZipExportOptions,
-  type ZipImportLimits,
 } from '@seanhogg/builderforce-webcontainers-core';
-import type { ServiceGraphPolicy } from '@seanhogg/builderforce-webcontainers-core/app';
-import { PREVIEW_ID, isPortPath, isWireCancel, isWireRequest, previewBase, type WireReply, type WireResponse } from './protocol.js';
-import { createPortResponder, createProcessHost, databaseWorkerFactory, trackWorkers, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
-import type { WorkerLike } from './node/processHost.js';
-import { createPythonProcessKind, type PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
-import { createPhpProcessKind, type PhpHostOptions, type PhpPlatformRecord } from './runtimes/php/phpProcessKind.js';
-import { createDotnetProcessKind, type DotnetHostOptions } from './runtimes/dotnet/dotnetProcessKind.js';
+import { PREVIEW_ID, previewBase, randomNonce } from './protocol.js';
+import { createProcessHost, databaseWorkerFactory, trackWorkers } from './node/index.js';
+import { createPythonProcessKind } from './runtimes/python/pythonProcessKind.js';
+import { createPhpProcessKind } from './runtimes/php/phpProcessKind.js';
+import { createDotnetProcessKind } from './runtimes/dotnet/dotnetProcessKind.js';
 import { createRustProcessKind } from './runtimes/rust/rustProcessKind.js';
-import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from './previewMessages.js';
+import { listenToPreview } from './previewMessages.js';
 import { listenToPreviewBridge } from './previewBridge.js';
-import { relayTransport, sameOriginTransport } from './transport.js';
+import { openRelay, relayTransport, sameOriginTransport, type PreviewTransport } from './transport.js';
+import { attachPreview } from './previewAttach.js';
+import { checkPreviewOrigins, emitShieldEvent } from './previewOrigin.js';
+import { createPreviewOrigins } from './previewOrigins.js';
 import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
 import { createCdnComponentCompilers } from './componentCompilers.js';
 import { createCdnStyleCompilers } from './styleCompilers.js';
 import { watchForPreviewUpdates } from './previewUpdates.js';
+import type { PreviewRuntime, PreviewRuntimeOptions, SameOriginOptions } from './runtimeOptions.js';
 
-/** Serve previews on THIS page's origin. Only for code the page's own user trusts. */
-export interface SameOriginOptions {
-  /** Where the host serves this package's `dist/sw.js` (e.g. `/__bfwc/sw.js`). */
-  serviceWorkerUrl: string;
-  /** Worker scope. Defaults to the worker script's directory. */
-  scope?: string;
-  relayUrl?: never;
-}
-
-/**
- * Serve previews on a SEPARATE origin, isolated from this page's cookies, storage
- * and DOM. That origin serves `dist/relay.html` and `dist/sw.js` side by side, with
- * `frame-ancestors` limited to the pages allowed to drive it.
- */
-export interface RelayOptions {
-  /** e.g. `https://preview.example.com/__bfwc/relay.html`. */
-  relayUrl: string;
-  serviceWorkerUrl?: never;
-  scope?: never;
-}
-
-export type PreviewRuntimeOptions = (SameOriginOptions | RelayOptions) & CommonRuntimeOptions;
-
-export interface CommonRuntimeOptions {
-  /** Compiler. Defaults to esbuild-wasm. */
-  transformer?: Transformer;
-  /** Package CDN factory, for previews (`dev: true`) and builds (`dev: false`). Defaults to esm.sh. */
-  cdn?: PackageCdnFactory;
-  /** `.vue` / `.svelte` compilers. Default: the official ones, fetched from a CDN on first use. */
-  components?: ComponentCompilers;
-  /** Sass / Less compilers. Default: the official pure-JS builds, fetched from a CDN on first use. */
-  styles?: StyleCompilers;
-  /** Bundler for `build()`. Default: esbuild-wasm (the same instance as the compiler). */
-  bundler?: Bundler;
-  /**
-   * The project's directory, as Node programs see it: where `run` starts and
-   * `process.cwd()` points. Everything this runtime hands you (`fs`,
-   * `writeTree`, zips, the dev server, `build`) addresses the project as `/`.
-   * Default `/home/project`; `/` puts the project at the file-system root,
-   * which file watchers (chokidar under Vite, so SvelteKit) mishandle.
-   */
-  root?: string;
-  /** Stable id (e.g. the project id; `[A-Za-z0-9_-]`) — keeps the preview URL stable across reloads. */
-  id?: string;
-  /** The "Built with Builderforce.ai" badge in the preview. Default true — please keep it. */
-  attribution?: boolean;
-  /** Update open previews when files change. Default true. */
-  liveReload?: boolean;
-  /**
-   * Apply edits in place where possible: stylesheets swap and React components
-   * re-render keeping their state (Fast Refresh); anything else reloads. `false`
-   * reloads on every edit. Default true.
-   */
-  hot?: boolean;
-  /** Your scripts (JavaScript source), run in every preview page before the app — analytics, test hooks, a mock `fetch`. */
-  previewScripts?: string[];
-  /** The Node runtime behind `run` (process workers, npm registry). */
-  node?: NodeRuntimeOptions;
-  /** Python processes (`python`, `pip`, `uvicorn` …): where Pyodide is served, host extensions. */
-  python?: PythonHostOptions;
-  /** PHP processes (`php`, `php -S`, `composer`): where php-wasm is served, the PHP version, Composer's sources. */
-  php?: PhpHostOptions;
-  /**
-   * .NET processes (`dotnet run`, `dotnet build`, `./app.cs`): where the runtime
-   * bundle (scripts/build-dotnet-runtime.mjs) is served. No default — without
-   * `bundleUrl`, `dotnet` commands decline with the reason.
-   */
-  dotnet?: DotnetHostOptions;
-}
-
-export interface RuntimeBuildOptions {
-  /** Where the site will be served from. Default `./` (works from any directory). */
-  base?: string;
-  /** Default true. */
-  minify?: boolean;
-}
-
-export interface PreviewRuntime {
-  readonly id: string;
-  /** Absolute URL to load in the preview iframe. */
-  readonly url: string;
-  /** The project, rooted at `/` (see `root`). */
-  readonly fs: VirtualFileSystem;
-  /** The project's directory as Node programs see it (`/home/project` by default). */
-  readonly root: string;
-  readonly server: DevServer;
-  /** The PHP that PHP processes reported running (`createPhpProvider(runtime, { platform: runtime.phpPlatform, php })`). */
-  readonly phpPlatform: PhpPlatformRecord;
-  /** Write files into the runtime (nested or flat; see `FileTree`), under `at` (default `/`). Open previews update. */
-  writeTree(files: FileTree, at?: string): void;
-  /** The project as a zip — "Download project" with `exclude: ['node_modules']`, or a full snapshot to restore later. */
-  exportZip(options?: ZipExportOptions): Uint8Array;
-  /** Write a zip's contents (an `exportZip` snapshot, a downloaded template) into the runtime, under `at`. Throws `ZipLimitError` past `limits`. */
-  importZip(zip: Uint8Array, at?: string, limits?: ZipImportLimits): void;
-  /** Reload every frame showing this preview now (live reload does this on edits by itself). */
-  reload(): void;
-  /** Whether this runtime can serve the mounted project, and why not. */
-  profile(): ProjectProfile;
-  /**
-   * `npm run build` for the mounted files: a deployable static site (index.html,
-   * hashed `assets/`, `public/` copied). Rejects with the reason when the project
-   * is not one this runtime supports, or with the bundler's errors.
-   */
-  build(options?: RuntimeBuildOptions): Promise<BuildResult>;
-  /**
-   * Errors raised inside the preview: uncaught throws (`source: 'error'`), unhandled
-   * rejections (`'rejection'`) and, in an Angular app only, `console.error` calls given an
-   * Error object or an Angular-coded string (`'console'`) — how a failed Angular bootstrap,
-   * Angular's ErrorHandler and its template checks (NG0303) report, with no uncaught error
-   * at all. Other frameworks' `console.error` stays console output. A framework error code
-   * is extracted: `{ code: 'NG0202', message: 'NG0202: …' }`.
-   * At most 100 per page load.
-   */
-  onError(listener: (error: PreviewError) => void): () => void;
-  /** The preview's `console.log/info/warn/error/debug` output (first 1,000 messages per page load). */
-  onPreviewConsole(listener: (message: PreviewConsoleMessage) => void): () => void;
-  /** Replace the scripts run in preview pages; open previews reload to pick them up. */
-  setPreviewScripts(scripts: string[]): void;
-  /**
-   * Run a command — `node server.js`, `npm install`, `npm run dev`, `bfsh` for a
-   * terminal — in its own Web Worker. Pass `{ terminal: { cols, rows } }` when
-   * wiring it to xterm.js. `cwd` is project-relative like every other path here
-   * (`/` is the project, `/packages/web` a folder in it; `..` cannot leave it);
-   * the default is the project itself.
-   */
-  run(command: string, args?: string[], options?: ProcessOptions): RuntimeProcess;
-  run(command: string, options?: ProcessOptions): RuntimeProcess;
-  /** A process started listening (or a dev script handed off to the preview); `url` loads it in an iframe. */
-  onServerListening(listener: (server: ServerAddress) => void): () => void;
-  /** A virtual server opened or closed its port. */
-  onPortChange(listener: (change: PortChange) => void): () => void;
-  /**
-   * Processes still running, with the ports their servers listen on. `cwd` is
-   * project-relative; a process that changed directory out of the project (a
-   * shell's `cd /tmp`) reports the absolute path it sees.
-   */
-  listProcesses(): ProcessInfo[];
-  /**
-   * Send an HTTP request to the virtual server on `port` from inside the runtime
-   * (its own localhost, not the network) and wait for the whole response;
-   * undefined when nothing listens there. `method` defaults to GET.
-   */
-  request(port: number, request: Partial<HttpRequestData> & { url: string }, caller?: SecurityContext): Promise<HttpResponseData | undefined>;
-  /**
-   * Serve raw TCP on a virtual port from the page (the database gateway does):
-   * processes reach it with `net.connect(port)`; an HTTP request to it gets a
-   * 502. `owner` (default the platform) is whose port it is: only callers the
-   * port policy allows reach it. Throws `EADDRINUSE`.
-   */
-  listenTcp(port: number, accept: ConnectionHandler, owner?: SecurityContext): { port: number; close(): void };
-  /** Open a raw TCP connection to whatever listens on `port`; undefined when nothing does (or `caller`, default the platform, may not reach it). */
-  connect(port: number, caller?: SecurityContext): ByteChannel | undefined;
-  /** The runtime's port policy: pass it as `startApplicationRuntime`'s `portPolicy`, so each application's `dependsOn` graph is in force while it runs. */
-  readonly portPolicy: ServiceGraphPolicy;
-  /** End every process attributed to an application (or one of its services): pass the runtime as `startApplicationRuntime`'s `processes`. */
-  killApplication(applicationId: string, serviceId?: string): void;
-  /**
-   * A database Worker, always on the HOST origin (relay mode included), so the
-   * code a project runs — on the preview origin — has no path to the database's
-   * storage; only gateway bytes cross. `dispose()` terminates the ones running.
-   */
-  createDatabaseWorker(): WorkerLike;
-  /**
-   * Cookies virtual servers set, per port. A service worker cannot set cookies,
-   * so the runtime keeps them and sends them back on later requests (and
-   * WebSocket handshakes); inspect or `clear()` them here.
-   */
-  readonly cookies: PortCookieJars;
-  dispose(): void;
-}
+export { toWire } from './previewAttach.js';
+export type { CommonRuntimeOptions, PreviewRuntime, PreviewRuntimeOptions, RelayOptions, RuntimeBuildOptions, SameOriginOptions } from './runtimeOptions.js';
 
 const DEFAULT_ROOT = '/home/project';
 
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 16) ?? Math.random().toString(36).slice(2, 18);
-}
-
-/** 128 random bits, hex: the runtime's preview nonce. */
-function randomNonce(): string {
-  const bytes = new Uint8Array(16);
-  globalThis.crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-export function toWire(reqId: number, served: Awaited<ReturnType<DevServer['handle']>>): { message: WireResponse; transfer: Transferable[] } {
-  if (typeof served.body === 'string') {
-    return { message: { type: 'response', reqId, status: served.status, headers: served.headers, body: served.body }, transfer: [] };
-  }
-  const body = served.body.slice().buffer as ArrayBuffer; // a copy: transferring must not detach the VFS's own bytes
-  return { message: { type: 'response', reqId, status: served.status, headers: served.headers, body }, transfer: [body] };
 }
 
 /**
@@ -248,12 +50,16 @@ export function toWire(reqId: number, served: Awaited<ReturnType<DevServer['hand
  *
  * Needs a secure context (https or localhost) for the service worker — and
  * nothing else: no cross-origin isolation headers, no SharedArrayBuffer. Pass
- * `relayUrl` to serve the preview from its own origin (see `RelayOptions`).
+ * `relayUrl` to serve the preview from its own origin (see `RelayOptions`);
+ * same-origin previews are refused unless `unprotectedSameOrigin` is set.
  */
 export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promise<PreviewRuntime> {
   const id = options.id ?? randomId();
   if (!PREVIEW_ID.test(id)) throw new Error(`Preview id "${id}" may only contain letters, digits, "_" and "-".`);
 
+  const sink = options.security?.sink;
+  // W10 control 10: refused before anything boots when the preview would share this page's origin.
+  checkPreviewOrigins(options, location.origin, sink);
   const transport = options.relayUrl
     ? await relayTransport(options.relayUrl)
     : await sameOriginTransport((options as SameOriginOptions).serviceWorkerUrl, options.scope);
@@ -279,47 +85,53 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   }
 
   const previewUrl = new URL(base, transport.origin).href;
-  // In relay mode processes run on the preview origin (the relay starts them), never the host's.
-  const node = { ...options.node, createWorker: options.node?.createWorker ?? transport.createWorker?.bind(transport) };
+  /** Attaches this runtime's previews to an application relay as it opens (control 1); set once the process host exists. */
+  let attachTo: (relay: PreviewTransport, applicationId: string) => () => void = () => () => undefined;
+  const origins = createPreviewOrigins({
+    shared: transport,
+    relayUrl: options.relayUrl,
+    embeddingOrigin: location.origin,
+    previewOrigin: options.previewOrigin,
+    runtimeId: id,
+    workerPolicy: options.workerPolicy,
+    open: openRelay,
+    onOpened: (relay, applicationId) => attachTo(relay, applicationId),
+    sink,
+  });
+  // In relay mode processes run on the preview origin (the relay starts them; with `previewOrigin`, the application's own relay), never the host's.
+  const node = { ...options.node, createWorker: options.node?.createWorker ?? origins.createWorker };
   // Python commands run in Python process Workers (Pyodide), PHP commands in PHP ones (php-wasm), .NET commands in .NET ones (Mono), beside the Node ones.
   const php = createPhpProcessKind(options.php, createPythonProcessKind(options.python));
   // Prebuilt wasm32-wasip1 modules (and the declined cargo/rustc) run in Rust process Workers.
   const kinds = createRustProcessKind(createDotnetProcessKind(options.dotnet, php));
-  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, previewUrl, options: node, kinds });
+  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, originOf: origins.enabled ? origins.originOf : undefined, previewUrl, options: node, kinds });
   // Databases never run where processes do in relay mode: their Workers start on this (host) origin.
   const databaseWorkers = trackWorkers(databaseWorkerFactory(options.node));
 
   const cookies = new PortCookieJars();
-  let responder: ReturnType<typeof createPortResponder> | undefined;
-
-  const attach = () => {
-    const channel = new MessageChannel();
-    const reply = (message: WireReply, transfer: Transferable[]) => channel.port1.postMessage(message, transfer);
-    // Virtual servers' responses stream (one responder per channel: request ids are per worker).
-    responder?.dispose();
-    const ports = (responder = createPortResponder(processes, { cookies, scripts: () => previewScripts, nonce }));
-    channel.port1.onmessage = async (event) => {
-      if (isWireCancel(event.data)) return ports.cancel(event.data.reqId);
-      if (!isWireRequest(event.data)) return;
-      const request = event.data;
-      if (isPortPath(request.path)) return ports.serve(request, reply);
-      const { message, transfer } = toWire(request.reqId, await server.handle(request.path, request.search));
-      reply(message, transfer);
-    };
-    transport.attach(id, channel.port2);
+  /** Whether a request that came through `origin` may reach `port`: only through its owner's preview origin. */
+  const admitPort = (origin: string, port: number) => {
+    if (origins.mayServe(origin, processes.ports.ownerOf(port))) return true;
+    emitShieldEvent(sink, { reason: 'ingress.app_origin_mismatch', message: `Port ${port} was asked for through ${origin}, which is not its owner's preview origin.`, origin });
+    return false;
   };
-  attach();
-  const stopReattach = transport.onReattach((wanted) => {
-    if (wanted === id) attach();
-  });
+  const egressOf = (applicationId?: string) => (typeof options.previewEgress === 'function' ? options.previewEgress(applicationId) : options.previewEgress);
+  const attachOn = (relay: PreviewTransport, applicationId?: string, devServer?: DevServer) =>
+    attachPreview({ transport: relay, id, server: devServer, processes, cookies, scripts: () => previewScripts, bridgeNonce: nonce, egress: egressOf(applicationId), mayServePort: (port) => admitPort(relay.origin, port) });
+  // The shared origin serves the dev server; an application's own origin only that application's ports.
+  const stopAttach = attachOn(transport, undefined, server);
+  attachTo = (relay, applicationId) => attachOn(relay, applicationId);
 
   // Every frame showing this preview hears what each burst of edits changed.
-  const reload = () => transport.send(base, { type: 'reload' });
-  const stopWatching = options.liveReload === false ? undefined : watchForPreviewUpdates(fs, server, (update) => transport.send(base, update));
+  const sendAll = (update: PreviewUpdate) => {
+    for (const relay of origins.transports()) relay.send(base, update);
+  };
+  const reload = () => sendAll({ type: 'reload' });
+  const stopWatching = options.liveReload === false ? undefined : watchForPreviewUpdates(fs, server, sendAll);
 
-  const previewMessages = listenToPreview(window, transport.origin, base, nonce);
+  const previewMessages = listenToPreview(window, origins.accepts, base, nonce);
   // WebSockets and document.cookie for virtual servers, which a service worker cannot carry.
-  const bridge = listenToPreviewBridge(window, transport.origin, base, { upgrade: (port, request) => processes.upgrade(port, request), cookies, nonce });
+  const bridge = listenToPreviewBridge(window, origins.accepts, base, { upgrade: (port, request) => processes.upgrade(port, request), cookies, nonce, admitPort });
 
   return {
     id,
@@ -357,17 +169,20 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     listenTcp: (port, accept, owner) => processes.ports.listen(port, async () => textResponse(502, 'Not an HTTP server'), undefined, accept, owner),
     connect: (port, caller) => processes.ports.connect(port, caller),
     portPolicy: processes.portPolicy,
-    killApplication: (applicationId, serviceId) => processes.killApplication(applicationId, serviceId),
+    killApplication(applicationId, serviceId) {
+      processes.killApplication(applicationId, serviceId);
+      if (serviceId === undefined) origins.release(applicationId); // its relay closes; its origin stays its own
+    },
     createDatabaseWorker: () => databaseWorkers.create(),
     cookies,
     dispose() {
       bridge.dispose();
-      responder?.dispose();
+      stopAttach();
       processes.dispose();
+      origins.dispose();
       databaseWorkers.terminateAll();
       previewMessages.dispose();
       stopWatching?.();
-      stopReattach();
       transport.dispose();
       server.dispose();
     },

@@ -1,11 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { attachModeOf, createSwRouter, readBoundedBody, type AttachClient, type AttachMode, type BodySource, type IngressRejection, type PortLike, type SwRouter } from '../src/swRouter.js';
-import { isWireRequest, previewBase, previewPrefix } from '../src/protocol.js';
+import { isWireRequest, previewBase, previewPrefix, randomNonce, type AttachProof } from '../src/protocol.js';
 import { createRecentMap } from '../src/swBindings.js';
+
+/** Each attacher's last nonce per preview id: like the host page, a fresh nonce per attach, chained to the last. */
+const lastNonce = new Map<string, string>();
+
+/** Attach as `client` with a fresh, chained nonce (`proof` overrides it). */
+function acceptAttach(router: SwRouter, id: string, port: PortLike, client: AttachClient | null, proof?: AttachProof | null, egress?: unknown) {
+  if (proof === undefined) {
+    const key = `${client?.id}:${id}`;
+    const nonce = randomNonce();
+    const previous = lastNonce.get(key);
+    lastNonce.set(key, nonce);
+    proof = previous === undefined ? { nonce } : { nonce, previous };
+  }
+  return router.acceptAttach(id, port, client, proof, egress);
+}
 
 /** The same-origin host page: the page that attaches previews in the routing tests. */
 const HOST_PAGE: AttachClient = { id: 'host', type: 'window', url: 'https://h.test/editor' };
-const attachTo = (router: SwRouter, id: string, port: PortLike) => router.acceptAttach(id, port, HOST_PAGE);
+const attachTo = (router: SwRouter, id: string, port: PortLike) => acceptAttach(router, id, port, HOST_PAGE);
 
 /** A page-side fake: answers every request with the path it was asked for. */
 function answeringPort(): PortLike & { requests: unknown[] } {
@@ -209,16 +224,16 @@ describe('attach integrity', () => {
   it('accepts an attach from the relay page in either mode and serves the preview over it', async () => {
     for (const mode of ['relay', 'same-origin'] as const) {
       const { router } = guarded([], mode);
-      expect(await router.acceptAttach('p1', answeringPort(), relay('relay-1'))).toBe(true);
+      expect(await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'))).toBe(true);
       expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(200);
     }
   });
 
   it('accepts a same-origin host page outside the preview namespace only in same-origin mode', async () => {
     const host = client('host', '/editor');
-    expect(await guarded([], 'same-origin').router.acceptAttach('p1', answeringPort(), host)).toBe(true);
+    expect(await acceptAttach(guarded([], 'same-origin').router, 'p1', answeringPort(), host)).toBe(true);
     const relayMode = guarded([], 'relay');
-    expect(await relayMode.router.acceptAttach('p1', closablePort(), host)).toBe(false);
+    expect(await acceptAttach(relayMode.router, 'p1', closablePort(), host)).toBe(false);
     expect(relayMode.rejections[0]).toMatchObject({ reason: 'ingress.attach_rejected', detail: 'not_attacher', clientId: 'host' });
   });
 
@@ -233,7 +248,7 @@ describe('attach integrity', () => {
     ];
     for (const from of offers) {
       const port = closablePort();
-      expect(await router.acceptAttach('p2', port, from)).toBe(false);
+      expect(await acceptAttach(router, 'p2', port, from)).toBe(false);
       expect(port.closed).toBe(true);
     }
     expect(rejections.map((r) => [r.reason, r.detail])).toEqual(offers.map(() => ['ingress.attach_rejected', 'not_attacher']));
@@ -243,16 +258,16 @@ describe('attach integrity', () => {
 
   it('refuses an id that is not a preview id', async () => {
     const { router, rejections } = guarded();
-    expect(await router.acceptAttach('../x', closablePort(), relay('relay-1'))).toBe(false);
+    expect(await acceptAttach(router, '../x', closablePort(), relay('relay-1'))).toBe(false);
     expect(rejections[0]?.detail).toBe('bad_id');
   });
 
   it('never lets a second open tab take a live preview, and says why', async () => {
     const { router, rejections } = guarded([relay('relay-1'), relay('relay-2')]);
     const owner = answeringPort();
-    await router.acceptAttach('p1', owner, relay('relay-1'));
+    await acceptAttach(router, 'p1', owner, relay('relay-1'));
     const thief = closablePort();
-    expect(await router.acceptAttach('p1', thief, relay('relay-2'))).toBe(false);
+    expect(await acceptAttach(router, 'p1', thief, relay('relay-2'))).toBe(false);
     expect(thief.closed).toBe(true);
     expect(rejections).toHaveLength(1);
     expect(rejections[0]).toMatchObject({ reason: 'ingress.attach_rejected', id: 'p1', clientId: 'relay-2', detail: 'duplicate_id' });
@@ -265,9 +280,9 @@ describe('attach integrity', () => {
   it('lets the owning client re-attach with a fresh port and closes the one it replaces', async () => {
     const { router } = guarded([relay('relay-1')]);
     const old = closablePort();
-    await router.acceptAttach('p1', old, relay('relay-1'));
+    await acceptAttach(router, 'p1', old, relay('relay-1'));
     const fresh = answeringPort();
-    expect(await router.acceptAttach('p1', fresh, relay('relay-1'))).toBe(true);
+    expect(await acceptAttach(router, 'p1', fresh, relay('relay-1'))).toBe(true);
     expect(old.closed).toBe(true);
     expect(old.onmessage).toBeNull();
     expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(200);
@@ -276,10 +291,10 @@ describe('attach integrity', () => {
 
   it('moves a preview to a new relay once the bound client is gone', async () => {
     const { router, live } = guarded([relay('relay-1')]);
-    await router.acceptAttach('p1', silentPort(), relay('relay-1'));
+    await acceptAttach(router, 'p1', silentPort(), relay('relay-1'));
     live.delete('relay-1'); // the tab closed
     const next = answeringPort();
-    expect(await router.acceptAttach('p1', next, relay('relay-2'))).toBe(true);
+    expect(await acceptAttach(router, 'p1', next, relay('relay-2'))).toBe(true);
     expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(200);
     expect(next.requests).toHaveLength(1);
   });
@@ -292,8 +307,8 @@ describe('attach integrity', () => {
         throw new Error('clients.get failed');
       },
     });
-    await router.acceptAttach('p1', answeringPort(), relay('relay-1'));
-    expect(await router.acceptAttach('p1', answeringPort(), relay('relay-2'))).toBe(false);
+    await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'));
+    expect(await acceptAttach(router, 'p1', answeringPort(), relay('relay-2'))).toBe(false);
   });
 
   it('re-judges a claim whose liveness answer went stale while the binding moved and came back', async () => {
@@ -304,14 +319,14 @@ describe('attach integrity', () => {
       getClient: (clientId) => new Promise((resolve) => calls.push({ clientId, answer: resolve })),
     });
     const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-    await router.acceptAttach('p1', answeringPort(), relay('A'));
-    const b = router.acceptAttach('p1', closablePort(), relay('B'));
-    const c = router.acceptAttach('p1', answeringPort(), relay('C'));
+    await acceptAttach(router, 'p1', answeringPort(), relay('A'));
+    const b = acceptAttach(router, 'p1', closablePort(), relay('B'));
+    const c = acceptAttach(router, 'p1', answeringPort(), relay('C'));
     await tick();
     expect(calls.map((call) => call.clientId)).toEqual(['A', 'A']);
     calls[1]!.answer(undefined); // C learns A is gone and takes p1
     expect(await c).toBe(true);
-    const a = router.acceptAttach('p1', answeringPort(), relay('A')); // A comes back; C has gone
+    const a = acceptAttach(router, 'p1', answeringPort(), relay('A')); // A comes back; C has gone
     await tick();
     calls[2]!.answer(undefined);
     expect(await a).toBe(true);
@@ -320,6 +335,55 @@ describe('attach integrity', () => {
     expect(calls[3]?.clientId).toBe('A'); // B asks again instead of taking p1 from the live A
     calls[3]!.answer(relay('A'));
     expect(await b).toBe(false);
+  });
+
+  it('refuses an attach without a well-formed nonce, closing the port', async () => {
+    const { router, rejections } = guarded();
+    for (const proof of [null, { nonce: 'short' }, { nonce: 'A'.repeat(32) }]) {
+      const port = closablePort();
+      expect(await acceptAttach(router, 'p1', port, relay('relay-1'), proof)).toBe(false);
+      expect(port.closed).toBe(true);
+    }
+    expect(rejections.map((r) => r.detail)).toEqual(['bad_nonce', 'bad_nonce', 'bad_nonce']);
+  });
+
+  it('refuses a re-attach by the bound client that does not hold the current nonce, keeping the live port', async () => {
+    const { router, rejections } = guarded([relay('relay-1')]);
+    const owner = answeringPort();
+    const first = randomNonce();
+    expect(await acceptAttach(router, 'p1', owner, relay('relay-1'), { nonce: first })).toBe(true);
+    // A script posting as the relay client, without the host's nonce: no previous, or a guessed one.
+    for (const proof of [{ nonce: randomNonce() }, { nonce: randomNonce(), previous: randomNonce() }]) {
+      const thief = closablePort();
+      expect(await acceptAttach(router, 'p1', thief, relay('relay-1'), proof)).toBe(false);
+      expect(thief.closed).toBe(true);
+    }
+    expect(rejections.map((r) => [r.reason, r.detail])).toEqual([
+      ['ingress.attach_rejected', 'stale_nonce'],
+      ['ingress.attach_rejected', 'stale_nonce'],
+    ]);
+    await router.respond({ id: 'p1', path: '/', search: '' });
+    expect(owner.requests).toHaveLength(1);
+  });
+
+  it('refuses a re-attach that presents a nonce the host already replaced', async () => {
+    const { router, rejections } = guarded([relay('relay-1')]);
+    const n1 = randomNonce();
+    const n2 = randomNonce();
+    await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), { nonce: n1 });
+    expect(await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), { nonce: n2, previous: n1 })).toBe(true); // the host's REATTACH
+    expect(await acceptAttach(router, 'p1', closablePort(), relay('relay-1'), { nonce: randomNonce(), previous: n1 })).toBe(false); // replays the stale one
+    expect(rejections[0]?.detail).toBe('stale_nonce');
+    expect(await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), { nonce: randomNonce(), previous: n2 })).toBe(true);
+  });
+
+  it('gives the preview the document CSP its accepted attach declared, and only its own origin otherwise', async () => {
+    const { router } = guarded();
+    expect(router.documentPolicy('p1')).toBe("connect-src 'self' blob: data:; worker-src 'self' blob:");
+    await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), undefined, ['https://api.example.com', 'https://evil.example/__bfwc/x', "'unsafe-inline'"]);
+    expect(router.documentPolicy('p1')).toBe("connect-src 'self' blob: data: https://api.example.com; worker-src 'self' blob:");
+    await acceptAttach(router, 'p1', closablePort(), relay('relay-1'), null, ['https://*']);
+    expect(router.documentPolicy('p1')).toContain('https://api.example.com'); // a refused attach changes nothing
   });
 
   it('asks only pages that may attach to re-attach', () => {
