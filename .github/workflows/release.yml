@@ -5,9 +5,15 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: Publish the .NET runtime bundle for this already-tagged version (default — packages/browser's version)
+        required: false
 
 jobs:
   publish:
+    # Tag pushes only: a dispatch is a .NET bundle backfill, and must never publish main's untagged versions.
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -53,5 +59,90 @@ jobs:
               (cd "$dir" && pnpm publish --access public --no-git-checks)
             fi
           done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # The .NET runtime bundle (~73 MiB: Mono browser-wasm, the host program, ASP.NET Core, Roslyn, Npgsql,
+  # reference packs) is not part of the browser package. It is published on its own as
+  # DOTNET_BUNDLE.npmPackage (dotnetBundle.ts) at the browser package's exact version — the immutable source a
+  # host mirrors beside its preview (Builderforce copies it into R2 and serves /dotnet/<version>/). Always
+  # built from the tag `v<version>` (a second checkout), with this workflow's tooling, so a dispatch can
+  # backfill an earlier tag: `gh workflow run release.yml -f version=2026.11.5`. Idempotent: a version npm
+  # already has is skipped — npm never takes a version twice, so a version's bytes never change.
+  publish-dotnet-runtime:
+    name: Publish the .NET runtime bundle
+    needs: publish
+    # A tag push runs after the packages publish; a backfill dispatch skips `publish` (see its `if`).
+    if: ${{ always() && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Which version
+        id: version
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          version="${REQUESTED:-$(node -p "require('./packages/browser/package.json').version")}"
+          # DOTNET_BUNDLE.npmPackage, the one place the name is spelled (pack-dotnet-runtime.mjs writes it too).
+          name=$(node -p "/npmPackage:\s*'([^']+)'/.exec(require('fs').readFileSync('packages/browser/src/runtimes/dotnet/dotnetBundle.ts','utf8'))[1]")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          if [ "$(npm view "$name@$version" version 2>/dev/null)" = "$version" ]; then
+            echo "$name@$version is already on npm — skipping"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out v${{ steps.version.outputs.version }}
+        if: steps.version.outputs.published != 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: v${{ steps.version.outputs.version }}
+          path: release-src
+
+      # The tag's own pnpm and lockfile, not this workflow ref's.
+      - uses: pnpm/action-setup@v6
+        if: steps.version.outputs.published != 'true'
+        with:
+          package_json_file: release-src/package.json
+
+      - uses: actions/setup-node@v6
+        if: steps.version.outputs.published != 'true'
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: release-src/pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+
+      - name: Install and build v${{ steps.version.outputs.version }}
+        if: steps.version.outputs.published != 'true'
+        run: |
+          pnpm -C release-src install --frozen-lockfile
+          pnpm -C release-src build
+
+      - uses: ./.github/actions/dotnet-bundle
+        if: steps.version.outputs.published != 'true'
+        with:
+          root: release-src
+
+      # The same proof CI runs, on the bytes about to ship.
+      - name: Real-runtime tests
+        if: steps.version.outputs.published != 'true'
+        working-directory: release-src/packages/browser
+        env:
+          BFWC_DOTNET_BUNDLE: ${{ github.workspace }}/release-src/packages/browser/dotnet-host/out
+        run: pnpm exec vitest run tests/dotnet-
+
+      - name: Pack and publish ${{ steps.version.outputs.name }}@${{ steps.version.outputs.version }}
+        if: steps.version.outputs.published != 'true'
+        run: |
+          node packages/browser/scripts/pack-dotnet-runtime.mjs --package release-src/packages/browser
+          # npm refuses a prerelease without a dist-tag; never let one become `latest`.
+          tag=latest
+          case "${{ steps.version.outputs.version }}" in *-*) tag=next ;; esac
+          npm publish release-src/packages/browser/dotnet-host/out --access public --tag "$tag"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

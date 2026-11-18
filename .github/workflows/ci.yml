@@ -62,22 +62,6 @@ jobs:
           node-version: '24'
           cache: pnpm
 
-      # Exactly the SDK dotnet-host/global.json pins (it carries the ASP.NET Core shared framework the host
-      # program references); the build script builds Npgsql with the same pin.
-      - uses: actions/setup-dotnet@v5
-        with:
-          global-json-file: packages/browser/dotnet-host/global.json
-
-      # NuGet packages and the patched Npgsql clone, keyed by everything that decides them: the SDK pin, the
-      # host's lock file, the patch, and the pinned Npgsql commit (dotnetBundle.ts). The build script re-fetches
-      # a clone whose marker does not match, so a stale cache is never built.
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.nuget/packages
-            packages/browser/dotnet-host/.work/npgsql-*
-          key: dotnet-bundle-${{ runner.os }}-${{ hashFiles('packages/browser/dotnet-host/global.json', 'packages/browser/dotnet-host/packages.lock.json', 'packages/browser/dotnet-host/patches/**', 'packages/browser/src/runtimes/dotnet/dotnetBundle.ts') }}
-
       - name: Install
         run: pnpm install --frozen-lockfile
 
@@ -85,11 +69,8 @@ jobs:
       - name: Build (core then browser)
         run: pnpm build
 
-      - name: Build the .NET runtime bundle
-        run: pnpm -C packages/browser build:dotnet
-
-      - name: Check the bundle exists
-        run: test -f "$BFWC_DOTNET_BUNDLE/manifest.json"
+      # The SDK pin, the NuGet/Npgsql caches and the build: the same action the release publishes with.
+      - uses: ./.github/actions/dotnet-bundle
 
       # Every .NET test file: the real-bundle ones (one Mono process per file) and the fast ones beside them.
       - name: Real-runtime tests
