@@ -82,7 +82,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
       flushScheduled = true;
       queueMicrotask(flush);
     }
-  });
+  }, { promotions: true }); // a directory made explicit here must outlive its files on the page too
 
   /** Apply the page's changes (or mount the start snapshot) without echoing them back. */
   const quietly = (load: () => void) => {
@@ -201,7 +201,8 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
     receive(message) {
       switch (message.type) {
         case 'prime':
-          return quietly(() => mountSnapshot(fs, message.snapshot));
+          quietly(() => mountSnapshot(fs, message.snapshot));
+          return deps.post({ type: 'primed' });
         case 'start':
           return start(message);
         case 'stdin':

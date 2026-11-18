@@ -4,7 +4,7 @@
  */
 
 /** Anything normalising would change: no leading slash, `//`, `.`/`..` segments, a trailing slash, backslashes. */
-const UNNORMALISED = /^(?:[^/]|$)|\/\/|\/\.\.?(?:\/|$)|.\/$|\\/;
+const UNNORMALISED = /^(?:[^/]|$)|\/\/|\/\.\.?(?:\/|$)|[\s\S]\/$|\\/;
 
 /** Absolute, normalised: resolves `.`/`..`, collapses slashes, accepts backslashes. */
 export function normalizePath(path: string): string {

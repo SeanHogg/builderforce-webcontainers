@@ -12,7 +12,7 @@ function state(fs: VirtualFileSystem) {
 /** A mirror built from a pack taken at `seq` plus the journal's ops since then. */
 function replay(fs: VirtualFileSystem, journal: VfsJournal, pack: ArrayBuffer, seq: number): VirtualFileSystem {
   const mirror = new VirtualFileSystem();
-  mountSnapshot(mirror, { pack, ops: journal.since(seq)! });
+  mountSnapshot(mirror, { pack, ops: journal.since(seq)!, seq: journal.seq });
   return mirror;
 }
 
@@ -139,23 +139,74 @@ describe('VfsSnapshots', () => {
     expect(state(mirror)).toEqual(state(fs));
   });
 
-  it('rebuilds the pack once the ops since it outgrow it, and when the journal dropped them', () => {
+  it('rebuilds the pack once the ops since it outgrow it (the journal drops them)', () => {
     const fs = new VirtualFileSystem();
     fs.writeFile('/a', 'a');
-    const snapshots = new VfsSnapshots(fs, { maxDeltaOps: 2, maxOps: 100 });
+    const snapshots = new VfsSnapshots(fs, { maxDeltaOps: 2 });
     snapshots.snapshot();
-    for (let i = 0; i < 3; i++) fs.writeFile(`/f${i}`, String(i));
+    fs.writeFile('/f0', '0');
+    fs.writeFile('/f1', '1');
+    expect(snapshots.snapshot().ops).toHaveLength(2); // at the bound: still a delta
+    fs.writeFile('/f2', '2');
     const rebuilt = snapshots.snapshot();
     expect(snapshots.builds).toBe(2);
     expect(rebuilt.ops).toEqual([]);
-    const overflow = new VfsSnapshots(fs, { maxOps: 1 });
-    overflow.snapshot();
-    fs.writeFile('/g', '1');
-    fs.writeFile('/h', '2');
-    const fresh = overflow.snapshot();
-    expect(overflow.builds).toBe(2);
     const mirror = new VirtualFileSystem();
-    mountSnapshot(mirror, fresh);
+    mountSnapshot(mirror, rebuilt);
+    expect(state(mirror)).toEqual(state(fs));
+  });
+
+  it('rebuilds once the content since the pack exceeds max(1 MB, the ratio of the pack)', () => {
+    const fs = new VirtualFileSystem();
+    fs.writeFile('/big', 'x'.repeat(8 * 1024 * 1024));
+    const snapshots = new VfsSnapshots(fs, { maxDeltaRatio: 0.25 });
+    snapshots.snapshot();
+    fs.writeFile('/edit', 'y'.repeat(1024 * 1024)); // 1 MB < 2 MB (25% of 8 MB)
+    expect(snapshots.snapshot().ops).toHaveLength(1);
+    fs.writeFile('/edit2', 'z'.repeat(1024 * 1024 + 1000)); // past 25% of the pack (8 MB + its index)
+    expect(snapshots.snapshot().ops.length).toBe(0);
+    expect(snapshots.builds).toBe(2);
+  });
+
+  it('pins nothing before the first snapshot, and only up to its bounds after', () => {
+    const fs = new VirtualFileSystem();
+    const snapshots = new VfsSnapshots(fs, { maxDeltaOps: 4 });
+    for (let i = 0; i < 100; i++) fs.writeFile(`/pre${i}`, 'p'.repeat(1000));
+    expect(snapshots.journalBytes).toBe(0);
+    snapshots.snapshot();
+    for (let i = 0; i < 3; i++) fs.writeFile(`/post${i}`, 'q'.repeat(10));
+    expect(snapshots.journalBytes).toBe(30);
+    for (let i = 3; i < 10; i++) fs.writeFile(`/post${i}`, 'q'.repeat(10));
+    expect(snapshots.journalBytes).toBeLessThanOrEqual(40); // dropped at 5 ops, holding at most 4 after
+    expect(snapshots.delta(0)).toBeUndefined();
+  });
+
+  it('refuses to be used after dispose rather than hand out a stale file system', () => {
+    const fs = new VirtualFileSystem();
+    const snapshots = new VfsSnapshots(fs);
+    snapshots.snapshot();
+    snapshots.dispose();
+    expect(() => snapshots.snapshot()).toThrow(/disposed/);
+    expect(() => snapshots.delta(0)).toThrow(/disposed/);
+  });
+
+  it('records changes made by a watcher after the change it reacted to (one order for every listener)', () => {
+    const fs = new VirtualFileSystem();
+    fs.writeFile('/seed', 's');
+    // Registered before the journal: it removes a temp file as soon as it is written.
+    fs.watch((change) => {
+      if (change.type === 'write' && change.path === '/tmp') fs.rm('/tmp');
+    });
+    const seen: string[] = [];
+    fs.watch((change) => seen.push(`${change.type} ${change.path}`));
+    const snapshots = new VfsSnapshots(fs);
+    const base = snapshots.snapshot();
+    fs.writeFile('/tmp', 'scratch');
+    expect(seen).toEqual(['write /tmp', 'remove /tmp']);
+    const { ops } = snapshots.snapshot();
+    expect(ops.map((op) => `${op.op} ${op.path}`)).toEqual(['write /tmp', 'remove /tmp']);
+    const mirror = new VirtualFileSystem();
+    mountSnapshot(mirror, { ...base, ops });
     expect(state(mirror)).toEqual(state(fs));
   });
 

@@ -80,7 +80,8 @@ export function packFileSystem(fs: VirtualFileSystem, seq: number): ArrayBuffer 
   const contentsOffset = align(pathsOffset + pathChars * 2, 8);
   let estimate = 0;
   for (const content of contents) estimate += typeof content === 'string' ? content.length : content.byteLength;
-  const writer = new Writer(contentsOffset, contentsOffset + estimate + 64);
+  // Exact for ASCII text and bytes, so the common pack needs no growth and no final copy.
+  const writer = new Writer(contentsOffset, contentsOffset + estimate);
 
   const kinds = new Uint32Array(fileCount * 3);
   contents.forEach((content, i) => {
@@ -92,8 +93,14 @@ export function packFileSystem(fs: VirtualFileSystem, seq: number): ArrayBuffer 
       writer.end += content.byteLength;
     } else if (isWellFormed(content)) {
       kinds[i * 3] = TEXT;
-      writer.ensure(content.length * 3);
-      writer.end += encoder.encodeInto(content, writer.bytes.subarray(writer.end)).written;
+      // Sized for ASCII; grow only when a string's UTF-8 turns out longer than the room left.
+      for (let rest = content; ; ) {
+        const { read, written } = encoder.encodeInto(rest, writer.bytes.subarray(writer.end));
+        writer.end += written;
+        if (read === rest.length) break;
+        rest = rest.slice(read);
+        writer.ensure(rest.length * 3);
+      }
     } else {
       kinds[i * 3] = UTF16;
       writer.ensure(content.length * 2 + 1);
@@ -107,6 +114,8 @@ export function packFileSystem(fs: VirtualFileSystem, seq: number): ArrayBuffer 
     kinds[i * 3 + 2] = writer.end - offset;
   });
 
+  // Offsets and lengths are u32: past 4 GiB of contents they would wrap silently.
+  if (writer.end - contentsOffset > 0xffffffff) throw new RangeError('The file system is too large to pack (over 4 GiB of contents).');
   const out = writer.end === writer.bytes.length ? writer.bytes : writer.bytes.slice(0, writer.end);
   const buffer = out.buffer as ArrayBuffer;
   const header = new Uint32Array(buffer, 0, HEADER_WORDS + all.length);

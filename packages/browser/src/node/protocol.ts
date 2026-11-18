@@ -88,6 +88,8 @@ export type HostToWorker =
 export type WorkerToHost =
   | { type: 'stdout' | 'stderr'; data: StdioChunk }
   | { type: 'exit'; code: number }
+  /** A spare acknowledging its `prime`: the file system is mounted, it may be started. */
+  | { type: 'primed' }
   | { type: 'fs'; ops: FsOp[] }
   | { type: 'spawn'; childId: number; command: string; args: string[]; cwd?: string; env?: Record<string, string>; terminal?: { cols: number; rows: number }; ipc?: boolean; thread?: ThreadInfo; detached?: boolean }
   | { type: 'child-stdin'; childId: number; data: StdioChunk | null }

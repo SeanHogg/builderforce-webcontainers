@@ -26,9 +26,14 @@ export interface JournalOptions {
   maxBytes?: number;
 }
 
-/** A change event as the op that replays it (the content read now, at the event). */
+/**
+ * A change event as the op that replays it. The content is read when the event
+ * is reported; a change a listener made meanwhile is reported (and replayed)
+ * after it, so the end state is the same — a file already removed again is
+ * written empty, then removed.
+ */
 export function changeToOp(fs: VirtualFileSystem, change: FsChange): VfsOp {
-  return change.type === 'write' ? { op: 'write', path: change.path, content: fs.readFile(change.path)! } : { op: change.type, path: change.path };
+  return change.type === 'write' ? { op: 'write', path: change.path, content: fs.readFile(change.path) ?? '' } : { op: change.type, path: change.path };
 }
 
 /** Replay ops onto a mirror, in order. */
@@ -52,14 +57,20 @@ export class VfsJournal {
   private base = 0;
   private bytes = 0;
   private current = 0;
-  private readonly maxOps: number;
-  private readonly maxBytes: number;
+  private maxOps: number;
+  private maxBytes: number;
   private readonly unwatch: () => void;
 
   constructor(private readonly fs: VirtualFileSystem, options: JournalOptions = {}) {
     this.maxOps = options.maxOps ?? 4096;
     this.maxBytes = options.maxBytes ?? 32 * 1024 * 1024;
     this.unwatch = fs.watch((change) => this.record(change), { promotions: true });
+  }
+
+  /** Change the bounds (a snapshot holder ties them to its pack's size); applies from the next change. */
+  limit(options: JournalOptions): void {
+    if (options.maxOps !== undefined) this.maxOps = options.maxOps;
+    if (options.maxBytes !== undefined) this.maxBytes = options.maxBytes;
   }
 
   /** The sequence of the last change recorded: the file system's journal version. */

@@ -3,7 +3,7 @@
  * the master file system and the port table; each worker gets a snapshot of
  * the files at start — a pack cached across spawns plus the journal ops since
  * it (core vfs/snapshots.ts) — and writes flow both ways as batched ops (a worker's
- * write reaches the page, then every other worker). Children a worker spawns
+ * write reaches the page, then every other worker; fsSync.ts). Children a worker spawns
  * (the shell running `node`, `child_process`) are started here too, so every
  * process — however deep — can be killed by terminating its worker. Ending a
  * process (exit, kill, dispose) ends its children too, unless spawned `detached`.
@@ -16,10 +16,7 @@ import {
   DEFAULT_ENV,
   PortRegistry,
   ServerEvents,
-  VfsSnapshots,
   allocatePid,
-  applyOps,
-  changeToOp,
   createIpcEndpoint,
   runArguments,
   signalExitCode,
@@ -27,20 +24,21 @@ import {
   toRuntimeProcess,
   type ByteChannel,
   type ChildHandle,
-  type FsChange,
   type HttpRequestData,
   type HttpResponseData,
   type HttpStreamResponse,
   type ProcessOptions,
   type RuntimeProcess,
   type StdioChunk,
+  type VfsSnapshots,
   type VirtualFileSystem,
 } from '@seanhogg/builderforce-webcontainers-core';
-import type { FsOp, HostToWorker, WorkerToHost } from './protocol.js';
+import type { HostToWorker, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
 import { ResponseReceiver, sendResponse } from './responseWire.js';
 import { ChildRelay, isChildMessage } from './childRelay.js';
 import { WorkerSupply } from './workerSupply.js';
+import { FsSync } from './fsSync.js';
 
 /** The part of `Worker` the host uses — a real Worker, or an in-thread fake in tests. */
 export interface WorkerLike {
@@ -101,7 +99,6 @@ interface Proc {
   loopbacks: Map<number, () => void>;
   /** Upgraded connections to its servers: the page-side end of each, by connection id. */
   sockets: Map<number, ByteChannel>;
-  outbox: FsOp[];
 }
 
 const EXITED = 'The server process exited.';
@@ -111,26 +108,27 @@ export class ProcessHost {
   /** Servers listening, ports opening and closing. */
   readonly servers = new ServerEvents();
   private readonly procs = new Set<Proc>();
-  private applyingFrom?: Proc;
-  private flushScheduled = false;
   private nextReq = 1;
   private nextConn = 1;
-  private readonly unwatch: () => void;
   private readonly stopPorts: () => void;
-  /** What each new process starts from: one pack reused until the project outgrows it, plus the ops since. */
-  readonly snapshots: VfsSnapshots;
+  /** The processes' file systems kept in step with the page's, and the snapshots new ones start from. */
+  private readonly fsSync: FsSync<Proc>;
   /** New processes' Workers: a primed spare when there is one, else a new Worker and the snapshot. */
   readonly workers: WorkerSupply;
 
   constructor(private readonly options: ProcessHostOptions) {
-    this.snapshots = new VfsSnapshots(options.fs);
-    this.workers = new WorkerSupply(() => options.createWorker(), this.snapshots, options.warmWorker !== false);
-    this.unwatch = options.fs.watch((change) => this.onFsChange(change));
+    this.fsSync = new FsSync(options.fs, (proc, ops) => this.post(proc, { type: 'fs', ops }));
+    this.workers = new WorkerSupply(() => options.createWorker(), this.fsSync.snapshots, options.warmWorker !== false);
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
       for (const proc of this.procs) this.post(proc, { type: 'ports', open: type === 'open' ? [port] : [], closed: type === 'close' ? [port] : [] });
       this.servers.portChanged({ type, port, url });
     });
+  }
+
+  /** What each new process starts from: one pack reused until the project outgrows it, plus the ops since. */
+  get snapshots(): VfsSnapshots {
+    return this.fsSync.snapshots;
   }
 
   serverUrl(port: number): string {
@@ -166,16 +164,16 @@ export class ProcessHost {
       },
       registrations: new Map(),
       children: new ChildRelay((childCommand, childArgs, childOptions) => {
-        this.flushOutboxes(); // the child must see every write made so far
+        this.fsSync.flush(); // the child must see every write made so far
         return this.spawnChild(childCommand, childArgs, childOptions);
       }, (message) => this.post(proc, message)),
       responses: new ResponseReceiver(),
       loopbacks: new Map(),
       sockets: new Map(),
-      outbox: [],
     };
     if (options.ipc) proc.ipc = createIpcEndpoint((data) => this.post(proc, { type: 'ipc', data }), () => this.post(proc, { type: 'ipc-disconnect' }));
     this.procs.add(proc);
+    this.fsSync.add(proc);
     worker.onmessage = (event) => this.onWorkerMessage(proc, event.data as WorkerToHost);
     worker.onerror = (event) => {
       for (const l of proc.stderr) l(`Process worker failed: ${event?.message ?? 'unknown error'}\n`);
@@ -235,10 +233,9 @@ export class ProcessHost {
 
   dispose(): void {
     for (const proc of [...this.procs]) this.terminate(proc, signalExitCode('SIGKILL'));
-    this.unwatch();
     this.stopPorts();
     this.workers.dispose();
-    this.snapshots.dispose();
+    this.fsSync.dispose();
   }
 
   private kill(proc: Proc, signal: string): void {
@@ -271,29 +268,12 @@ export class ProcessHost {
     // Exited on its own: its children get SIGTERM (and the grace period), as a real parent's would.
     proc.children.killAll('SIGTERM');
     this.procs.delete(proc);
+    this.fsSync.remove(proc);
     queueMicrotask(() => proc.worker.terminate());
   }
 
   private post(proc: Proc, message: HostToWorker): void {
     if (!proc.exited || message.type === 'start') proc.worker.postMessage(message);
-  }
-
-  private onFsChange(change: FsChange): void {
-    const op: FsOp = changeToOp(this.options.fs, change);
-    for (const proc of this.procs) if (proc !== this.applyingFrom) proc.outbox.push(op);
-    if (this.flushScheduled) return;
-    this.flushScheduled = true;
-    queueMicrotask(() => this.flushOutboxes());
-  }
-
-  private flushOutboxes(): void {
-    this.flushScheduled = false;
-    for (const proc of this.procs) {
-      if (!proc.outbox.length) continue;
-      const ops = proc.outbox;
-      proc.outbox = [];
-      this.post(proc, { type: 'fs', ops });
-    }
   }
 
   private onWorkerMessage(proc: Proc, message: WorkerToHost): void {
@@ -306,17 +286,12 @@ export class ProcessHost {
         for (const l of proc.stderr) l(message.data);
         return;
       case 'exit':
-        this.flushOutboxes();
+        this.fsSync.flush();
         return proc.resolveExit(message.code);
-      case 'fs': {
-        this.applyingFrom = proc;
-        try {
-          applyOps(this.options.fs, message.ops);
-        } finally {
-          this.applyingFrom = undefined;
-        }
-        return;
-      }
+      case 'fs':
+        return this.fsSync.applyFrom(proc, message.ops);
+      case 'primed':
+        return; // a spare's acknowledgement; WorkerSupply reads it before the spare becomes a process
       case 'ipc':
         return proc.ipc?.receive(message.data);
       case 'ipc-disconnect':

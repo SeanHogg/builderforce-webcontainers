@@ -1,10 +1,8 @@
 export { VirtualFileSystem } from './vfs.js';
 export type { FileContent, FileTree, FlatFiles, FsChange } from './vfs.js';
 export type { DirectoryEntry, SeedContent, WatchOptions } from './vfs.js';
-export { VfsJournal, applyOps, changeToOp } from './vfs/journal.js';
-export type { VfsOp, JournalOptions } from './vfs/journal.js';
-export { packFileSystem, readPack } from './vfs/pack.js';
-export type { UnpackedSnapshot } from './vfs/pack.js';
+export { applyOps, changeToOp } from './vfs/journal.js';
+export type { VfsOp } from './vfs/journal.js';
 export { VfsSnapshots, mountSnapshot } from './vfs/snapshots.js';
 export type { VfsSnapshot, VfsDelta, SnapshotOptions } from './vfs/snapshots.js';
 export { rootedFileSystem, projectToBase, baseToProject } from './rootedFs.js';

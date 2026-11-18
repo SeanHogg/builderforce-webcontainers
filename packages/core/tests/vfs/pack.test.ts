@@ -10,7 +10,7 @@ function state(fs: VirtualFileSystem) {
 
 function mounted(buffer: ArrayBuffer): VirtualFileSystem {
   const fs = new VirtualFileSystem();
-  mountSnapshot(fs, { pack: buffer, ops: [] });
+  mountSnapshot(fs, { pack: buffer, ops: [], seq: readPack(buffer).seq });
   return fs;
 }
 
@@ -33,7 +33,8 @@ describe('file-system pack', () => {
 
   it('keeps exact strings: non-ASCII, a leading BOM, lone surrogates, empty files and odd paths', () => {
     const fs = new VirtualFileSystem();
-    const odd = { '/bom.txt': '﻿hello', '/emoji.md': 'héllo 🌍 世界', '/lone.txt': 'a\uD800b\uDC00c\uD83D', '/empty.txt': '', '/sp ace/ünï\uD801.txt': 'x' };
+    const BOM = String.fromCharCode(0xfeff); // spelled out: a literal BOM is invisible in review
+    const odd = { '/bom.txt': BOM + 'hello', '/emoji.md': 'héllo 🌍 世界', '/lone.txt': 'a\uD800b\uDC00c\uD83D', '/empty.txt': '', '/sp ace/ünï\uD801.txt': 'x' };
     for (const [path, text] of Object.entries(odd)) fs.writeFile(path, text);
     fs.writeFile('/zero.bin', new Uint8Array(0));
     const copy = mounted(packFileSystem(fs, 1));
@@ -68,6 +69,25 @@ describe('file-system pack', () => {
     expect(copy.readText('/lib/f7.js')).toBe('module.exports = 7;');
     expect(copy.readText('/lib/f7.js')).toBe('module.exports = 7;');
     expect(reads).toBe(1);
+  });
+
+  it('overwrites, removes and renames seeded files that were never read, without reading them', () => {
+    const fs = new VirtualFileSystem();
+    fs.writeTree({ 'a.txt': 'a', 'b.txt': 'b', dir: { 'c.txt': 'c', 'd.bin': new Uint8Array([4]) }, 'e.txt': 'e' });
+    const { files } = readPack(packFileSystem(fs, 0));
+    const reads: string[] = [];
+    const copy = new VirtualFileSystem();
+    copy.seed(files.map(([path, read]) => [path, () => (reads.push(path), read())] as const));
+    copy.writeFile('/a.txt', 'A');
+    copy.rm('/b.txt');
+    copy.rm('/e.txt');
+    expect(reads).toEqual([]);
+    copy.rename('/dir', '/moved'); // moving carries the contents, so it reads them
+    expect(copy.readText('/a.txt')).toBe('A');
+    expect(copy.list()).toEqual(['/a.txt', '/moved/c.txt', '/moved/d.bin']);
+    expect(copy.readText('/moved/c.txt')).toBe('c');
+    expect(copy.readFile('/moved/d.bin')).toEqual(new Uint8Array([4]));
+    expect(reads.sort()).toEqual(['/dir/c.txt', '/dir/d.bin']);
   });
 
   it('packs an empty file system and refuses a buffer that is not a pack', () => {

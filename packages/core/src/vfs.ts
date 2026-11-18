@@ -73,6 +73,9 @@ export class VirtualFileSystem {
   private readonly explicit = new Set<string>();
   /** Listener → whether it wants directory promotions too. */
   private readonly listeners = new Map<(change: FsChange) => void, boolean>();
+  /** Changes waiting to be reported (with "promotion only"): a change made by a listener waits for the one being reported, so every listener sees one order. */
+  private readonly queued: Array<[FsChange, boolean]> = [];
+  private dispatching = false;
   private clock = 0;
 
   /** A stored file's contents, copying a seeded file out of its snapshot on first read. (A property, not a method: subclasses map methods only.) */
@@ -126,7 +129,7 @@ export class VirtualFileSystem {
     const promoted = existed && !this.explicit.has(key);
     this.explicit.add(key);
     if (existed) {
-      if (promoted) for (const [listener, promotions] of this.listeners) if (promotions) listener({ type: 'mkdir', path: key, promoted: true });
+      if (promoted) this.emit({ type: 'mkdir', path: key, promoted: true }, true);
       return;
     }
     this.ensureDir(key);
@@ -150,12 +153,7 @@ export class VirtualFileSystem {
     for (const [path, contents] of files) {
       const key = normalizePath(path);
       if (key === '/' || this.children.has(key)) throw new Error(`EISDIR: illegal operation on a directory, open '${key}'`);
-      if (!this.files.has(key)) {
-        const cut = key.lastIndexOf('/');
-        const parent = cut === 0 ? '/' : key.slice(0, cut);
-        this.ensureDir(parent);
-        this.children.get(parent)!.add(key.slice(cut + 1));
-      }
+      if (!this.files.has(key)) this.link(key);
       this.files.set(key, contents);
       this.versions.set(key, ++this.clock);
       this.mtimes.set(key, now);
@@ -300,7 +298,19 @@ export class VirtualFileSystem {
     this.unlink(dir);
   }
 
-  private emit(change: FsChange): void {
-    for (const listener of this.listeners.keys()) listener(change);
+  /** Report a change (`promotionOnly`: to listeners that asked for promotions). A change made inside a listener is reported after the current one, to everyone. */
+  private emit(change: FsChange, promotionOnly = false): void {
+    this.queued.push([change, promotionOnly]);
+    if (this.dispatching) return;
+    this.dispatching = true;
+    try {
+      for (let next = this.queued.shift(); next; next = this.queued.shift()) {
+        const [queued, onlyPromotions] = next;
+        for (const [listener, promotions] of this.listeners) if (promotions || !onlyPromotions) listener(queued);
+      }
+    } finally {
+      this.dispatching = false;
+      this.queued.length = 0;
+    }
   }
 }
