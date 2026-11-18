@@ -5,9 +5,8 @@
  * in-runtime localhost health check (`http`), or a clean exit (`exit-zero`).
  * What it cannot run it declines with a reason, so a host can pick another target.
  */
-import { readinessOf, type Acceptance, type ReadinessKind, type RuntimeProvider, type ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
+import { readinessOf, type Acceptance, type ReadinessKind, type RuntimeProvider, type ServiceHandle, type ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
 import { portHeld, untilHttpHealthy, type NodeServiceHost } from './nodeReadiness.js';
-import { requestCheckpoint } from './checkpointRequest.js';
 import type { RuntimeProcess, ServerAddress } from '@seanhogg/builderforce-webcontainers-core';
 
 /** Commands the browser runtime cannot host, by name, with the reason it gives. */
@@ -26,6 +25,11 @@ export const NODE_READINESS: Readonly<Record<ReadinessKind, boolean>> = { port: 
 export interface NodeProviderOptions {
   /** Between `http` readiness probes. Default 250ms. */
   probeIntervalMs?: number;
+  /**
+   * Extra controls for a started service's handle (a runtime that reuses this
+   * start — Python training — adds `checkpoint` for the process it spawned).
+   */
+  controls?(service: ServiceSpec, process: RuntimeProcess): Pick<ServiceHandle, 'checkpoint'> | undefined;
 }
 
 const basename = (token: string) => token.replace(/\\/g, '/').split('/').pop() ?? token;
@@ -114,7 +118,7 @@ export function createNodeProvider(host: NodeServiceHost, options: NodeProviderO
         ready: () => (readiness$ ??= ready()),
         wait: () => exit,
         kill: (signal) => child.kill(signal),
-        checkpoint: service.type === 'training' ? () => requestCheckpoint(child) : undefined,
+        ...options.controls?.(service, child),
         url: () => url,
       };
     },

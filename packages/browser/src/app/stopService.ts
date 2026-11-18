@@ -28,13 +28,17 @@ export const exitWithin = (handle: Pick<ServiceHandle, 'wait'>, ms: number): Pro
 
 /**
  * Ask (`SIGTERM`), then insist (`SIGKILL`) after `timeoutMs`. A service that
- * checkpoints (training) is first asked to save and exit, for up to `timeoutMs`.
+ * checkpoints (training) is first asked to save and exit: the request and its
+ * exit share ONE `timeoutMs` deadline. Worst case for a checkpointing service:
+ * 3 × `timeoutMs` (checkpoint, SIGTERM, SIGKILL); 2 × otherwise.
  * Undefined when even `SIGKILL` got no exit within another `timeoutMs`.
  */
 export async function stopProcess(handle: Pick<ServiceHandle, 'kill' | 'wait' | 'checkpoint'>, timeoutMs: number): Promise<number | undefined> {
   if (handle.checkpoint) {
-    await within(handle.checkpoint().catch(() => undefined), { ms: timeoutMs, onTimeout: () => undefined });
-    const saved = await exitWithin(handle, timeoutMs);
+    const deadline = Date.now() + timeoutMs;
+    const left = () => Math.max(0, deadline - Date.now());
+    await within(handle.checkpoint().catch(() => undefined), { ms: left(), onTimeout: () => undefined });
+    const saved = await exitWithin(handle, left());
     if (saved !== undefined) return saved;
   }
   handle.kill('SIGTERM');

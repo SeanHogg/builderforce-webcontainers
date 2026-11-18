@@ -5,7 +5,7 @@
  * supply's Python spawns, and the confinement of host extensions.
  */
 import { describe, expect, it } from 'vitest';
-import { VfsSnapshots, VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
+import { VfsSnapshots, VirtualFileSystem, WORKSPACE_CONTEXT } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerLike } from '../src/node/processHost.js';
 import type { WorkerKind } from '../src/node/protocol.js';
 import { WorkerSupply } from '../src/node/workerSupply.js';
@@ -35,20 +35,20 @@ describe('the Python process-kind policy', () => {
   it('keeps python-installed reports from Python processes only, and only well-formed ones', () => {
     const kinds = createPythonProcessKind({ pyodideIndexURL: 'https://cdn.example/pyodide/' });
     const report = { type: 'python-installed', specs: ['fixturepkg==1.0'], indexUrls: ['https://pypi.example/simple'] };
-    expect(kinds.receive('node', report)).toBe(true); // taken, and refused: a Node process cannot speak for pip
-    expect(kinds.receive('python', { ...report, specs: [42] })).toBe(true);
-    expect(kinds.receive('python', { ...report, indexUrls: ['file:///etc/passwd'] })).toBe(true);
-    expect(kinds.receive('python', { ...report, indexUrls: ['https://user:secret@pypi.example/simple'] })).toBe(true);
-    expect(kinds.receive('python', { ...report, specs: Array.from({ length: PIP_RECORD_LIMITS.specsPerInstall + 1 }, (_, i) => `p${i}`) })).toBe(true);
-    expect(kinds.receive('python', { ...report, specs: ['x'.repeat(PIP_RECORD_LIMITS.specLength + 1)] })).toBe(true);
-    expect(kinds.receive('python', { ...report, specs: ['evil\nline'] })).toBe(true);
+    expect(kinds.receive('node', report, WORKSPACE_CONTEXT)).toBe(true); // taken, and refused: a Node process cannot speak for pip
+    expect(kinds.receive('python', { ...report, specs: [42] }, WORKSPACE_CONTEXT)).toBe(true);
+    expect(kinds.receive('python', { ...report, indexUrls: ['file:///etc/passwd'] }, WORKSPACE_CONTEXT)).toBe(true);
+    expect(kinds.receive('python', { ...report, indexUrls: ['https://user:secret@pypi.example/simple'] }, WORKSPACE_CONTEXT)).toBe(true);
+    expect(kinds.receive('python', { ...report, specs: Array.from({ length: PIP_RECORD_LIMITS.specsPerInstall + 1 }, (_, i) => `p${i}`) }, WORKSPACE_CONTEXT)).toBe(true);
+    expect(kinds.receive('python', { ...report, specs: ['x'.repeat(PIP_RECORD_LIMITS.specLength + 1)] }, WORKSPACE_CONTEXT)).toBe(true);
+    expect(kinds.receive('python', { ...report, specs: ['evil\nline'] }, WORKSPACE_CONTEXT)).toBe(true);
     expect(kinds.rejectedReports).toBe(7);
     expect(kinds.pipRecord.read()).toEqual([]);
-    expect(kinds.receive('python', report)).toBe(true);
+    expect(kinds.receive('python', report, WORKSPACE_CONTEXT)).toBe(true);
     expect(kinds.pipRecord.read()).toEqual([{ specs: ['fixturepkg==1.0'], indexUrls: ['https://pypi.example/simple'] }]);
-    expect(kinds.receive('python', { type: 'stdout', data: 'x' })).toBe(false);
-    expect(kinds.startOptions('python')).toEqual({ python: { indexURL: 'https://cdn.example/pyodide/', extensions: undefined, installs: kinds.pipRecord.read() } });
-    expect(kinds.startOptions('node')).toEqual({});
+    expect(kinds.receive('python', { type: 'stdout', data: 'x' }, WORKSPACE_CONTEXT)).toBe(false);
+    expect(kinds.startOptions('python', WORKSPACE_CONTEXT)).toEqual({ python: { indexURL: 'https://cdn.example/pyodide/', extensions: undefined, installs: kinds.pipRecord.read() } });
+    expect(kinds.startOptions('node', WORKSPACE_CONTEXT)).toEqual({});
   });
 
   it('records each install as its own group, identical ones once, up to the session cap', () => {

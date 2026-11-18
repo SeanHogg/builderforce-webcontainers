@@ -30,7 +30,11 @@ export interface EmscriptenFs {
   readFile(path: string): Uint8Array;
   readdir(path: string): string[];
   stat(path: string): { mode: number };
+  /** Like `stat`, without following a symlink. */
+  lstat(path: string): { mode: number };
   isDir(mode: number): boolean;
+  isFile(mode: number): boolean;
+  isLink(mode: number): boolean;
   unlink(path: string): void;
   rmdir(path: string): void;
   analyzePath(path: string): { exists: boolean };

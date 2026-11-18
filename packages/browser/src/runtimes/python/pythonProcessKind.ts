@@ -3,22 +3,27 @@
  * (node/processKinds.ts): Python commands — and scripts whose shebang names
  * Python (`./manage.py`) — run in a Python process Worker; a Python process's
  * start message carries the host's instructions (where Pyodide is served,
- * extensions, the session's `pip install`s); and `python-installed` reports are
- * accepted from Python processes only, and only when well formed (pipRecord.ts).
+ * extensions, the application's `pip install`s, and for a training service its
+ * training control); `python-installed` reports are accepted from Python
+ * processes only, and only when well formed (pipRecord.ts).
  *
  * The `pip install` record is per APPLICATION (W10): keyed by the page-side
  * `SecurityContext.applicationId` the host minted for the process — never by
  * anything the process sets (its env) — so one application neither sees nor
- * writes another's installs. The terminal and installs are the workspace's.
- * A call without a context is the workspace's.
+ * writes another's installs. The terminal and installs are the workspace's
+ * (`WORKSPACE_CONTEXT`). A call without a usable context is refused.
+ *
+ * With `training` set, training services' processes get the training control
+ * and their saves go to the page's artifact store (trainingChannel.ts).
  */
 import { WORKSPACE_CONTEXT, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import type { ProcessKindPolicy } from '../../node/processKinds.js';
-import type { StartMessage, WorkerKind } from '../../node/protocol.js';
-import type { PythonExtensionRef } from '../../node/protocol.js';
+import type { PythonExtensionRef, PythonStartOptions, StartMessage, WorkerKind } from '../../node/protocol.js';
 import { shebangRoute } from '../shebangRoute.js';
 import { createPipRecord, validPipInstall, type PipRecord } from './pipRecord.js';
 import { PYTHON_COMMAND_PATTERN, isPythonCommand } from './pythonCommand.js';
+import { createTrainingChannel, type TrainingChannel, type TrainingOptions } from './trainingChannel.js';
+import type { TrainingStartOptions } from './trainingProtocol.js';
 
 /** Host-only settings for Python processes: a program's environment can change neither. */
 export interface PythonHostOptions {
@@ -26,6 +31,8 @@ export interface PythonHostOptions {
   pyodideIndexURL?: string;
   /** Modules each Python Worker imports and installs before the program (pythonExtensions.ts). Absolute URLs, CORS-served. */
   extensions?: PythonExtensionRef[];
+  /** Training services: the host's project id and artifact store. Without it, training processes run with no training control. */
+  training?: TrainingOptions;
 }
 
 export interface PythonProcessKind extends ProcessKindPolicy {
@@ -33,13 +40,15 @@ export interface PythonProcessKind extends ProcessKindPolicy {
   readonly pipRecord: PipRecord;
   /** The `pip install` record of the application `context` belongs to. */
   pipRecordFor(context: SecurityContext): PipRecord;
-  /** What a `kind` process of `context`'s application starts with (its own record's installs). */
-  startOptions(kind: WorkerKind, context?: SecurityContext): Pick<StartMessage, 'python' | 'php' | 'dotnet'>;
-  /** A `python-installed` report from a process of `context`: kept in that application's record only. */
-  receive(kind: WorkerKind, message: unknown, context?: SecurityContext): boolean;
-  /** `python-installed` reports refused (not from a Python process, or malformed). */
+  /** `python-installed` reports refused (not from a Python process, malformed, or without a context). */
   readonly rejectedReports: number;
+  /** Training services' page side (pass it to `createPythonProvider` as `training`); undefined without `options.training`. */
+  readonly training?: TrainingChannel;
+  /** The application was disposed: drop its `pip install` record and training state. */
+  forgetApplication(applicationId: string): void;
 }
+
+const usable = (context: SecurityContext | undefined): context is SecurityContext => typeof context?.applicationId === 'string' && context.applicationId.length > 0;
 
 export function createPythonProcessKind(options: PythonHostOptions = {}): PythonProcessKind {
   const records = new Map<string, PipRecord>();
@@ -48,10 +57,12 @@ export function createPythonProcessKind(options: PythonHostOptions = {}): Python
     if (!record) records.set(applicationId, (record = createPipRecord()));
     return record;
   };
+  const training = options.training ? createTrainingChannel(options.training) : undefined;
   let rejectedReports = 0;
   return {
     pipRecord: pipRecordFor(WORKSPACE_CONTEXT),
     pipRecordFor,
+    training,
     get rejectedReports() {
       return rejectedReports;
     },
@@ -62,15 +73,27 @@ export function createPythonProcessKind(options: PythonHostOptions = {}): Python
       const script = shebangRoute(command, args, context, isPythonCommand);
       return script ? { kind: 'python', ...script } : { kind: 'node', command, args };
     },
-    startOptions(kind, context = WORKSPACE_CONTEXT) {
+    startOptions(kind: WorkerKind, context: SecurityContext): Pick<StartMessage, 'python' | 'php' | 'dotnet'> {
       if (kind !== 'python') return {};
-      return { python: { indexURL: options.pyodideIndexURL, extensions: options.extensions, installs: pipRecordFor(context).read() } };
+      const python: PythonStartOptions & { training?: TrainingStartOptions } = {
+        indexURL: options.pyodideIndexURL,
+        extensions: options.extensions,
+        installs: usable(context) ? (records.get(context.applicationId)?.read() ?? []) : [],
+      };
+      const trainingOptions = usable(context) ? training?.startOptions(context) : undefined;
+      if (trainingOptions) python.training = trainingOptions;
+      return { python };
     },
-    receive(kind, message, context = WORKSPACE_CONTEXT) {
+    receive(kind: WorkerKind, message: unknown, context: SecurityContext) {
+      if (kind === 'python' && usable(context) && training?.receive(message, context)) return true;
       if ((message as { type?: unknown })?.type !== 'python-installed') return false;
-      const install = kind === 'python' ? validPipInstall(message) : undefined;
+      const install = kind === 'python' && usable(context) ? validPipInstall(message) : undefined;
       if (!install || !pipRecordFor(context).add(install)) rejectedReports++;
       return true;
+    },
+    forgetApplication(applicationId) {
+      if (applicationId !== WORKSPACE_CONTEXT.applicationId) records.delete(applicationId);
+      training?.forgetApplication(applicationId);
     },
   };
 }

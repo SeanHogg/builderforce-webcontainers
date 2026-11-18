@@ -10,7 +10,8 @@
  *
  * A `training` service (`python train.py`) runs its entry point the same way,
  * with no server: ready once started, never restarted, asked to checkpoint
- * before it is stopped (`bfwc.training`, trainingControl.ts). `import torch`
+ * before it is stopped (`bfwc.training`; page side trainingChannel.ts, worker
+ * side trainingControl.ts — pass the policy's `training` here). `import torch`
  * comes from a host extension (`PythonHostOptions.extensions`): the host's
  * module returns `@webdit/torch/pyodide`'s `torchPythonExtension(bridge)` —
  * the runtime takes no dependency on it — and lists `provides: ['torch',
@@ -23,12 +24,15 @@ import type { NodeServiceHost } from '../../app/nodeReadiness.js';
 import { isPythonCommand, parsePythonCommand } from './pythonCommand.js';
 import { resolveFrom } from '@seanhogg/builderforce-webcontainers-core';
 import { normalizeName, planRequirements, readProjectRequirements } from './requirements.js';
+import type { TrainingServices } from './trainingChannel.js';
 
 export interface PythonProviderOptions extends NodeProviderOptions {
   /** The project's files: with them, a service whose requirements include native-only packages is declined up front, by name. */
   fs?: VirtualFileSystem;
   /** Packages the host's Python extensions provide (`torch`): never declined. */
   provides?: readonly string[];
+  /** Training services' page side: the Python process-kind policy's `training` (`createPythonProcessKind({ training })`). */
+  training?: TrainingServices;
 }
 
 export function acceptsPythonService(service: ServiceSpec, fs?: VirtualFileSystem, provides: readonly string[] = []): Acceptance {
@@ -56,10 +60,19 @@ export function acceptsPythonService(service: ServiceSpec, fs?: VirtualFileSyste
 
 /** `host` is the runtime (`startPreviewRuntime()`'s, or a `ProcessHost` adapted): it runs Python commands in Python Workers. */
 export function createPythonProvider(host: NodeServiceHost, options: PythonProviderOptions = {}): RuntimeProvider {
-  const { start } = createNodeProvider(host, options);
+  const training = options.training;
+  const { start } = createNodeProvider(host, {
+    ...options,
+    // A training service's process can be asked to checkpoint — when the page can reach it.
+    controls: (service, process) => (service.type === 'training' && training?.canCheckpoint ? { checkpoint: async () => training.checkpoint(process.pid) } : options.controls?.(service, process)),
+  });
   return {
     id: 'python',
     accepts: (service) => acceptsPythonService(service, options.fs, options.provides),
-    start,
+    start(service, context) {
+      // Before the spawn: the process's start message is built from this page-side registration, never its env.
+      if (service.type === 'training') training?.register(context.security);
+      return start(service, context);
+    },
   };
 }
