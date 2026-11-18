@@ -125,14 +125,55 @@ describe('composer (offline: a local Packagist)', () => {
     processes.dispose();
   });
 
-  it('declines a package that needs an extension the php-wasm image lacks, by name', { timeout: SLOW }, async () => {
-    const { fs, processes } = phpHost({ 'composer.json': JSON.stringify({ require: {} }) }, {}, { php: { composer: { repositoryUrl: packagist.url } } });
+  it('declines a package that needs an extension the php-wasm image lacks, by name, leaving composer.json and the lock as they were', { timeout: SLOW }, async () => {
+    const original = JSON.stringify({ require: {} });
+    const { fs, processes } = phpHost({ 'composer.json': original }, {}, { php: { composer: { repositoryUrl: packagist.url } } });
     const proc = processes.run('composer', ['require', 'acme/native']);
     const output = await readAll(proc.combinedOutput);
     expect(await proc.wait()).toBe(2);
-    expect(output).toContain('acme/native requires ext-pgsql *');
+    expect(output).toContain('acme/native 1.0.0 is declined: ext-pgsql');
     expect(output).toContain('Bfwc\\Pgsql\\PDO');
     expect(fs.exists('/vendor/acme/native')).toBe(false);
+    expect(fs.readText('/composer.json')).toBe(original);
+    expect(fs.exists('/composer.lock')).toBe(false);
+    processes.dispose();
+  });
+
+  it('refuses invalid package names and unsupported repositories before fetching anything', { timeout: SLOW }, async () => {
+    const before = packagist.requests.length;
+    const { processes } = phpHost(
+      { 'composer.json': JSON.stringify({ require: { 'acme/greeter': '^1.0' }, repositories: [{ type: 'path', url: '../lib' }] }), 'bad/composer.json': JSON.stringify({ require: { '../../evil': '*' } }) },
+      {},
+      { php: { composer: { repositoryUrl: packagist.url } } },
+    );
+    const repos = processes.run('composer', ['install']);
+    expect(await readAll(repos.combinedOutput)).toContain('repositories of type path');
+    expect(await repos.wait()).toBe(2);
+    const bad = processes.run('composer', ['install', '-d', 'bad']);
+    expect(await readAll(bad.combinedOutput)).toContain('Invalid package name "../../evil"');
+    expect(await bad.wait()).toBe(2);
+    expect(packagist.requests.length).toBe(before);
+    processes.dispose();
+  });
+
+  it('update vendor/pkg moves only that package (and what it needs); dump-autoload regenerates from installed.json', { timeout: SLOW }, async () => {
+    const lock = {
+      packages: [
+        { name: 'acme/greeter', version: '1.0.0', require: { php: '>=8.0', 'acme/util': '^1.0' }, autoload: { 'psr-4': { 'Acme\\Greeter\\': 'src/' } }, dist: { type: 'zip', url: `${packagist.url.replace('/packages/{name}.json', '')}/dist/acme-greeter-1.0.0.zip`, reference: 'ref-1.0.0' } },
+        { name: 'acme/util', version: '1.0.0', autoload: { 'psr-4': { 'Acme\\Util\\': 'src/' } }, dist: { type: 'zip', url: `${packagist.url.replace('/packages/{name}.json', '')}/dist/acme-util-1.0.0.zip`, reference: 'ref-1.0.0' } },
+      ],
+      'packages-dev': [],
+    };
+    const { fs, processes } = phpHost({ 'composer.json': JSON.stringify({ require: { 'acme/greeter': '^1.0' } }), 'composer.lock': JSON.stringify(lock) }, {}, { php: { composer: { repositoryUrl: packagist.url } } });
+    const update = processes.run('composer', ['update', 'acme/util']);
+    const output = await readAll(update.combinedOutput);
+    expect(await update.wait(), output).toBe(0);
+    const locked = (JSON.parse(fs.readText('/composer.lock')!) as { packages: Array<{ name: string; version: string }> }).packages.map((pkg) => `${pkg.name}@${pkg.version}`);
+    expect(locked).toEqual(['acme/greeter@1.0.0', 'acme/util@1.1.0']);
+    const dump = processes.run('composer', ['dump-autoload']);
+    expect(await dump.wait()).toBe(0);
+    expect(fs.readText('/vendor/composer/installed.json')).toContain('"name": "acme/util"');
+    expect(fs.exists('/vendor/autoload.php')).toBe(true);
     processes.dispose();
   });
 });

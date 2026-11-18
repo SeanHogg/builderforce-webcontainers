@@ -195,7 +195,12 @@ export function createPackageSource(options: PackageSourceOptions = {}): Package
   const cache = new Map<string, Promise<PackageVersion[] | undefined>>();
   return {
     versions(requested) {
-      const name = checkPackageName(requested, 'a package request');
+      let name: string;
+      try {
+        name = checkPackageName(requested, 'a package request');
+      } catch (error) {
+        return Promise.reject(error);
+      }
       let found = cache.get(name);
       if (!found) {
         found = (async () => {

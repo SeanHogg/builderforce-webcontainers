@@ -157,7 +157,8 @@ final class Wire
         }
     }
 
-    public static function error(string $body): Exception
+    /** @return array{0: Exception, 1: string} the exception and the severity (ERROR, FATAL, PANIC …) */
+    public static function error(string $body): array
     {
         $fields = [];
         for ($i = 0, $n = strlen($body); $i < $n && $body[$i] !== "\0"; $i = $end + 1) {

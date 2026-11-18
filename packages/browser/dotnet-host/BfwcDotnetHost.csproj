@@ -1,0 +1,46 @@
+<!--
+  The .NET runtime's host program (PRD 31 §W9 phase 6c): Mono on browser-wasm, with Roslyn for in-browser
+  builds, an in-memory ASP.NET Core server, and Npgsql over the runtime's virtual TCP. Built by
+  scripts/build-dotnet-runtime.mjs into a URL artifact the .NET process Worker loads at run time; never
+  bundled into the npm package.
+
+  ASP.NET Core has no browser-wasm runtime pack (NETSDK1082), so its assemblies are referenced from the
+  SDK machine's shared framework (IL with ReadyToRun code, which Mono ignores). The patched Npgsql
+  (patches/npgsql-browser.patch: NpgsqlStreamTransport) comes from the build script as $(NpgsqlDll).
+-->
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Bfwc.DotnetHost</AssemblyName>
+    <RootNamespace>Bfwc.Host</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Programs compiled in the browser use the whole framework: nothing may be trimmed away. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <!-- Plain PE files, so the same bytes serve as Roslyn metadata if ever needed and tools can read them. -->
+    <WasmEnableWebcil>false</WasmEnableWebcil>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- User programs serialize with reflection (minimal APIs' JSON results) and want real exception messages. -->
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+    <WasmFingerprintAssets>false</WasmFingerprintAssets>
+    <AspNetCoreSharedDir>$(NetCoreRoot)shared/Microsoft.AspNetCore.App/$(BundledNETCoreAppPackageVersion)/</AspNetCoreSharedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Minimal APIs, controllers, hosting, configuration, logging. Not Blazor, SignalR, Identity or the native servers. -->
+    <AspNetCoreAssembly Include="$(AspNetCoreSharedDir)Microsoft.AspNetCore*.dll;$(AspNetCoreSharedDir)Microsoft.Extensions*.dll;$(AspNetCoreSharedDir)Microsoft.Net.Http.Headers.dll;$(AspNetCoreSharedDir)Microsoft.JSInterop.dll;$(AspNetCoreSharedDir)System.*.dll"
+                        Exclude="$(AspNetCoreSharedDir)Microsoft.AspNetCore.Components*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.SignalR*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Http.Connections*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Identity.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Server.HttpSys.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Server.Kestrel.Transport.NamedPipes.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Server.Kestrel.Transport.Quic.dll;$(AspNetCoreSharedDir)System.Diagnostics.EventLog.Messages.dll" />
+    <!-- Each one referenced explicitly: as dependencies of one another they get mislabelled boot entries. -->
+    <Reference Include="@(AspNetCoreAssembly)" Private="true" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <Reference Include="$(NpgsqlDll)" Private="true" Condition="'$(NpgsqlDll)' != ''" />
+  </ItemGroup>
+
+  <Target Name="RequirePatchedNpgsql" BeforeTargets="ResolveAssemblyReferences" Condition="'$(NpgsqlDll)' == '' Or !Exists('$(NpgsqlDll)')">
+    <Error Text="Build this project with scripts/build-dotnet-runtime.mjs: it needs the patched Npgsql as -p:NpgsqlDll=&lt;path&gt; (got '$(NpgsqlDll)')." />
+  </Target>
+</Project>

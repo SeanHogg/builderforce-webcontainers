@@ -37,7 +37,7 @@ import { PREVIEW_ID, isPortPath, isWireCancel, isWireRequest, previewBase, type 
 import { createPortResponder, createProcessHost, databaseWorkerFactory, trackWorkers, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
 import type { WorkerLike } from './node/processHost.js';
 import { createPythonProcessKind, type PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
-import { createPhpProcessKind, type PhpHostOptions } from './runtimes/php/phpProcessKind.js';
+import { createPhpProcessKind, type PhpHostOptions, type PhpPlatformRecord } from './runtimes/php/phpProcessKind.js';
 import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from './previewMessages.js';
 import { listenToPreviewBridge } from './previewBridge.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
@@ -126,6 +126,8 @@ export interface PreviewRuntime {
   /** The project's directory as Node programs see it (`/home/project` by default). */
   readonly root: string;
   readonly server: DevServer;
+  /** The PHP that PHP processes reported running (`createPhpProvider(runtime, { platform: runtime.phpPlatform, php })`). */
+  readonly phpPlatform: PhpPlatformRecord;
   /** Write files into the runtime (nested or flat; see `FileTree`), under `at` (default `/`). Open previews update. */
   writeTree(files: FileTree, at?: string): void;
   /** The project as a zip — "Download project" with `exclude: ['node_modules']`, or a full snapshot to restore later. */
@@ -308,6 +310,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     fs,
     root,
     server,
+    phpPlatform: kinds.platform,
     writeTree: (files, at) => fs.writeTree(files, at),
     // With the project at `/`, the hidden badge marker's directory is inside it: never ship it in a download.
     exportZip: (zipOptions) =>

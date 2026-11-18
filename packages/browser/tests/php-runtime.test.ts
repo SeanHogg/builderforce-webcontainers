@@ -79,7 +79,7 @@ echo 'got ', fgets($s);
 fclose($s);
 // php-wasm reports the connect as made; nothing listening ends the stream before any byte.
 $refused = @stream_socket_client('tcp://localhost:7071', $errno, $errstr, 2);
-echo $refused === false || fgets($refused) === false ? "refused\\n" : "connected?\\n";
+echo is_resource($refused) && fgets($refused) === false && feof($refused) ? "refused at first read\\n" : "unexpected\\n";
 `,
       'echo.js': `const net = require('net');
 net.createServer((socket) => socket.on('data', (data) => socket.write(String(data).toUpperCase()))).listen(7070, () => console.log('echo ready'));
@@ -91,7 +91,7 @@ net.createServer((socket) => socket.on('data', (data) => socket.write(String(dat
     const proc = processes.run('php', ['client.php']);
     const output = await readAll(proc.combinedOutput);
     expect(output).toContain('got PING\n');
-    expect(output).toContain('refused\n');
+    expect(output).toContain('refused at first read\n');
     expect(await proc.wait()).toBe(0);
     echo.kill();
     processes.dispose();
@@ -119,6 +119,8 @@ if ($path === '/echo') {
         'raw' => file_get_contents('php://input'),
         'script' => $_SERVER['SCRIPT_NAME'],
         'sapi' => PHP_SAPI,
+        'host' => $_SERVER['HTTP_HOST'] ?? null,
+        'https' => array_key_exists('HTTPS', $_SERVER),
     ]);
     return;
 }
@@ -153,6 +155,9 @@ describe('php -S', () => {
       raw: 'name=widget&qty=3',
       script: '/index.php',
       sapi: 'cli-server',
+      // No Host header from the in-runtime client: the server's own address, as `php -S` is addressed; plain HTTP, so no HTTPS entry.
+      host: 'localhost:8080',
+      https: false,
     });
 
     const json = await request(ports, 8080, 'PUT', '/json', JSON.stringify({ a: [1, 2] }), { 'content-type': 'application/json' });

@@ -57,7 +57,7 @@ class Statement extends \PDOStatement
                 $end = $i + 1;
                 $escapes = $char === "'" && ($previous === 'E' || $previous === 'e') && !self::identifierChar($i > 1 ? $sql[$i - 2] : '');
                 while ($end < $length && ($sql[$end] !== $char || ($sql[$end + 1] ?? '') === $char)) {
-                    $end += ($sql[$end] === $char || ($escapes && $sql[$end] === '\')) ? 2 : 1;
+                    $end += ($sql[$end] === $char || ($escapes && $sql[$end] === '\\')) ? 2 : 1;
                 }
                 $out .= substr($sql, $i, $end - $i + 1);
                 $i = $end;

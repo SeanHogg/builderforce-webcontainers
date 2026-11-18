@@ -12,7 +12,7 @@ import type { WorkerKind } from '../src/node/protocol.js';
 import { WorkerSupply } from '../src/node/workerSupply.js';
 import { RELAY_SPAWN } from '../src/protocol.js';
 import { RELAY_PHP_WORKER, RELAY_PROCESS_WORKER, RELAY_PYTHON_WORKER, relayWorkerScript, spawnOverRelay } from '../src/relayWorker.js';
-import { createPhpProcessKind } from '../src/runtimes/php/index.js';
+import { acceptsPhpService, createPhpProcessKind, expectedPlatform } from '../src/runtimes/php/index.js';
 import { createPythonProcessKind } from '../src/runtimes/python/index.js';
 import { fakeWorker } from './helpers.js';
 import { fakePhpWorker, readAll } from './php-helpers.js';
@@ -67,6 +67,26 @@ describe('PHP Worker kind', () => {
     const foreign = new RegExp(kinds.foreignCommands!);
     expect(['php', 'composer', 'python', 'pip'].every((name) => foreign.test(name))).toBe(true);
     expect(foreign.test('node')).toBe(false);
+  });
+});
+
+describe('the PHP platform the provider checks against', () => {
+  it('is the pinned release of php.phpVersion until a PHP process reports its own, and only PHP processes may report', () => {
+    const fs = new VirtualFileSystem();
+    fs.writeTree({ 'composer.json': JSON.stringify({ require: { php: '>=8.3.30', 'ext-intl': '*' } }) });
+    const php = { phpVersion: '8.3' };
+    const kinds = createPhpProcessKind(php);
+    const service = { id: 'api', type: 'application' as const, runtime: 'php', command: 'php', args: ['-S', 'localhost:8000'], port: 8000 };
+    expect(expectedPlatform({ php, platform: kinds.platform }).phpVersion).toBe('8.3.36');
+    expect(expectedPlatform({ php: { phpVersion: '8.1' } }).phpVersion).toBe('8.1.34');
+    // 8.3.36 meets >=8.3.30; the images have no intl.
+    expect(acceptsPhpService(service, fs, expectedPlatform({ php, platform: kinds.platform }))).toMatchObject({ ok: false, reason: expect.stringContaining('ext-intl') });
+    expect(kinds.receive('node', { type: 'php-platform', phpVersion: '8.3.36', extensions: ['intl'] })).toBe(true); // taken, and refused
+    expect(kinds.platform.current()).toBeUndefined();
+    expect(kinds.receive('php', { type: 'php-platform', phpVersion: 'nonsense', extensions: [] })).toBe(true);
+    expect(kinds.platform.current()).toBeUndefined();
+    kinds.receive('php', { type: 'php-platform', phpVersion: '8.3.36', extensions: ['Core', 'intl'] });
+    expect(acceptsPhpService(service, fs, expectedPlatform({ php, platform: kinds.platform }))).toEqual({ ok: true });
   });
 });
 

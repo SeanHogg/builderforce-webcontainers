@@ -30,7 +30,7 @@ type Spec = Omit<PackageVersion, 'name'>;
 /** A repository from `name → versions`. */
 function repository(packages: Record<string, Spec[]>): PackageSource {
   return {
-    versions: async (name) => packages[name]?.map((spec) => ({ ...spec, name })),
+    versions: async (name) => packages[name]?.map((spec) => ({ ...spec, name }) as PackageVersion),
     files: async () => new Map(),
   };
 }
@@ -152,7 +152,7 @@ describe('dist limits', () => {
   it('a zip whose checksum does not match is refused; a matching one unpacks with its top directory stripped', async () => {
     const fs = new VirtualFileSystem();
     fs.writeTree({ 'a-a-abc123/src/A.php': '<?php class A {}' });
-    const zip = exportZip(fs);
+    const zip = new Uint8Array(exportZip(fs));
     const sha1 = [...new Uint8Array(await crypto.subtle.digest('SHA-1', zip))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     const source = createPackageSource({ fetch: async () => new Response(zip) });
     await expect(source.files(pkg({ type: 'zip', url: 'https://x.test/a.zip', shasum: '0'.repeat(40) }))).rejects.toThrow(/checksum mismatch/);

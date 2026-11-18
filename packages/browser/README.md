@@ -398,7 +398,7 @@ const app = startApplicationRuntime(
         readiness: { kind: 'http', path: '/health' } },
     ],
   },
-  { providers: [createPhpProvider(runtime, { fs: runtime.fs }), createPgliteProvider(runtime)] },
+  { providers: [createPhpProvider(runtime, { fs: runtime.fs, php: phpOptions, platform: runtime.phpPlatform }), createPgliteProvider(runtime)] },
 );
 ```
 
@@ -407,6 +407,8 @@ const app = startApplicationRuntime(
   mirror (`php.baseUrl`, laid out like jsDelivr's npm CDN:
   `<base>@php-wasm/universal@3.1.62/+esm` and
   `<base>@php-wasm/web-8-3@3.1.62/jspi/php_8_3.js` with its `.wasm` beside it).
+  A mirror must carry the `asyncify/` build too (same layout, `asyncify/` for
+  `jspi/`): engines without JSPI (`WebAssembly.Suspending`) load that one.
 - **Commands.** PHP's own CLI runs the arguments (`php script.php …`,
   `php -r code`, `php -v`), with its real exit codes. `php -S host:port [-t
   docroot] [-d name=value] [router.php]` is served request-driven — no socket
@@ -426,7 +428,10 @@ const app = startApplicationRuntime(
   against `PDO` takes it: `prepare`/`execute` with `?` and `:name`,
   `bindValue`/`bindParam`, `query`, `exec` (several statements), transactions,
   `lastInsertId`, the usual fetch modes, SQLSTATE exceptions, results typed as
-  pdo_pgsql types them. It speaks the Postgres wire protocol over PHP's
+  pdo_pgsql types them (an `int8` past PHP's 32-bit `PHP_INT_MAX` stays a
+  string). As PDO does, mixing `?` and `:name` and a missing parameter are
+  `HY093` errors. `COPY … FROM STDIN`/`TO STDOUT` is refused with `0A000`
+  (use `INSERT`/`SELECT`); a FATAL from the server is reported as itself. It speaks the Postgres wire protocol over PHP's
   sockets to the PGlite gateway (trust, password and MD5 authentication).
 - **Composer.** `composer install | update | require | dump-autoload` (and
   `php composer.phar …`) are done by the runtime, not composer.phar (whose
@@ -439,10 +444,23 @@ const app = startApplicationRuntime(
   (GitHub's zipballs do not answer browsers) — and `vendor/`, the autoloader
   (PSR-4, PSR-0, class maps, `files`, `Composer\InstalledVersions`) and
   `composer.lock` are written into the project. A lock installs exactly what
-  it locks. Platform requirements are checked against the running PHP: a
-  package needing an extension the image lacks (`ext-pgsql`, `ext-redis` …)
-  is declined by name, and `createPhpProvider` declines such a service up
-  front. Composer scripts and plugins do not run (it says so).
+  it locks; `update vendor/pkg` moves only the named packages (and what they
+  need); `require` takes `vendor/pkg:^1.0`, `vendor/pkg ^1.0` or no
+  constraint. Resolution backtracks (a newer release that cannot fit gives way
+  to an older one), honours `provide`, `replace` and `conflict` — the root's
+  too — and skips releases the running PHP cannot meet. Platform requirements
+  are checked against the running PHP: a package needing an extension the
+  image lacks (`ext-pgsql`, `ext-redis` …) is declined by name, and
+  `createPhpProvider(runtime, { php, platform: runtime.phpPlatform })` declines
+  such a service up front (against what PHP processes reported, else the
+  pinned release of `php.phpVersion`). composer.json `repositories` other than
+  Packagist (`path`, `vcs`, `artifact`, `package`, custom Composer
+  repositories, `"packagist.org": false`) are declined, naming their types.
+  Names are validated with Composer's own pattern; a dist whose metadata has a
+  `shasum` must match it; and every dist is held to size and entry limits
+  whichever way it is fetched. A failed `require` or `update` leaves
+  composer.json and composer.lock untouched. Composer scripts and plugins do
+  not run (it says so).
 - **Sockets.** `stream_socket_client`/`fsockopen` reach localhost ports in any
   process through the runtime's virtual TCP. As with php-wasm's own
   networking, a connect returns at once: a port nothing listens on shows as
@@ -457,6 +475,10 @@ const app = startApplicationRuntime(
   `<scope>/php-worker.js` beside `process-worker.js`. The preview origin's
   CSP must let the Worker import and fetch from the php-wasm base
   (`https://cdn.jsdelivr.net` by default) and compile WebAssembly
-  (`'wasm-unsafe-eval'`), and — for `composer` — fetch from `packagist.org`,
-  `data.jsdelivr.com` and `cdn.jsdelivr.net` (or the hosts of
-  `repositoryUrl`/`distProxy`). `php.baseUrl` must be absolute and CORS-served.
+  (`'wasm-unsafe-eval'`), and — for `composer` — fetch from `packagist.org`
+  (or `repositoryUrl`'s host), the dist hosts packages name (`api.github.com`
+  and `codeload.github.com` for GitHub — tried first, then
+  `data.jsdelivr.com` and `cdn.jsdelivr.net` when GitHub does not answer the
+  browser — and `gitlab.com`, `bitbucket.org` or a custom host for packages
+  served there), or only `distProxy`'s host when one is set. `php.baseUrl`
+  must be absolute and CORS-served.

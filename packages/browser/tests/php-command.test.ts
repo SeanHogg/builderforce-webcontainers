@@ -47,6 +47,9 @@ describe('PHP command lines', () => {
       invocation: { kind: 'serve', server: { host: '0.0.0.0', port: 8000, docroot: 'public', router: 'public/index.php', ini: { display_errors: '0' } } },
     });
     expect(parsePhpCommand('php', ['-S', 'localhost'])).toMatchObject({ ok: false });
+    // After the script, -S is the script's own argument.
+    expect(parsePhpCommand('php', ['app.php', '-S', 'localhost:8000'])).toEqual({ ok: true, invocation: { kind: 'cli', argv: ['app.php', '-S', 'localhost:8000'] } });
+    expect(parsePhpCommand('php', ['-d', 'x=1', '-S', 'localhost:8000'])).toMatchObject({ ok: true, invocation: { kind: 'serve', server: { port: 8000, ini: { x: '1' } } } });
     expect(parsePhpCommand('php', ['-S', 'localhost:8000', 'a.php', 'b.php'])).toMatchObject({ ok: false, reason: expect.stringContaining('one router') });
   });
 

@@ -1,0 +1,129 @@
+Npgsql v9.0.3 for browser-wasm (applied by scripts/build-dotnet-runtime.mjs to a clean clone).
+
+browser-wasm has no sockets and no TLS: NpgsqlConnector's static ALPN field (SslApplicationProtocol)
+throws in its type initializer, and RawOpen dials a Socket. This adds a public NpgsqlStreamTransport.Connect
+hook: when set, a physical connection is the Stream it returns (the runtime's virtual TCP), the ALPN value
+is made lazily, and the buffers skip socket timeouts when there is no socket.
+
+diff --git a/src/Npgsql/Internal/NpgsqlConnector.cs b/src/Npgsql/Internal/NpgsqlConnector.cs
+index d30edff..7d0a2a3 100644
+--- a/src/Npgsql/Internal/NpgsqlConnector.cs
++++ b/src/Npgsql/Internal/NpgsqlConnector.cs
+@@ -42,7 +42,7 @@ public sealed partial class NpgsqlConnector
+     /// <summary>
+     /// The physical connection stream to the backend, without anything on top.
+     /// </summary>
+-    NetworkStream _baseStream = default!;
++    Stream _baseStream = default!;
+ 
+     /// <summary>
+     /// The physical connection stream to the backend, layered with an SSL/TLS stream if in secure mode.
+@@ -281,7 +281,8 @@ internal bool PostgresCancellationPerformed
+     internal bool AttemptPostgresCancellation { get; private set; }
+     static readonly TimeSpan _cancelImmediatelyTimeout = TimeSpan.FromMilliseconds(-1);
+ 
+-    static readonly SslApplicationProtocol _alpnProtocol = new("postgresql");
++    // A property, not a static field: SslApplicationProtocol throws on platforms without TLS (browser-wasm).
++    static SslApplicationProtocol _alpnProtocol => new("postgresql");
+ 
+ #pragma warning disable CA1859
+     // We're casting to IDisposable to not explicitly reference X509Certificate2 for NativeAOT
+@@ -757,12 +758,19 @@ async Task RawOpen(SslMode sslMode, NpgsqlTimeout timeout, bool async, Cancellat
+     {
+         try
+         {
+-            if (async)
+-                await ConnectAsync(timeout, cancellationToken).ConfigureAwait(false);
++            if (NpgsqlStreamTransport.Connect is { } transport)
++            {
++                // A host-provided transport (a virtual TCP stream in a browser runtime): no socket.
++                _baseStream = await transport(Host, Port, cancellationToken).ConfigureAwait(false);
++            }
+             else
+-                Connect(timeout);
+-
+-            _baseStream = new NetworkStream(_socket, true);
++            {
++                if (async)
++                    await ConnectAsync(timeout, cancellationToken).ConfigureAwait(false);
++                else
++                    Connect(timeout);
++                _baseStream = new NetworkStream(_socket, true);
++            }
+             _stream = _baseStream;
+ 
+             if (Settings.Encoding == "UTF8")
+diff --git a/src/Npgsql/Internal/NpgsqlReadBuffer.cs b/src/Npgsql/Internal/NpgsqlReadBuffer.cs
+index a9b094e..cee6b9c 100644
+--- a/src/Npgsql/Internal/NpgsqlReadBuffer.cs
++++ b/src/Npgsql/Internal/NpgsqlReadBuffer.cs
+@@ -55,9 +55,9 @@ internal TimeSpan Timeout
+                 else if (value < TimeSpan.Zero)
+                     value = TimeSpan.Zero;
+ 
+-                Debug.Assert(_underlyingSocket != null);
++                // No socket under a host-provided transport (NpgsqlStreamTransport): the CancellationTokenSource timeout alone applies.
+ 
+-                _underlyingSocket.ReceiveTimeout = (int)value.TotalMilliseconds;
++                if (_underlyingSocket is not null) _underlyingSocket.ReceiveTimeout = (int)value.TotalMilliseconds;
+                 Cts.Timeout = value;
+             }
+         }
+diff --git a/src/Npgsql/Internal/NpgsqlWriteBuffer.cs b/src/Npgsql/Internal/NpgsqlWriteBuffer.cs
+index 821bb7e..1a33038 100644
+--- a/src/Npgsql/Internal/NpgsqlWriteBuffer.cs
++++ b/src/Npgsql/Internal/NpgsqlWriteBuffer.cs
+@@ -43,16 +43,16 @@ internal TimeSpan Timeout
+         {
+             if (_timeoutCts.Timeout != value)
+             {
+-                Debug.Assert(_underlyingSocket != null);
++                // No socket under a host-provided transport (NpgsqlStreamTransport): the CancellationTokenSource timeout alone applies.
+ 
+                 if (value > TimeSpan.Zero)
+                 {
+-                    _underlyingSocket.SendTimeout = (int)value.TotalMilliseconds;
++                    if (_underlyingSocket is not null) _underlyingSocket.SendTimeout = (int)value.TotalMilliseconds;
+                     _timeoutCts.Timeout = value;
+                 }
+                 else
+                 {
+-                    _underlyingSocket.SendTimeout = -1;
++                    if (_underlyingSocket is not null) _underlyingSocket.SendTimeout = -1;
+                     _timeoutCts.Timeout = InfiniteTimeSpan;
+                 }
+             }
+diff --git a/src/Npgsql/NpgsqlStreamTransport.cs b/src/Npgsql/NpgsqlStreamTransport.cs
+new file mode 100644
+index 0000000..7ba0412
+--- /dev/null
++++ b/src/Npgsql/NpgsqlStreamTransport.cs
+@@ -0,0 +1,17 @@
++using System;
++using System.IO;
++using System.Threading;
++using System.Threading.Tasks;
++
++namespace Npgsql;
++
++/// <summary>
++/// A host-provided transport: when <see cref="Connect"/> is set, every physical connection is the stream it returns
++/// for the connection's host and port, instead of a socket. For runtimes without sockets (browser-wasm), where the
++/// host bridges the stream to its own network.
++/// </summary>
++public static class NpgsqlStreamTransport
++{
++    /// <summary>Opens the stream for a host and port; null (the default) uses sockets.</summary>
++    public static Func<string, int, CancellationToken, ValueTask<Stream>>? Connect { get; set; }
++}
+diff --git a/src/Npgsql/PublicAPI.Unshipped.txt b/src/Npgsql/PublicAPI.Unshipped.txt
+index 10d2965..17b804e 100644
+--- a/src/Npgsql/PublicAPI.Unshipped.txt
++++ b/src/Npgsql/PublicAPI.Unshipped.txt
+@@ -75,3 +75,6 @@ Npgsql.NpgsqlConnection.ReloadTypesAsync(System.Threading.CancellationToken canc
+ *REMOVED*Npgsql.NpgsqlSlimDataSourceBuilder.MapComposite<T>(string? pgName = null, Npgsql.INpgsqlNameTranslator? nameTranslator = null) -> Npgsql.TypeMapping.INpgsqlTypeMapper!
+ *REMOVED*Npgsql.NpgsqlSlimDataSourceBuilder.MapEnum(System.Type! clrType, string? pgName = null, Npgsql.INpgsqlNameTranslator? nameTranslator = null) -> Npgsql.TypeMapping.INpgsqlTypeMapper!
+ *REMOVED*Npgsql.NpgsqlSlimDataSourceBuilder.MapEnum<TEnum>(string? pgName = null, Npgsql.INpgsqlNameTranslator? nameTranslator = null) -> Npgsql.TypeMapping.INpgsqlTypeMapper!
++Npgsql.NpgsqlStreamTransport
++static Npgsql.NpgsqlStreamTransport.Connect.get -> System.Func<string!, int, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream!>>?
++static Npgsql.NpgsqlStreamTransport.Connect.set -> void
