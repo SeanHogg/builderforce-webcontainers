@@ -33,12 +33,17 @@ export interface IngressRejection {
   message?: string;
 }
 
-/** `bad_id`: not a preview id; `not_attacher`: not the relay/host page; `duplicate_id`: another open tab attached it. */
-export type AttachRefusal = 'bad_id' | 'not_attacher' | 'duplicate_id';
+/**
+ * `bad_id`: not a preview id; `bad_nonce`: no well-formed attach nonce; `not_attacher`: not the relay/host page;
+ * `stale_nonce`: the bound client re-attached without the nonce of its last attach; `duplicate_id`: another open tab attached it.
+ */
+export type AttachRefusal = 'bad_id' | 'bad_nonce' | 'not_attacher' | 'stale_nonce' | 'duplicate_id';
 
 export const ATTACH_MESSAGES: Record<AttachRefusal, (id: string) => string> = {
   bad_id: (id) => `"${id}" is not a preview id.`,
+  bad_nonce: (id) => `preview id '${id}' was offered without a well-formed attach nonce.`,
   not_attacher: (id) => `preview id '${id}' was offered by a page that may not attach previews (only the relay or host page may).`,
+  stale_nonce: (id) => `preview id '${id}' was re-attached without the nonce of its current attach.`,
   duplicate_id: (id) => `preview id '${id}' is already attached by another open tab; preview ids must be unique per tab.`,
 };
 
@@ -106,17 +111,23 @@ export function isAttacher(client: AttachClient, scopePath: string, mode: Attach
 }
 
 /**
- * Preview id → the client id that attached it. `clientAlive` asks the browser
- * whether a client still exists; an error is treated as alive, so a failed check
- * never hands a live preview to a new client.
+ * Preview id → the client that attached it and the nonce of that attach.
+ * `clientAlive` asks the browser whether a client still exists; an error is
+ * treated as alive, so a failed check never hands a live preview to a new client.
+ *
+ * The bound client may re-attach only by presenting its current nonce as
+ * `previous` (a fresh port after a worker timeout, a REATTACH). A binding whose
+ * client is gone moves to any attacher: the dead client's nonce died with it. A
+ * worker restart forgets every binding, so the first attach after it is taken
+ * on the attacher rules alone.
  */
 export function createAttachOwners(clientAlive: (clientId: string) => Promise<boolean>) {
-  const owners = new Map<string, string>();
+  const owners = new Map<string, { clientId: string; nonce: string }>();
   /** Bumped on every change to an id's owner, so a claim that awaited sees any move. */
   const generations = new Map<string, number>();
 
-  function set(id: string, clientId: string): void {
-    owners.set(id, clientId);
+  function set(id: string, clientId: string, nonce: string): void {
+    owners.set(id, { clientId, nonce });
     generations.set(id, (generations.get(id) ?? 0) + 1);
   }
 

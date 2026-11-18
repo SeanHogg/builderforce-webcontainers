@@ -49,7 +49,15 @@ export type ShieldReasonCode =
   | 'fs.invalid_op'
   | 'ingress.body_too_large'
   | 'ingress.client_not_bound'
-  | 'ingress.attach_rejected';
+  | 'ingress.attach_rejected'
+  /** The preview would share the embedding page's origin (same-origin mode, or a relay on the page's own origin): boot refused. */
+  | 'ingress.same_origin_refused'
+  /** A computed per-application preview origin is not an https origin distinct from the page's and every other application's. */
+  | 'ingress.preview_origin_invalid'
+  /** A request reached an application's port through a preview origin that is not that application's. */
+  | 'ingress.app_origin_mismatch'
+  /** Telemetry, not a refusal: every application shares one preview origin (no `previewOrigin` set). */
+  | 'ingress.shared_preview_origin';
 
 /** A page-side decision; `reject` carries the reason the caller surfaces (ECONNREFUSED, 403, EACCES…). */
 export type ShieldDecision = { readonly allow: true } | { readonly allow: false; readonly reason: ShieldReasonCode };
