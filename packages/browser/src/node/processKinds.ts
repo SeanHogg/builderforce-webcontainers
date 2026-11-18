@@ -23,6 +23,8 @@ export interface ProcessKindPolicy {
   startOptions(kind: WorkerKind, context: SecurityContext): Pick<StartMessage, 'python' | 'php' | 'dotnet'>;
   /** A message the host does not handle itself, from a process of `kind`; true when taken. `context` is the sender, from the page-side record of its Worker — never from the message. */
   receive(kind: WorkerKind, message: unknown, context: SecurityContext): boolean;
+  /** Process `pid` is gone (its record cleaned up, however it ended): drop whatever the policy holds for it. A chained policy forwards it to its `next`. */
+  exited(pid: number): void;
   /** Commands Node processes must hand to the page rather than resolve (a RegExp source over the base name). */
   readonly foreignCommands?: string;
 }
@@ -38,4 +40,5 @@ export const NODE_ONLY: ProcessKindPolicy = {
   route: (command, args) => ({ kind: 'node', command, args }),
   startOptions: () => ({}),
   receive: () => false,
+  exited: () => undefined,
 };

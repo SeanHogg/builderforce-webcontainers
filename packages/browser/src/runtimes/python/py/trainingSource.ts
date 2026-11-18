@@ -3,10 +3,14 @@
  * metric lines on stdout (they stream through the application's `logs()`),
  * the stop's checkpoint request, and an artifact directory outside the
  * project whose files the page keeps in project storage (trainingControl.ts).
- * The control exists only in a `training` service's process. Without a shared
- * flag, `checkpoint_requested()` suspends (JSPI `run_sync`) at most every few
- * tens of milliseconds so the page's request can land; without JSPI it lands
- * when the program otherwise yields. Artifacts are also saved when the program exits.
+ * The control exists only in the process the runtime started for a
+ * `training` service (not in its children). Without a shared flag,
+ * `checkpoint_requested()` suspends (JSPI `run_sync`) at most every few tens of
+ * milliseconds so the page's request can land; without JSPI it lands when the
+ * program otherwise yields. `save()` waits for the page's verdict only with
+ * JSPI; without it the save is sent unconfirmed and `save()` returns False.
+ * Artifacts are also saved when the program exits (unless the artifact
+ * directory is missing or empty).
  */
 import { TRAINING_ARTIFACT_DIR } from '../trainingArtifactDir.js';
 
@@ -61,8 +65,18 @@ def checkpoint_requested():
 
 
 def save():
-    """Replace the kept artifacts with the artifact directory now (also done at exit). Raises when the page refused or failed the save."""
-    error = _wait(_control().save())
-    if error:
-        raise RuntimeError("bfwc.training.save: " + str(error))
+    """Replace the kept artifacts with the artifact directory now (also done at exit).
+
+    Returns True once the page confirmed it committed the save. Returns False
+    when the save was sent but is not confirmed: this Python has no JSPI
+    (pyodide.ffi.run_sync) to wait for the page, the page does not acknowledge
+    saves (a failure is then not raised here), or a newer save replaced it in
+    the page's queue. Raises RuntimeError when the page refused or failed it.
+    """
+    result = _wait(_control().save())
+    if result is None:
+        return False
+    if result.error:
+        raise RuntimeError("bfwc.training.save: " + str(result.error))
+    return bool(result.confirmed)
 `;

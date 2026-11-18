@@ -29,6 +29,7 @@ import type { ServiceGraphPolicy } from '@seanhogg/builderforce-webcontainers-co
 import type { NodeRuntimeOptions, ProcessInfo } from './node/index.js';
 import type { WorkerLike } from './node/processHost.js';
 import type { PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
+import type { TrainingServices } from './runtimes/python/trainingChannel.js';
 import type { PhpHostOptions, PhpPlatformRecord } from './runtimes/php/phpProcessKind.js';
 import type { DotnetHostOptions } from './runtimes/dotnet/dotnetProcessKind.js';
 import type { PreviewConsoleMessage, PreviewError } from './previewMessages.js';
@@ -179,6 +180,8 @@ export interface PreviewRuntime {
   readonly server: DevServer;
   /** The PHP that PHP processes reported running (`createPhpProvider(runtime, { platform: runtime.phpPlatform, php })`). */
   readonly phpPlatform: PhpPlatformRecord;
+  /** Training services' page side, when `python.training` is set (`createPythonProvider(runtime, { training: runtime.pythonTraining })`); without it the Python provider declines training services. */
+  readonly pythonTraining?: TrainingServices;
   /** Write files into the runtime (nested or flat; see `FileTree`), under `at` (default `/`). Open previews update. */
   writeTree(files: FileTree, at?: string): void;
   /** The project as a zip — "Download project" with `exclude: ['node_modules']`, or a full snapshot to restore later. */
@@ -247,6 +250,8 @@ export interface PreviewRuntime {
   readonly portPolicy: ServiceGraphPolicy;
   /** End every process attributed to an application (or one of its services): pass the runtime as `startApplicationRuntime`'s `processes`. */
   killApplication(applicationId: string, serviceId?: string): void;
+  /** The application was disposed (`startApplicationRuntime` calls it): drop its `pip install` record and training state. */
+  forgetApplication(applicationId: string): void;
   /**
    * A database Worker, always on the HOST origin (relay mode included), so the
    * code a project runs — on the preview origin — has no path to the database's

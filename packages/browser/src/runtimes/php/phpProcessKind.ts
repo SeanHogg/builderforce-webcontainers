@@ -61,5 +61,6 @@ export function createPhpProcessKind(options: PhpHostOptions = {}, next: Process
       if (report) platform = report;
       return true;
     },
+    exited: (pid) => next.exited(pid),
   };
 }

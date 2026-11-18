@@ -274,10 +274,10 @@ export class ProcessHost {
   }
 
   /** Post a process-kind message (a training checkpoint, a save acknowledgement) to process `pid`; false when it is gone. */
-  notify(pid: number, message: unknown): boolean {
+  notify(pid: number, message: HostToWorker): boolean {
     const proc = [...this.procs].find((candidate) => candidate.pid === pid);
     if (!proc || proc.exited) return false;
-    this.post(proc, message as HostToWorker);
+    this.post(proc, message);
     return true;
   }
 
@@ -336,6 +336,7 @@ export class ProcessHost {
     proc.children.killAll('SIGTERM');
     this.procs.delete(proc);
     this.identities.release(proc.pid);
+    this.kinds.exited(proc.pid);
     this.fsSync.remove(proc);
     queueMicrotask(() => proc.worker.terminate());
   }

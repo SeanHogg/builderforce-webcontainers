@@ -28,7 +28,6 @@ import type { PyodideLike } from './pyodideLoader.js';
 import { createDialTransport } from './dialTransport.js';
 import { installVirtualSockets, type VirtualTcpTransport } from './virtualSocket.js';
 import { createTrainingControl } from './trainingControl.js';
-import { trainingOptionsOf } from './trainingProtocol.js';
 
 export interface PythonWorkerProcessDeps {
   /** `transfer`: buffers handed over with the message (training artifacts). */
@@ -73,7 +72,7 @@ export function createPythonWorkerProcess(deps: PythonWorkerProcessDeps): { rece
       // The runtime's own modules and the host's extensions go in before writes are tracked: none of it is the project's.
       installBfwcPackage(py);
       installVirtualSockets(py, tcp);
-      const trainingOptions = trainingOptionsOf(message);
+      const trainingOptions = message.python?.training;
       if (trainingOptions) training.install(py, trainingOptions);
       const provided = await installPythonExtensions(py, message.python?.extensions ?? [], deps.importModule ?? importModule);
       copyIntoPyodide(staging, py.FS);

@@ -46,6 +46,8 @@ export interface SuperviseOptions {
   stableAfterMs: number;
   /** The service's identity, minted by the application runtime: its provider spawns with it. */
   security: SecurityContext;
+  /** The application's spec `projectId` (stable across runs): passed to the provider's start. */
+  projectId?: string;
   /** Ends what outlived the service's process (detached children) when it stops or fails. */
   processes?: AttributedProcesses;
 }
@@ -123,7 +125,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
     lifecycle.transition('starting');
     let handle: ServiceHandle;
     try {
-      run.handlePromise = Promise.resolve(resolution.provider.start(spec, { env: options.env, signal: run.controller.signal, security: options.security }));
+      run.handlePromise = Promise.resolve(resolution.provider.start(spec, { env: options.env, signal: run.controller.signal, security: options.security, projectId: options.projectId }));
       handle = await run.handlePromise;
     } catch (error) {
       return end(run, { phase: 'start', message: messageOf(error) });

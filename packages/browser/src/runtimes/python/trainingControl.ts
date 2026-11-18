@@ -8,14 +8,19 @@
  *   suspended — `should_yield()` lets it suspend at most every {@link YIELD_MS}.
  * - Saves: every regular file under the artifact directory (symlinks skipped,
  *   walked with lstat, one file at a time) is posted to the page, then
- *   `training-saved`; with acknowledgements the save resolves with the page's
- *   verdict. The exit save's failure is written to stderr and the program's
- *   own exit code is kept.
+ *   `training-saved` with the file count; with acknowledgements the save
+ *   resolves with the page's verdict (`confirmed`), without them it resolves
+ *   unconfirmed. A save the page dropped for a newer one is `superseded`, not
+ *   failed.
+ * - The exit save is skipped when the artifact directory is missing or empty
+ *   (a run that crashed before writing anything never wipes the last good
+ *   set); its failure is written to stderr and the program's own exit code is
+ *   kept.
  */
 import type { WorkerToHost } from '../../node/protocol.js';
 import type { PyodideLike } from './pyodideLoader.js';
 import { TRAINING_ARTIFACT_DIR } from './trainingArtifactDir.js';
-import type { TrainingPageMessage, TrainingSavedAck, TrainingStartOptions, TrainingWorkerMessage } from './trainingProtocol.js';
+import { isTrainingPageMessage, type TrainingStartOptions } from './trainingProtocol.js';
 
 export const TRAINING_JS_MODULE = '_bfwc_training';
 /** The longest a program goes between suspensions when it polls for a checkpoint without a shared flag. */
@@ -26,6 +31,10 @@ export const ACK_TIMEOUT_MS = 120_000;
 export interface SaveResult {
   ok: boolean;
   error?: string;
+  /** The page acknowledged committing this save. False when the page does not acknowledge saves. */
+  confirmed: boolean;
+  /** A newer save of the service replaced this one before it was committed. */
+  superseded?: boolean;
 }
 
 export interface TrainingControl {
@@ -33,7 +42,7 @@ export interface TrainingControl {
   receive(message: unknown): boolean;
   /** Register `_bfwc_training` in `py` (a training process only). */
   install(py: PyodideLike, options: TrainingStartOptions): void;
-  /** The exit save: failures go to `stderr`. A no-op when not installed. */
+  /** The exit save: skipped when the artifact directory is missing or empty; failures go to `stderr`. A no-op when not installed. */
   saveAtExit(stderr: (text: string) => void): Promise<void>;
 }
 
@@ -52,6 +61,9 @@ function* artifactFiles(FS: PyodideLike['FS'], dir: string, relative = ''): Gene
   }
 }
 
+/** The artifact directory's regular files; none when it is missing. */
+const listArtifacts = (FS: PyodideLike['FS']): Array<[string, string]> => (FS.analyzePath(TRAINING_ARTIFACT_DIR).exists ? [...artifactFiles(FS, TRAINING_ARTIFACT_DIR)] : []);
+
 export function createTrainingControl(post: Post): TrainingControl {
   let requested = false;
   let installed: { py: PyodideLike; options: TrainingStartOptions; cell?: Int32Array } | undefined;
@@ -59,45 +71,41 @@ export function createTrainingControl(post: Post): TrainingControl {
   let lastYield = 0;
   const acks = new Map<number, (ack: SaveResult) => void>();
 
-  async function save(): Promise<SaveResult> {
-    if (!installed) return { ok: false, error: 'Not a training process.' };
+  async function save(atExit = false): Promise<SaveResult> {
+    if (!installed) return { ok: false, error: 'Not a training process.', confirmed: false };
     const { py, options } = installed;
     const id = ++saveId;
+    let files: Array<[string, string]>;
     try {
-      if (py.FS.analyzePath(TRAINING_ARTIFACT_DIR).exists) {
-        for (const [path, full] of artifactFiles(py.FS, TRAINING_ARTIFACT_DIR)) {
-          const bytes = py.FS.readFile(full);
-          const message: TrainingWorkerMessage = { type: 'training-artifact', saveId: id, path, bytes };
-          post(message as unknown as WorkerToHost, [bytes.buffer as ArrayBuffer]);
-        }
+      files = listArtifacts(py.FS);
+      if (atExit && files.length === 0) return { ok: true, confirmed: false };
+      for (const [path, full] of files) {
+        const bytes = py.FS.readFile(full);
+        post({ type: 'training-artifact', saveId: id, path, bytes }, [bytes.buffer as ArrayBuffer]);
       }
     } catch (error) {
-      return { ok: false, error: `Could not read the artifacts: ${error instanceof Error ? error.message : String(error)}` };
+      return { ok: false, error: `Could not read the artifacts: ${error instanceof Error ? error.message : String(error)}`, confirmed: false };
     }
     const acked = options.acks
       ? new Promise<SaveResult>((resolve) => {
           acks.set(id, resolve);
-          setTimeout(() => acks.get(id) === resolve && (acks.delete(id), resolve({ ok: false, error: 'The page did not acknowledge the save.' })), ACK_TIMEOUT_MS);
+          setTimeout(() => acks.get(id) === resolve && (acks.delete(id), resolve({ ok: false, error: 'The page did not acknowledge the save.', confirmed: false })), ACK_TIMEOUT_MS);
         })
       : undefined;
-    post({ type: 'training-saved', saveId: id } satisfies TrainingWorkerMessage as unknown as WorkerToHost);
-    return acked ?? { ok: true };
+    post({ type: 'training-saved', saveId: id, files: files.length });
+    return acked ?? { ok: true, confirmed: false };
   }
 
   return {
     receive(message) {
-      const page = message as TrainingPageMessage;
-      if (page?.type === 'checkpoint') {
+      if (!isTrainingPageMessage(message)) return false;
+      if (message.type === 'checkpoint') {
         requested = true;
         return true;
       }
-      if (page?.type === 'training-saved-ack') {
-        const ack = page as TrainingSavedAck;
-        acks.get(ack.saveId)?.({ ok: ack.ok, error: ack.error });
-        acks.delete(ack.saveId);
-        return true;
-      }
-      return false;
+      acks.get(message.saveId)?.(message.superseded ? { ok: true, confirmed: false, superseded: true } : { ok: message.ok, error: message.error, confirmed: message.ok });
+      acks.delete(message.saveId);
+      return true;
     },
     install(py, options) {
       installed = { py, options, cell: options.flag ? new Int32Array(options.flag) : undefined };
@@ -113,13 +121,13 @@ export function createTrainingControl(post: Post): TrainingControl {
           return true;
         },
         tick: () => new Promise((resolve) => setTimeout(resolve, 0)),
-        /** Resolves with '' on success, else the reason (Python raises it). */
-        save: () => save().then((result) => (result.ok ? '' : (result.error ?? 'The save failed.'))),
+        /** Resolves with `{ error, confirmed }`: `error` '' unless the save failed (Python raises it); `confirmed` once the page committed it. */
+        save: () => save().then((result) => ({ error: result.ok ? '' : (result.error ?? 'The save failed.'), confirmed: result.confirmed })),
       });
     },
     async saveAtExit(stderr) {
       if (!installed) return;
-      const result = await save();
+      const result = await save(true);
       if (!result.ok) stderr(`bfwc.training: the artifacts were not saved: ${result.error ?? 'unknown error'}\n`);
     },
   };

@@ -84,6 +84,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
         restart: options.restart ?? {},
         stableAfterMs: options.stableAfterMs ?? DEFAULTS.stableAfterMs,
         security: Object.freeze({ applicationId, serviceId: id }),
+        projectId: spec.projectId,
         processes,
       }),
     );
@@ -133,6 +134,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
       if (disposed) return;
       disposed = true;
       await stopAll();
+      options.runtime.forgetApplication?.(applicationId);
       logs.close();
     },
     getService: (serviceId) => services.get(serviceId)?.snapshot(),

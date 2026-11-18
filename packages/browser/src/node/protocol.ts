@@ -23,6 +23,7 @@
  * `child-ipc-disconnect` between a parent process and the page (its child's side).
  */
 import type { HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo, VfsDelta, VfsOp, VfsSnapshot } from '@seanhogg/builderforce-webcontainers-core';
+import type { TrainingPageMessage, TrainingStartOptions, TrainingWorkerMessage } from '../runtimes/python/trainingProtocol.js';
 
 /** One file-system change, either way (the core journal's op). */
 export type FsOp = VfsOp;
@@ -53,6 +54,8 @@ export interface PythonStartOptions {
   extensions?: PythonExtensionRef[];
   /** This session's earlier `pip install`s, in order: each replayed with only its own indexes. */
   installs?: PipInstall[];
+  /** Only for the root process the Python provider spawned for a `training` service (runtimes/python/trainingChannel.ts). */
+  training?: TrainingStartOptions;
 }
 
 /** Where the PHP runtime's Composer installs come from (runtimes/php/composer/packagist.ts). */
@@ -186,6 +189,8 @@ export type HostToWorker =
   /** A raw TCP connection to the `net.Server` on `port`. */
   | { type: 'socket-accept'; connId: number; port: number }
   | { type: 'dial-result'; connId: number; ok: boolean }
+  /** A training process's checkpoint request and save acknowledgements (runtimes/python/trainingProtocol.ts). */
+  | TrainingPageMessage
   | ResponseMessage
   | SocketMessage
   | DialMessage
@@ -214,6 +219,8 @@ export type WorkerToHost =
   | ({ type: 'python-installed' } & PipInstall)
   /** A PHP process read the running PHP's version and extensions (the page's `php` provider checks services against them). */
   | { type: 'php-platform'; phpVersion: string; extensions: string[] }
+  /** A training process's saved artifacts (runtimes/python/trainingProtocol.ts). */
+  | TrainingWorkerMessage
   | ResponseMessage
   | SocketMessage
   | DialMessage

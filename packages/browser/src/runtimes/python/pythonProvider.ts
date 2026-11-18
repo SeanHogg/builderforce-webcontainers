@@ -11,7 +11,10 @@
  * A `training` service (`python train.py`) runs its entry point the same way,
  * with no server: ready once started, never restarted, asked to checkpoint
  * before it is stopped (`bfwc.training`; page side trainingChannel.ts, worker
- * side trainingControl.ts — pass the policy's `training` here). `import torch`
+ * side trainingControl.ts — pass the policy's `training` here; without it a
+ * training service is declined). Only the process the provider spawns gets the
+ * training control, and its artifacts are kept under the host's project id,
+ * the application's spec `projectId` and the service id (stable across runs). `import torch`
  * comes from a host extension (`PythonHostOptions.extensions`): the host's
  * module returns `@webdit/torch/pyodide`'s `torchPythonExtension(bridge)` —
  * the runtime takes no dependency on it — and lists `provides: ['torch',
@@ -35,8 +38,11 @@ export interface PythonProviderOptions extends NodeProviderOptions {
   training?: TrainingServices;
 }
 
-export function acceptsPythonService(service: ServiceSpec, fs?: VirtualFileSystem, provides: readonly string[] = []): Acceptance {
+export function acceptsPythonService(service: ServiceSpec, fs?: VirtualFileSystem, provides: readonly string[] = [], training = false): Acceptance {
   if (service.type !== 'application' && service.type !== 'training') return { ok: false, reason: `The python runtime runs application and training services; "${service.id}" is a ${service.type} service.` };
+  if (service.type === 'training' && !training) {
+    return { ok: false, reason: `Training service "${service.id}": this runtime has no training channel (createPythonProcessKind({ training }) passed to createPythonProvider as \`training\`), so it could neither checkpoint nor keep its artifacts.` };
+  }
   if (readinessOf(service).kind === 'query') return { ok: false, reason: `"query" readiness is for databases; service "${service.id}" runs on python.` };
   const command = service.command;
   if (!command || !isPythonCommand(command)) return { ok: false, reason: `Service "${service.id}": "${command ?? ''}" is not a Python command (python, pip, uvicorn, gunicorn, hypercorn, waitress-serve, flask, fastapi).` };
@@ -63,16 +69,24 @@ export function createPythonProvider(host: NodeServiceHost, options: PythonProvi
   const training = options.training;
   const { start } = createNodeProvider(host, {
     ...options,
-    // A training service's process can be asked to checkpoint — when the page can reach it.
-    controls: (service, process) => (service.type === 'training' && training?.canCheckpoint ? { checkpoint: async () => training.checkpoint(process.pid) } : options.controls?.(service, process)),
+    // A training service's process can be asked to checkpoint — when it was granted the control and the page can reach it.
+    controls: (service, process) =>
+      service.type === 'training' && training?.canCheckpoint && training.granted(process.pid) ? { checkpoint: async () => void training.checkpoint(process.pid) } : options.controls?.(service, process),
   });
   return {
     id: 'python',
-    accepts: (service) => acceptsPythonService(service, options.fs, options.provides),
+    accepts: (service) => acceptsPythonService(service, options.fs, options.provides, training !== undefined),
     start(service, context) {
-      // Before the spawn: the process's start message is built from this page-side registration, never its env.
-      if (service.type === 'training') training?.register(context.security);
-      return start(service, context);
+      if (service.type !== 'training') return start(service, context);
+      if (!training) throw new Error(`Training service "${service.id}": this runtime has no training channel.`); // accepts() declined it already
+      if (!context.projectId) throw new Error(`Training service "${service.id}": the start context has no application projectId to keep its artifacts under.`);
+      // Before the spawn, from the spec: the ONE process this start makes is the training process (never its children, never its env).
+      const release = training.expect(context.security, { specProjectId: context.projectId, serviceId: service.id });
+      try {
+        return start(service, context);
+      } finally {
+        release(); // consumed by the spawn; a spawn that threw leaves nothing expected
+      }
     },
   };
 }

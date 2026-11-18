@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { VirtualFileSystem, WORKSPACE_CONTEXT, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from '../src/node/processHost.js';
+import { NODE_ONLY, type ProcessKindPolicy } from '../src/node/processKinds.js';
 import { createDotnetProcessKind } from '../src/runtimes/dotnet/index.js';
 import { createPhpProcessKind } from '../src/runtimes/php/index.js';
 import { createPythonProcessKind } from '../src/runtimes/python/index.js';
@@ -50,6 +51,34 @@ describe('process-kind reports keyed by the page-side identity', () => {
     // B's next Python process replays nothing of A's.
     processes.spawnChild('python', ['app.py'], { identity: B, cwd: '/b' });
     expect(python.startOptions('python', B).python?.installs).toEqual([]);
+  });
+
+  it('every process exit reaches the end of the chain as exited(pid), however the process ended', () => {
+    const fs = new VirtualFileSystem();
+    fs.writeTree({ 'a/app.py': '' });
+    const ended: number[] = [];
+    const tail: ProcessKindPolicy = { ...NODE_ONLY, exited: (pid) => void ended.push(pid) };
+    const workers: WorkerLike[] = [];
+    const processes = new ProcessHost({
+      fs,
+      createWorker: () => {
+        const worker: WorkerLike = { onmessage: null, onerror: null, postMessage: () => undefined, terminate: () => undefined };
+        workers.push(worker);
+        return worker;
+      },
+      previewOrigin: 'https://app.test',
+      previewBase: '/__bfwc/p1/',
+      warmWorker: false,
+      kinds: createRustProcessKind(createDotnetProcessKind({}, createPhpProcessKind({}, tail))),
+    });
+    const exits = processes.spawnChild('node', ['a.js'], { identity: A });
+    const killed = processes.spawnChild('node', ['b.js'], { identity: A });
+    expect(ended).toEqual([]);
+    workers[0]!.onmessage?.({ data: { type: 'exit', code: 0 } });
+    killed.kill('SIGKILL');
+    expect(ended).toEqual([exits.pid, killed.pid]);
+    processes.dispose();
+    expect(ended).toEqual([exits.pid, killed.pid]);
   });
 
   it("an application's php-platform report is ignored; a workspace PHP process's is kept", () => {

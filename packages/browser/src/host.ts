@@ -106,7 +106,12 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   // In relay mode processes run on the preview origin (the relay starts them; with `previewOrigin`, the application's own relay), never the host's.
   const node = { ...options.node, createWorker: options.node?.createWorker ?? origins.createWorker };
   // Python commands run in Python process Workers (Pyodide), PHP commands in PHP ones (php-wasm), .NET commands in .NET ones (Mono), beside the Node ones.
-  const php = createPhpProcessKind(options.php, createPythonProcessKind(options.python));
+  // Memory cannot be shared with a Worker behind a relay or on another origin: training's shared checkpoint flag is off there
+  // (a SharedArrayBuffer in the start message could not cross). A custom `node.createWorker` is the embedder's to judge (`sharedFlags`).
+  const relayed = !!options.relayUrl || origins.enabled;
+  const pythonOptions = options.python?.training && relayed ? { ...options.python, training: { ...options.python.training, sharedFlags: false } } : options.python;
+  const python = createPythonProcessKind(pythonOptions);
+  const php = createPhpProcessKind(options.php, python);
   // Prebuilt wasm32-wasip1 modules (and the declined cargo/rustc) run in Rust process Workers.
   const kinds = createRustProcessKind(createDotnetProcessKind(options.dotnet, php));
   // Control 1: an application gets its own preview origin, or — only with the named opt-out — shares the relay's.
@@ -119,6 +124,8 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   };
   const originOf = origins.enabled ? origins.originOf : sharedAllowed ? undefined : refuseShared;
   const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, originOf, previewUrl, options: node, kinds, security: { telemetry } });
+  // Training checkpoints and save acknowledgements reach a process through the host.
+  python.training?.connect((pid, message) => processes.notify(pid, message));
   // Databases never run where processes do in relay mode: their Workers start on this (host) origin.
   const databaseWorkers = trackWorkers(databaseWorkerFactory(options.node));
 
@@ -156,6 +163,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     root,
     server,
     phpPlatform: php.platform,
+    pythonTraining: python.training,
     writeTree: (files, at) => fs.writeTree(files, at),
     // With the project at `/`, the hidden badge marker's directory is inside it: never ship it in a download.
     exportZip: (zipOptions) =>
@@ -189,6 +197,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
       processes.killApplication(applicationId, serviceId);
       if (serviceId === undefined) origins.release(applicationId); // its relay closes; its origin stays its own
     },
+    forgetApplication: (applicationId) => python.forgetApplication(applicationId),
     createDatabaseWorker: () => databaseWorkers.create(),
     security: () => telemetry,
     cookies,

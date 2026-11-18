@@ -1,6 +1,7 @@
 /** Stops and restarts racing starts, readiness waits and backoffs, and the end of the runtime. */
 import { describe, expect, it } from 'vitest';
 import { ApplicationStartError, startApplicationRuntime, type ApplicationSpec, type ServiceError, type ServiceSpec } from '../src/app.js';
+import { stopProcess } from '../src/app/stopService.js';
 import { fakeProvider, gate, settle, stubRuntime, until } from './app-fakeProvider.js';
 
 const svc = (id: string, extra: Partial<ServiceSpec> = {}): ServiceSpec => ({ id, type: 'application', runtime: 'fake', command: 'run', ...extra });
@@ -153,5 +154,38 @@ describe('stopping and restarting while things are in flight', () => {
     for (let i = 0; i < 2; i++) texts.push((await reader.read()).value!.text);
     await reader.cancel();
     expect(texts).toEqual(['l0', 'l1', '8 log lines dropped (reader fell behind).', 'l10']);
+  });
+});
+
+describe('the checkpoint stop deadline', () => {
+  /** A process that exits only on SIGKILL (137), or at `exitAfterMs`. */
+  function stubborn(checkpoint: () => Promise<void>, exitAfterMs?: number) {
+    const signals: string[] = [];
+    let exit!: (code: number) => void;
+    const exited = new Promise<number>((resolve) => (exit = resolve));
+    if (exitAfterMs !== undefined) setTimeout(() => exit(0), exitAfterMs);
+    return { signals, handle: { kill: (signal = 'SIGTERM') => (signals.push(signal), signal === 'SIGKILL' && exit(137)), wait: () => exited, checkpoint } };
+  }
+
+  it('the checkpoint request and the exit it asks for share ONE timeoutMs, then SIGTERM, then SIGKILL', async () => {
+    const { signals, handle } = stubborn(() => new Promise<void>((resolve) => setTimeout(resolve, 120)));
+    const started = Date.now();
+    expect(await stopProcess(handle, 200)).toBe(137);
+    const elapsed = Date.now() - started;
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    // 200 (checkpoint + its exit) + 200 (SIGTERM): SIGKILL near 400ms — not 120 + 200 + 200 with separate deadlines.
+    expect(elapsed).toBeGreaterThanOrEqual(390);
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it('a checkpoint request that never settles does not hold the stop past the deadline; an exit within it is the result', async () => {
+    const { signals, handle } = stubborn(() => new Promise<void>(() => undefined), 50);
+    expect(await stopProcess(handle, 200)).toBe(0);
+    expect(signals).toEqual([]);
+    const hung = stubborn(() => new Promise<void>(() => undefined));
+    const started = Date.now();
+    expect(await stopProcess(hung.handle, 100)).toBe(137);
+    expect(Date.now() - started).toBeLessThan(290);
+    expect(hung.signals).toEqual(['SIGTERM', 'SIGKILL']);
   });
 });

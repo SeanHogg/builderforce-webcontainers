@@ -21,5 +21,6 @@ export function createRustProcessKind(next: ProcessKindPolicy = NODE_ONLY): Proc
     },
     startOptions: (kind, context) => (kind === RUST_KIND ? {} : next.startOptions(kind, context)),
     receive: (kind, message, context) => kind !== RUST_KIND && next.receive(kind, message, context),
+    exited: (pid) => next.exited(pid),
   };
 }

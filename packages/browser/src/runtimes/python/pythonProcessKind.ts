@@ -13,8 +13,10 @@
  * writes another's installs. The terminal and installs are the workspace's
  * (`WORKSPACE_CONTEXT`). A call without a usable context is refused.
  *
- * With `training` set, training services' processes get the training control
- * and their saves go to the page's artifact store (trainingChannel.ts).
+ * With `training` set, the root process the Python provider spawns for a
+ * training service gets the training control, and its saves go to the page's
+ * artifact store (trainingChannel.ts); a process's training state is dropped
+ * when it exits (`exited`).
  */
 import { WORKSPACE_CONTEXT, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import type { ProcessKindPolicy } from '../../node/processKinds.js';
@@ -23,7 +25,6 @@ import { shebangRoute } from '../shebangRoute.js';
 import { createPipRecord, validPipInstall, type PipRecord } from './pipRecord.js';
 import { PYTHON_COMMAND_PATTERN, isPythonCommand } from './pythonCommand.js';
 import { createTrainingChannel, type TrainingChannel, type TrainingOptions } from './trainingChannel.js';
-import type { TrainingStartOptions } from './trainingProtocol.js';
 
 /** Host-only settings for Python processes: a program's environment can change neither. */
 export interface PythonHostOptions {
@@ -31,7 +32,7 @@ export interface PythonHostOptions {
   pyodideIndexURL?: string;
   /** Modules each Python Worker imports and installs before the program (pythonExtensions.ts). Absolute URLs, CORS-served. */
   extensions?: PythonExtensionRef[];
-  /** Training services: the host's project id and artifact store. Without it, training processes run with no training control. */
+  /** Training services: the host's project id and artifact store. Without it, the Python provider declines training services. */
   training?: TrainingOptions;
 }
 
@@ -75,7 +76,7 @@ export function createPythonProcessKind(options: PythonHostOptions = {}): Python
     },
     startOptions(kind: WorkerKind, context: SecurityContext): Pick<StartMessage, 'python' | 'php' | 'dotnet'> {
       if (kind !== 'python') return {};
-      const python: PythonStartOptions & { training?: TrainingStartOptions } = {
+      const python: PythonStartOptions = {
         indexURL: options.pyodideIndexURL,
         extensions: options.extensions,
         installs: usable(context) ? (records.get(context.applicationId)?.read() ?? []) : [],
@@ -85,11 +86,14 @@ export function createPythonProcessKind(options: PythonHostOptions = {}): Python
       return { python };
     },
     receive(kind: WorkerKind, message: unknown, context: SecurityContext) {
-      if (kind === 'python' && usable(context) && training?.receive(message, context)) return true;
+      if (training?.receive(message, kind === 'python' && usable(context) ? context : undefined)) return true;
       if ((message as { type?: unknown })?.type !== 'python-installed') return false;
       const install = kind === 'python' && usable(context) ? validPipInstall(message) : undefined;
       if (!install || !pipRecordFor(context).add(install)) rejectedReports++;
       return true;
+    },
+    exited(pid) {
+      training?.exited(pid);
     },
     forgetApplication(applicationId) {
       if (applicationId !== WORKSPACE_CONTEXT.applicationId) records.delete(applicationId);

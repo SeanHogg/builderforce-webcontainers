@@ -82,6 +82,8 @@ export interface ApplicationPortPolicy {
 export interface ApplicationHost extends AttributedProcesses {
   /** The runtime's port policy: the application's `dependsOn` graph is put in force here while it runs (W10 control 4). */
   readonly portPolicy: ApplicationPortPolicy;
+  /** The application was disposed: drop what the runtime keeps for it (its `pip install` record, training state). */
+  forgetApplication?(applicationId: string): void;
 }
 
 export interface ApplicationRuntimeOptions {

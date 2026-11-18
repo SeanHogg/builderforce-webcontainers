@@ -28,5 +28,6 @@ export function createDotnetProcessKind(options: DotnetHostOptions = {}, next: P
     },
     startOptions: (kind, context) => (kind === DOTNET_KIND ? { dotnet: { ...options } } : next.startOptions(kind, context)),
     receive: (kind, message, context) => kind !== DOTNET_KIND && next.receive(kind, message, context),
+    exited: (pid) => next.exited(pid),
   };
 }
