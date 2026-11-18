@@ -92,6 +92,10 @@ Planned work: run a frontend, an API and a Postgres database (PGlite in its own 
 
 The design and phases are in Builderforce PRD 31 §W9. Builderforce's run loop uses this as its browser target.
 
+**Runtimes after Node** (committed): Python (Pyodide), PHP (php-wasm), .NET (browser-wasm + Roslyn) and Rust (WASI). Each is a `RuntimeProvider` adapter that reaches the shared database through virtual TCP.
+
+**Python also runs LLM training** (LoRA/QLoRA on small models). It uses a PyTorch-style `torch` module backed by one WebGPU tensor engine with autograd, in `@webdit/torch`, so the math runs on the GPU.
+
 ## Toward a full Node runtime
 
 Known limits of what shipped, roughly in the order they are worth closing:
