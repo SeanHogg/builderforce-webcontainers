@@ -83,6 +83,15 @@ ships on its own.
 10. **Self-hosted package proxy.** A reference `PackageCdn` that serves npm
    tarballs, transformed to ESM, from your own infrastructure.
 
+## Full-stack applications (planned)
+
+Planned work: run a frontend, an API and a Postgres database (PGlite in its own Worker) as one application.
+- **Entry point:** `startApplicationRuntime(spec)` on a new `./app` subpath.
+- **Database access:** through `net.createConnection` to virtual TCP ports and a Postgres wire gateway, so unmodified `pg` / Drizzle work.
+- **Prerequisite:** item 18 (shared copy-on-read VFS).
+
+The design and phases are in Builderforce PRD 31 §W9. Builderforce's run loop uses this as its browser target.
+
 ## Toward a full Node runtime
 
 Known limits of what shipped, roughly in the order they are worth closing:
