@@ -100,6 +100,27 @@ $out['pg'] = [
     pg_result_status($prepared) === PGSQL_COMMAND_OK, $badPrepare, pg_result_status($list) === PGSQL_TUPLES_OK, pg_result_status($updated, PGSQL_STATUS_STRING),
     pg_field_type($list, 0), pg_field_type($list, 2), pg_result_error($list), pg_last_oid($created), $object->seen, pg_client_encoding($db), pg_set_client_encoding($db, 'UTF8'),
 ];
+
+// Recovery after a failed pg_execute; extension-shaped rows, fields, errors.
+pg_prepare($db, 'asInt', 'SELECT $1::int AS n');
+$bad = @pg_execute($db, 'asInt', ['not a number']);
+$good = pg_execute($db, 'asInt', ['5']);
+$both = pg_query($db, "SELECT 1 AS a, NULL::text AS b, 'xyz'::varchar(10) AS c");
+$errors = [];
+foreach ([fn () => pg_field_name($both, 9), fn () => pg_fetch_result($both, 0, 'nope')] as $call) {
+    try { $call(); } catch (ValueError $e) { $errors[] = $e->getMessage(); }
+}
+$table = pg_query($db, 'SELECT body FROM notes');
+$other = pg_connect($conninfo, PGSQL_CONNECT_FORCE_NEW);
+pg_close($other);
+try { pg_query($other, 'SELECT 1'); } catch (Error $e) { $errors[] = $e->getMessage(); }
+$out['more'] = [
+    $bad, pg_fetch_result($good, 0, 0), pg_transaction_status($db) === PGSQL_TRANSACTION_IDLE,
+    pg_fetch_all($both) === pg_fetch_all($both), pg_fetch_assoc($both)['a'], array_keys(pg_fetch_array($both, 0)),
+    pg_field_is_null($both, 0, 'b'), pg_field_prtlen($both, 0, 'c'), pg_field_size($both, 0), pg_field_table($table, 0), pg_field_table($both, 0),
+    $errors, pg_host($db) !== '', pg_port($db), pg_get_pid($db) > 0, pg_connection_reset($db), pg_connection_status($db) === PGSQL_CONNECTION_OK,
+    str_contains(var_export($db, true) . print_r($db, true), (string) $pass) && $pass !== '',
+];
 file_put_contents('result.json', json_encode($out));
 `;
 
@@ -136,7 +157,19 @@ describe('built-in PDO pgsql and pg_* (offline)', () => {
         reuse: [true, true, 'postgres'],
         bytea: ['00ff', '61005c62'],
         failed: [false, true, true],
-        pg: [1, 1, 1, [{ id: '2', body: 'from pg, edited', flag: 't', hex: '00ff' }], "'it''s'", true, false, true, 'UPDATE 1', 'int4', 'bool', '', 0, 'set before constructor', 'UTF8', 0],
+        pg: [1, 1, 1, [{ id: '2', body: 'from pg, edited', flag: 't', hex: '00ff' }], "'it''s'", true, false, true, 'UPDATE 1', 'int4', 'bool', '', false, 'set before constructor', 'UTF8', 0],
+        more: [
+          false, '5', true,
+          true, '1', [0, 'a', 1, 'b', 2, 'c'],
+          1, 3, 4, 'notes', false,
+          [
+            'pg_field_name(): Argument #2 ($field) must be less than the number of fields for this result set',
+            'pg_fetch_result(): Argument #3 ($field) must be a field name from this result set',
+            'PostgreSQL connection has already been closed',
+          ],
+          true, expect.any(String), true, true, true,
+          false,
+        ],
       });
     } finally {
       await app.dispose();

@@ -44,20 +44,29 @@ const CASES: Array<[string, string]> = [
   ['<?php function f(PDO $p = new PDO("sqlite::memory:")) { return new PDO($d); }', `<?php function f(PDO $p = new PDO("sqlite::memory:")) { return ${F}($d); }`],
   ['<?php $f = fn ($p = new PDO("sqlite::memory:")) => new PDO($d);', `<?php $f = fn ($p = new PDO("sqlite::memory:")) => ${F}($d);`],
   ['<?php #[Attr(new PDO("x"))] function g() {} const P = new PDO("sqlite::memory:"); $a = new PDO($d);', `<?php #[Attr(new PDO("x"))] function g() {} const P = new PDO("sqlite::memory:"); $a = ${F}($d);`],
-  ['<?php function h() { static $p = new PDO("sqlite::memory:"); return new PDO($d); }', `<?php function h() { static $p = new PDO("sqlite::memory:"); return ${F}($d); }`],
   // Strings, heredocs, nowdocs and comments are text.
   ['<?php echo "new PDO("; // new PDO(\n$s = <<<SQL\nnew PDO($x)\nSQL;\n$t = <<<\'T\'\nnew PDO(\nT;\n', '<?php echo "new PDO("; // new PDO(\n$s = <<<SQL\nnew PDO($x)\nSQL;\n$t = <<<\'T\'\nnew PDO(\nT;\n'],
+  // CANDIDATE catches comments between new and the name, and lists of imports.
+  ['<?php $a = new /* c */ PDO($d);', `<?php $a = ${F}($d);`],
+  ['<?php namespace App; use Foo, PDO as Db; $a = new Db($d);', `<?php namespace App; use Foo, PDO as Db; $a = ${F}($d);`],
+  // PHP 8.4's Pdo\Pgsql: construction needs no rewrite (the runtime declares the class), connect does.
+  ['<?php $a = new Pdo\\Pgsql($d); $b = Pdo\\Pgsql::connect($d); $c = \\Pdo\\Pgsql::connect($d);', `<?php $a = new Pdo\\Pgsql($d); $b = ${C}($d); $c = ${C}($d);`],
+  ['<?php namespace App; use Pdo\\Pgsql; $b = Pgsql::connect($d); $c = Other\\Pgsql::connect($d);', `<?php namespace App; use Pdo\\Pgsql; $b = ${C}($d); $c = Other\\Pgsql::connect($d);`],
   ['<?php $a = new PDOStatement(); class X extends PDO {}', '<?php $a = new PDOStatement(); class X extends PDO {}'],
   ['<?php $a = new PDO($d); __HALT_COMPILER(); data', '<?php $a = new PDO($d); __HALT_COMPILER(); data'],
 ];
 
 describe('Bfwc\\Pgsql\\Rewriter', () => {
   it('rewrites only constructions (and PDO::connect) of the global PDO outside constant expressions, keeping line numbers', { timeout: SLOW }, async () => {
-    const main = `<?php\n$cases = json_decode(<<<'JSON'\n${JSON.stringify(CASES.map(([source]) => source))}\nJSON, true);\necho json_encode(array_map([Bfwc\\Pgsql\\Rewriter::class, 'rewrite'], $cases));\n`;
+    // 'static $x = new …' is a constant expression only before PHP 8.3 (which allows any expression there).
+    const STATIC = '<?php function h() { if ($x) static $p = new PDO($d); return new PDO($d); }';
+    const all = [...CASES.map(([source]) => source), STATIC];
+    const main = `<?php\n$cases = json_decode(<<<'JSON'\n${JSON.stringify(all)}\nJSON, true);\necho json_encode([PHP_VERSION_ID, array_map([Bfwc\\Pgsql\\Rewriter::class, 'rewrite'], $cases)]);\n`;
     const { output, code } = await runPhp({ 'main.php': main });
     expect(code, output).toBe(0);
-    const results = JSON.parse(output) as string[];
+    const [version, results] = JSON.parse(output) as [number, string[]];
     CASES.forEach(([source, expected], i) => expect(results[i], source).toBe(expected));
+    expect(results[CASES.length]).toBe(version >= 80300 ? `<?php function h() { if ($x) static $p = ${F}($d); return ${F}($d); }` : `<?php function h() { if ($x) static $p = new PDO($d); return ${F}($d); }`);
   });
 
   it('a rewritten include compiles and runs: the constant-expression default stays native, the call reaches the runtime PDO', { timeout: SLOW }, async () => {
@@ -94,12 +103,62 @@ echo json_encode($out);
     expect(JSON.parse(output)).toEqual([['.', '..', 'a.txt', 'e'], [true, true, true], 'hello', [true, 1000000000], [true, true, 'hello'], [true, false, true, true, true, true, false]]);
   });
 
-  it("keeps PHP's own error text and path for a missing file, and a missing include", { timeout: SLOW }, async () => {
-    const { output } = await runPhp({ 'main.php': "<?php\n$r = file_get_contents('/project/nope.txt');\nvar_dump($r);\ninclude '/project/missing.php';\necho \"after\\n\";\n" });
-    expect(output).toContain('/project/nope.txt');
-    expect(output).toContain('No such file or directory');
-    expect(output).toContain('bool(false)');
-    expect(output).toContain('/project/missing.php');
-    expect(output).toContain('after');
+  it("keeps PHP's own error text and path, the warning counts, and the app's error_get_last()", { timeout: SLOW }, async () => {
+    const main = String.raw`<?php
+@trigger_error('the app\'s own', E_USER_NOTICE);
+$warnings = [];
+set_error_handler(function (int $level, string $message) use (&$warnings) { $warnings[] = $message; return true; });
+$out = [];
+file_exists('/project/nope.txt');
+is_file(__FILE__);
+file_put_contents('x.txt', 'x');
+unlink('x.txt');
+$out[] = error_get_last()['message'] ?? null; // untouched by the wrapper's own operations
+$out[] = count($warnings);
+file_get_contents('/project/nope.txt');
+$out[] = $warnings;
+$warnings = [];
+include '/project/missing.php';
+$out[] = $warnings;
+$warnings = [];
+$out[] = @file_get_contents('/project/nope.txt');
+$out[] = $warnings;
+echo json_encode($out);
+`;
+    const { output, code } = await runPhp({ 'main.php': main });
+    expect(code, output).toBe(0);
+    const [last, quiet, missingFile, missingInclude, suppressed, suppressedWarnings] = JSON.parse(output) as [string, number, string[], string[], unknown, string[]];
+    expect(last).toBe("the app's own");
+    expect(quiet).toBe(0); // the wrapper's own stats, writes and unlinks warn about nothing
+    expect(missingFile).toHaveLength(2); // the native text, then PHP's "call failed"
+    expect(missingFile[0]).toMatch(/\/project\/nope\.txt.*No such file or directory/);
+    expect(missingInclude).toHaveLength(2); // as natively: "Failed to open stream", "Failed opening … for inclusion"
+    expect(missingInclude.join('\n')).toContain('/project/missing.php');
+    expect(suppressed).toBe(false);
+    expect(suppressedWarnings.length).toBeLessThanOrEqual(2); // a handler still sees @-suppressed errors, as natively
+  });
+
+  it('caches each rewrite in one slot per file and misses on any edit, even a same-second, same-size one', { timeout: SLOW }, async () => {
+    const main = String.raw`<?php
+$load = new ReflectionMethod(Bfwc\Pgsql\Includes::class, 'load');
+$path = __DIR__ . '/inc.php';
+$out = [];
+file_put_contents($path, '<?php $a = new PDO($x);');
+touch($path, 1000000000);
+$out[] = $load->invoke(null, $path)[0];
+$slots = count(glob('/bfwc/cache/*'));
+$out[] = $load->invoke(null, $path)[0]; // the cache hit
+file_put_contents($path, '<?php $b = new PDO($x);'); // same size
+touch($path, 1000000000); // same mtime
+clearstatcache();
+$out[] = $load->invoke(null, $path)[0];
+file_put_contents($path, '<?php $b = new PDOX($x);');
+$out[] = $load->invoke(null, $path)[2];
+$out[] = count(glob('/bfwc/cache/*')) === $slots && is_file('/bfwc/cache/' . md5($path)); // still one slot for the file
+echo json_encode($out);
+`;
+    const { output, code } = await runPhp({ 'main.php': main });
+    expect(code, output).toBe(0);
+    expect(JSON.parse(output)).toEqual(['<?php $a = \\Bfwc\\Pgsql\\pdo($x);', '<?php $a = \\Bfwc\\Pgsql\\pdo($x);', '<?php $b = \\Bfwc\\Pgsql\\pdo($x);', false, true]);
   });
 });

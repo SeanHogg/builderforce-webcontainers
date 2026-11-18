@@ -14,6 +14,7 @@ import type { WrappableEmscriptenFs } from '../emscripten/wrappedFsWrites.js';
 import { INCLUDES_SOURCE } from './pgsql/includesSource.js';
 import { PDO_SOURCE } from './pgsql/pdoSource.js';
 import { PG_FUNCTIONS_SOURCE } from './pgsql/pgFunctionsSource.js';
+import { PG_SUPPORT_SOURCE } from './pgsql/pgSupportSource.js';
 import { REWRITER_SOURCE } from './pgsql/rewriterSource.js';
 import { STATEMENT_SOURCE } from './pgsql/statementSource.js';
 import { WIRE_SOURCE } from './pgsql/wireSource.js';
@@ -26,7 +27,7 @@ export const PHP_WASM_AUTO_PREPEND = '/internal/shared/auto_prepend_file.php';
 // Required at the top level of the auto-prepended script, so a CLI script it runs (rewritten) sees the global scope.
 const PREPEND = `<?php
 spl_autoload_register(static function (string $class): void {
-    static $files = ['Bfwc\\\\Pgsql\\\\Wire' => 'wire.php', 'Bfwc\\\\Pgsql\\\\Exception' => 'wire.php', 'Bfwc\\\\Pgsql\\\\PDO' => 'pdo.php', 'Bfwc\\\\Pgsql\\\\Statement' => 'statement.php', 'Bfwc\\\\Pgsql\\\\Rewriter' => 'rewriter.php'];
+    static $files = ['Bfwc\\\\Pgsql\\\\Wire' => 'wire.php', 'Bfwc\\\\Pgsql\\\\Exception' => 'wire.php', 'Bfwc\\\\Pgsql\\\\PDO' => 'pdo.php', 'Bfwc\\\\Pgsql\\\\Statement' => 'statement.php', 'Bfwc\\\\Pgsql\\\\Rewriter' => 'rewriter.php', 'Pdo\\\\Pgsql' => 'pdo-pgsql.php', 'Bfwc\\\\Pgsql\\\\Pg' => 'pg.php', 'PgSql\\\\Connection' => 'pg.php', 'PgSql\\\\Result' => 'pg.php'];
     if (isset($files[$class])) {
         require_once '${RUNTIME_LIBRARY_ROOT}/pgsql/' . $files[$class];
     }
@@ -37,7 +38,7 @@ if (!function_exists('pg_connect')) {
 }
 \\Bfwc\\Pgsql\\Includes::register();
 if (\\Bfwc\\Pgsql\\Includes::rewritesPrimary()) {
-    require $_SERVER['SCRIPT_FILENAME'];
+    require \\Bfwc\\Pgsql\\Includes::$primary;
     exit;
 }
 `;
@@ -50,6 +51,15 @@ const FILES: Readonly<Record<string, string>> = {
   'pgsql/includes.php': INCLUDES_SOURCE,
   'pgsql/rewriter.php': REWRITER_SOURCE,
   'pgsql/functions.php': PG_FUNCTIONS_SOURCE,
+  'pgsql/pg.php': PG_SUPPORT_SOURCE,
+  // PHP 8.4's driver class, declared only when pdo_pgsql is absent (an autoloader never runs for a class that exists).
+  'pgsql/pdo-pgsql.php': String.raw`<?php
+namespace Pdo;
+
+class Pgsql extends \Bfwc\Pgsql\PDO
+{
+}
+`,
 };
 
 /** Write the library and hook it into php-wasm's auto-prepended script (before the project is tracked). */

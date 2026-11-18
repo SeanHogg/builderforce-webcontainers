@@ -41,8 +41,9 @@ class PDO extends \PDO
     public static function pgsqlDsn(string $dsn): ?string
     {
         if (!str_contains($dsn, ':')) {
-            $dsn = (string) ini_get('pdo.dsn.' . $dsn);
-        } elseif (str_starts_with($dsn, 'uri:')) {
+            $dsn = (string) ini_get('pdo.dsn.' . $dsn); // an alias may itself be a uri:
+        }
+        if (str_starts_with($dsn, 'uri:')) {
             $handle = @fopen(substr($dsn, 4), 'rb');
             $dsn = $handle ? rtrim((string) fgets($handle), "\r\n") : '';
             $handle && fclose($handle);

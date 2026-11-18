@@ -25,6 +25,8 @@ final class Wire
     public string $status = 'I';
     /** The database connected to. */
     public string $database;
+    /** The backend's process id (BackendKeyData). */
+    public int $pid = 0;
     /** @var array<string, string> ParameterStatus values (server_version …). */
     public array $parameters = [];
     private string $endpoint;
@@ -177,6 +179,8 @@ final class Wire
                 $this->pending ??= Exception::fromState('0A000', 'COPY TO STDOUT is not supported by the runtime\'s pgsql client; use SELECT');
             } elseif ($type === 'd' || $type === 'c') {
                 continue; // COPY TO STDOUT's data, drained
+            } elseif ($type === 'K') {
+                $this->pid = unpack('N', $body)[1];
             } elseif ($type === 'S') {
                 [$name, $value] = explode("\0", $body);
                 $this->parameters[$name] = $value;
@@ -272,7 +276,7 @@ final class Wire
             }
             $name = substr($body, $at, $end - $at);
             $meta = unpack('Ntable/ncolumn/Ntype/nsize/Nmod/nformat', substr($body, $end + 1, 18));
-            $fields[] = ['name' => $name, 'type' => $meta['type']];
+            $fields[] = ['name' => $name, 'type' => $meta['type'], 'table' => $meta['table'], 'size' => $meta['size'] > 32767 ? $meta['size'] - 65536 : $meta['size']];
             $at = $end + 19;
         }
         return $fields;
