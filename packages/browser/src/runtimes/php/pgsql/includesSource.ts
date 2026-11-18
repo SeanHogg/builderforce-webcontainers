@@ -82,15 +82,20 @@ final class Includes
 
     /**
      * Run $call on the native file wrapper (one restore and one re-register per
-     * operation) under a scoped error handler: the first error is kept, not
-     * shown, and the app's error_get_last() is left as it was. When $call
-     * fails (false or null) and $report, that error is raised again.
+     * operation) under a scoped error handler: errors are kept, not shown,
+     * and the app's error_get_last() is left as it was. When $call fails
+     * (false or null) and $report, the first E_WARNING (else the last error)
+     * is raised again.
      */
     private static function native(callable $call, bool $report = true): mixed
     {
         $error = null;
-        set_error_handler(static function (int $level, string $message) use (&$error): bool {
-            $error ??= $message;
+        $warned = false;
+        set_error_handler(static function (int $level, string $message) use (&$error, &$warned): bool {
+            if (!$warned) {
+                $error = $message;
+                $warned = $level === E_WARNING;
+            }
             return true;
         });
         stream_wrapper_restore('file');
@@ -123,7 +128,8 @@ final class Includes
             if ($loaded === null || $loaded[2] === false) {
                 return null;
             }
-            self::$handoff[$path] = [$loaded[0], $loaded[1]];
+            // The CLI skips a leading #! line; required, it would print. A newline keeps the line numbers.
+            self::$handoff[$path] = [preg_replace('/\A#![^\n]*/', '', $loaded[0]), $loaded[1]];
             return $path;
         }, false);
         return self::$primary !== null;
@@ -131,11 +137,14 @@ final class Includes
 
     /**
      * $path's source, rewritten where needed, its stat, and whether it changed;
-     * null when it cannot be read. Native wrapper only.
+     * null when it is not a regular file or cannot be read. Native wrapper only.
      * @return array{0: string, 1: array, 2: bool}|null
      */
     private static function load(string $path): ?array
     {
+        if (!is_file($path)) {
+            return null;
+        }
         $source = file_get_contents($path);
         if ($source === false) {
             return null;
