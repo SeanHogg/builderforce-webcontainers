@@ -11,10 +11,12 @@
  *   BFWC-NG005  warning  `localize` / i18n configuration (ignored here)
  */
 import type { VirtualFileSystem } from '../vfs.js';
-import { dirname, join } from '../paths.js';
 import { templateArrowOffsets } from './angularTemplates.js';
-import type { CheckDiagnostic, DiagnosticCategory } from './diagnostics.js';
-import { blankComments, lineColumn, stringEnd } from './sourceScan.js';
+import { lineColumn, type CheckDiagnostic, type DiagnosticCategory } from './diagnostics.js';
+import { maskCode, skipString } from '../angular/scanner.js';
+import { stringLiteralValue } from '../angular/syntax.js';
+import { resolveResourcePath } from '../componentResources.js';
+import { parseLooseJson, readDependencies } from '../projectConfig.js';
 
 export const ANGULAR_DIAGNOSTIC = {
   templateArrow: 1,
@@ -44,9 +46,21 @@ const SCRIPT = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const IGNORED_DIR = /(^|\/)(?:node_modules|dist|\.angular)\//;
 /** Server-only entry points an `ng new --ssr` app has; they are meant to import the SSR packages. */
 const SERVER_FILE = /(?:^|\/)server\.[mc]?[jt]s$|\.server\.[mc]?[jt]s$/;
-const SERVER_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(["'])(@angular\/(?:ssr|platform-server)(?:\/[^"'\n]*)?)\1/g;
+/**
+ * The patterns below run over MASKED code (angular/scanner.ts): comments,
+ * regexes and string contents are blank, a literal's quotes are kept — so each
+ * finds where a literal starts, and the literal is then read from the source.
+ */
+const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(?=["'])/g;
+const SERVER_PACKAGE = /^@angular\/(?:ssr|platform-server)(?:\/|$)/;
 const INLINE_TEMPLATE = /\btemplate\s*:\s*(?=["'`])/g;
-const TEMPLATE_URL = /\btemplateUrl\s*:\s*(["'])([^"'\n]+)\1/g;
+const TEMPLATE_URL = /\btemplateUrl\s*:\s*(?=["'`])/g;
+
+/** The value of the string literal starting at `start`, and where it ends. */
+function literalAt(text: string, start: number): { value: string | undefined; end: number } {
+  const end = skipString(text, start);
+  return { value: stringLiteralValue(text.slice(start, end)), end };
+}
 
 const SERVER_OPTIONS: Record<string, string> = {
   ssr: 'server-side rendering',
@@ -61,15 +75,6 @@ interface Json {
 
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-function dependsOnAngular(fs: VirtualFileSystem): boolean {
-  try {
-    const pkg = JSON.parse(fs.readText('/package.json') ?? '') as Json;
-    return [pkg.dependencies, pkg.devDependencies, pkg.peerDependencies].some((deps) => isObject(deps) && '@angular/core' in deps);
-  } catch {
-    return false;
-  }
-}
-
 function diagnostic(path: string, text: string, offset: number, code: number, category: DiagnosticCategory, message: string): CheckDiagnostic {
   return { file: path.slice(1), ...lineColumn(text, offset), message, code, category, source: 'angular' };
 }
@@ -83,18 +88,18 @@ function templateDiagnostics(fs: VirtualFileSystem, sources: string[]): CheckDia
   for (const path of sources) {
     if (!/\.[mc]?ts$/.test(path) || path.endsWith('.d.ts')) continue;
     const text = fs.readText(path) ?? '';
-    const code = blankComments(text);
+    const code = maskCode(text);
     for (const match of code.matchAll(INLINE_TEMPLATE)) {
       const start = match.index + match[0].length;
-      const end = stringEnd(code, start);
+      const end = skipString(text, start);
       const template = text.slice(start + 1, end - 1);
       for (const offset of templateArrowOffsets(template)) {
         out.push(diagnostic(path, text, start + 1 + offset, ANGULAR_DIAGNOSTIC.templateArrow, 'error', ARROW_MESSAGE));
       }
     }
     for (const match of code.matchAll(TEMPLATE_URL)) {
-      const url = match[2]!;
-      templateFiles.add(url.startsWith('/') ? join(url) : join(dirname(path), url));
+      const { value: url } = literalAt(text, match.index + match[0].length);
+      if (url) templateFiles.add(resolveResourcePath(path, url));
     }
   }
   for (const path of templateFiles) {
@@ -112,9 +117,11 @@ function serverImportDiagnostics(fs: VirtualFileSystem, sources: string[]): Chec
   for (const path of sources) {
     if (SERVER_FILE.test(path)) continue;
     const text = fs.readText(path) ?? '';
-    for (const match of blankComments(text).matchAll(SERVER_IMPORT)) {
-      const specifier = match[2]!;
-      const offset = match.index + match[0].length - specifier.length - 1;
+    for (const match of maskCode(text).matchAll(SPECIFIER)) {
+      const quote = match.index + match[0].length;
+      const specifier = literalAt(text, quote).value;
+      if (specifier === undefined || !SERVER_PACKAGE.test(specifier)) continue;
+      const offset = quote + 1;
       out.push(
         diagnostic(
           path,
@@ -147,7 +154,10 @@ function angularJsonDiagnostics(fs: VirtualFileSystem): CheckDiagnostic[] {
   if (text === undefined) return [];
   let config: Json;
   try {
-    config = JSON.parse(text) as Json;
+    // angular.json may carry comments and trailing commas, as tsconfig files do.
+    const parsed = parseLooseJson(text);
+    if (!isObject(parsed)) return [];
+    config = parsed;
   } catch {
     return [];
   }
@@ -196,7 +206,7 @@ function angularJsonDiagnostics(fs: VirtualFileSystem): CheckDiagnostic[] {
 
 /** Angular constructs this runtime cannot run, as check diagnostics. Empty unless the project depends on `@angular/core`. */
 export function angularDiagnostics(fs: VirtualFileSystem): CheckDiagnostic[] {
-  if (!dependsOnAngular(fs)) return [];
+  if (!Object.hasOwn(readDependencies(fs), '@angular/core')) return [];
   const sources = fs.list().filter((path) => SCRIPT.test(path) && !IGNORED_DIR.test(path));
   return [...templateDiagnostics(fs, sources), ...serverImportDiagnostics(fs, sources), ...angularJsonDiagnostics(fs)];
 }

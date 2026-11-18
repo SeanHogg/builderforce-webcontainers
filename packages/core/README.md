@@ -16,5 +16,10 @@ const server = new DevServer({ fs, transformer: createEsbuildTransformer(esbuild
 const res = await server.handle('/src/main.tsx'); // { status, headers, body }
 ```
 
+Components compile through the `ComponentCompilers` port: Vue and Svelte by
+file extension, and Angular 17–20 (standalone, JIT) for the TypeScript of a
+project depending on `@angular/core` — see `angularCompilerFor` and the
+[browser README](../browser/README.md#angular) for what is supported.
+
 For the in-browser runtime, use
 [`@seanhogg/builderforce-webcontainers`](../browser). MIT licensed.

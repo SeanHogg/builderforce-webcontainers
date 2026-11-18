@@ -12,15 +12,25 @@ import { isBareSpecifier, resolveLocal } from './resolve.js';
 
 const URL_REF = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
 
-export function rewriteCssUrls(fs: VirtualFileSystem, cssPath: string, css: string, base: string): string {
+/**
+ * Every local `url(...)` of a stylesheet, resolved against the stylesheet's own
+ * file and replaced by `urlOf(the VFS file)` (its `?query`/`#fragment` kept).
+ * URLs, data URIs and refs that resolve to nothing are left as written. Shared
+ * by the dev server (preview URLs) and the build (hashed asset URLs).
+ */
+export function mapCssUrls(fs: VirtualFileSystem, cssPath: string, css: string, urlOf: (path: string) => string): string {
   return css.replace(URL_REF, (match, quote: string, ref: string) => {
     if (/^(data:|https?:|\/\/|#)/i.test(ref)) return match;
     const [pathPart] = ref.split(/[?#]/);
     if (!pathPart) return match;
     const resolved = resolveLocal(fs, dirname(cssPath), pathPart);
     if (!resolved) return match;
-    return `url(${quote}${base}${resolved.slice(1)}${ref.slice(pathPart.length)}${quote})`;
+    return `url(${quote}${urlOf(resolved)}${ref.slice(pathPart.length)}${quote})`;
   });
+}
+
+export function rewriteCssUrls(fs: VirtualFileSystem, cssPath: string, css: string, base: string): string {
+  return mapCssUrls(fs, cssPath, css, (path) => base + path.slice(1));
 }
 
 /**

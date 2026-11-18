@@ -29,6 +29,19 @@ describe('createCdnComponentCompilers', () => {
     ]);
   });
 
+  it('serves Angular 17–20 from the core without a download, and refuses other majors', async () => {
+    const { loaded, importModule } = loader();
+    const compilers = createCdnComponentCompilers({ importModule });
+    const angular = await compilers('angular', { '@angular/core': '^20.0.0', 'zone.js': '~0.15.0' });
+    const out = await angular.compile(`@Injectable() export class S { constructor(h: Http) {} }`, { path: '/src/s.ts', dev: true });
+    expect(out.code).toContain('static ctorParameters = () => [{ type: Http }]');
+    expect(out.typescript).toEqual({ experimentalDecorators: true, useDefineForClassFields: false, lowerAsync: true });
+    expect((await (await compilers('angular', { '@angular/core': '~17.3.0' })).compile('', { path: '/a.ts', dev: true })).typescript?.lowerAsync).toBeUndefined();
+    await expect(compilers('angular', { '@angular/core': '^16.2.0' })).rejects.toThrow(/Angular 16 is not supported/);
+    await expect(compilers('angular', { '@angular/core': '^21.0.0' })).rejects.toThrow(/Angular 21 is not supported/);
+    expect(loaded).toEqual([]);
+  });
+
   it('falls back to the current major for non-registry ranges, and retries failed loads', async () => {
     const { loaded, importModule } = loader();
     const compilers = createCdnComponentCompilers({ importModule, svelteCompilerUrl: (range) => `https://fail.example/${range}` });

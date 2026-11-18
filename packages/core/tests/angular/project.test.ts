@@ -89,6 +89,7 @@ describe('detectProject on Angular', () => {
       'src/index.html': '<app-root></app-root>',
       'src/main.ts': '',
       'src/polyfills.ts': '',
+      'src/styles.scss': '',
     });
     expect(detectProject(fs)).toEqual({
       supported: true, kind: 'angular', framework: 'angular', htmlPath: '/src/index.html', entry: '/src/main.ts',
@@ -153,5 +154,35 @@ describe('angularCompilerFor', () => {
     expect(() => angularCompilerFor({ '@angular/core': '^16.2.0' })).toThrow(/Angular 16 is not supported.*17–20/);
     expect(() => angularCompilerFor({ '@angular/core': '~17.3.0' })).not.toThrow();
     expect(() => angularCompilerFor({ '@angular/core': 'workspace:*' })).not.toThrow();
+  });
+
+  it('lets ranges that name no major (dist-tags, *) through ungated', () => {
+    for (const range of ['latest', 'next', '*']) expect(() => angularCompilerFor({ '@angular/core': range })).not.toThrow();
+  });
+});
+
+describe('detectProject on Angular meta-frameworks', () => {
+  it('sends Analog to the Node runtime', () => {
+    const fs = project({
+      'package.json': JSON.stringify({ dependencies: { ...ANGULAR, '@analogjs/platform': '^1.10.0' } }),
+      'index.html': '<app-root></app-root>',
+      'src/main.ts': '',
+    });
+    expect(detectProject(fs)).toMatchObject({ supported: false, reason: 'Analog needs its Vite build pipeline.' });
+  });
+});
+
+describe('angular.json package global styles', () => {
+  it('keeps workspace stylesheets as VFS paths and spells package ones bare', () => {
+    const fs = project({
+      'package.json': JSON.stringify({ dependencies: ANGULAR }),
+      'angular.json': JSON.stringify({ projects: { app: { projectType: 'application', architect: { build: { options: {
+        styles: ['@angular/material/prebuilt-themes/azure-blue.css', 'node_modules/bootstrap/dist/css/bootstrap.min.css', 'src/styles.css'],
+      } } } } } }),
+      'src/index.html': '',
+      'src/main.ts': '',
+      'src/styles.css': '',
+    });
+    expect(detectProject(fs).preludes).toEqual(['@angular/material/prebuilt-themes/azure-blue.css', 'bootstrap/dist/css/bootstrap.min.css', '/src/styles.css', '@angular/compiler']);
   });
 });

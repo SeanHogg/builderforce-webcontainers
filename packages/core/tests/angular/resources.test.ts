@@ -75,3 +75,14 @@ describe('inlineResources', () => {
     await expect(inlineResources(`@Component({ styleUrl: './a.scss' }) class X {}`, req)).rejects.toThrow(/needs a CSS preprocessor/);
   });
 });
+
+describe('maskCode', () => {
+  it('reads `/` after a postfix ++ / -- as division, not a regex', async () => {
+    const { maskCode } = await import('../../src/angular/scanner.js');
+    const source = 'let i = 0; const y = i++ / 2; const z = i-- / 3; const s = "a/b"; const r = /x/g;';
+    const masked = maskCode(source);
+    expect(masked).toHaveLength(source.length);
+    expect(masked).toContain('const y = i++ / 2; const z = i-- / 3; const s = "   ";');
+    expect(masked).toContain('const r =     ;');
+  });
+});

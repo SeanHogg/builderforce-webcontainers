@@ -22,7 +22,7 @@ export const CONSOLE_MESSAGE_TYPE = 'bfwc:console';
 export const CONSOLE_MESSAGE_LIMIT = 1000;
 /** Error messages forwarded per page load, counted apart from console output; an error loop must not flood the host either. */
 export const ERROR_MESSAGE_LIMIT = 100;
-/** What raised a forwarded error: an uncaught throw, an unhandled rejection, or an Error object passed to `console.error`. */
+/** What raised a forwarded error: an uncaught throw, an unhandled rejection, or (Angular pages) an Error / NG-coded string passed to `console.error`. */
 export type PreviewErrorSource = 'error' | 'rejection' | 'console';
 
 /**
@@ -30,15 +30,40 @@ export type PreviewErrorSource = 'error' | 'rejection' | 'console';
  * app's console output, to the host page (`window.parent`): how an editor — or
  * an agent — learns what the app did without scraping the iframe. Console
  * arguments are flattened to text (errors with their stack, objects as JSON),
- * each message capped at 4,000 characters. A `console.error` given an Error
- * object is also forwarded as an error (`source: 'console'`): that is how a
- * failed `bootstrapApplication(...).catch(err => console.error(err))` or
- * Angular's ErrorHandler reports, with no uncaught error at all. Plain-string
- * `console.error` calls stay console output. Errors are posted raw; the host
+ * each message capped at 4,000 characters. Errors are posted raw; the host
  * extracts framework codes (see previewErrorText.ts). Each message carries
  * `nonce`, the runtime's (see previewBridge.ts), which the host checks.
+ *
+ * With `forwardConsoleErrors` (the dev server sets it for Angular apps only), a
+ * `console.error` is ALSO forwarded as an error (`source: 'console'`) when one
+ * of its arguments is an Error object or a string naming an Angular code
+ * (`NG0303`): that is how a failed
+ * `bootstrapApplication(...).catch(err => console.error(err))`, Angular's
+ * ErrorHandler and its template-binding checks report, with no uncaught error at
+ * all. Off, `console.error` is console output only — other frameworks (and
+ * libraries) log errors they handled, which a host must not count as failures.
  */
-export function errorBridgeScript(nonce = ''): string {
+export interface ErrorBridgeOptions {
+  forwardConsoleErrors?: boolean;
+}
+
+/** An Angular runtime/compiler error code inside a console string (`NG0303`, `NG02100`, `NG8001`). */
+const NG_CODE = /\bNG0?\d{4}\b/;
+
+export function errorBridgeScript(nonce = '', options: ErrorBridgeOptions = {}): string {
+  const forward = options.forwardConsoleErrors
+    ? `
+      if (level === 'error') {
+        var raised;
+        for (var i = 0; i < arguments.length; i++) if (arguments[i] instanceof Error) { raised = arguments[i]; break; }
+        if (raised) send(raised.message, raised.stack, 'console');
+        else {
+          for (var j = 0; j < arguments.length; j++) {
+            if (typeof arguments[j] === 'string' && ${NG_CODE}.test(arguments[j])) { send(Array.prototype.map.call(arguments, text).join(' ').slice(0, 4000), undefined, 'console'); break; }
+          }
+        }
+      }`
+    : '';
   return `<script>(function(){
   var NONCE = ${scriptLiteral(nonce)};
   var errors = 0;
@@ -61,12 +86,7 @@ export function errorBridgeScript(nonce = ''): string {
       if (sent < ${CONSOLE_MESSAGE_LIMIT}) {
         sent++;
         try { parent.postMessage({ type: ${JSON.stringify(CONSOLE_MESSAGE_TYPE)}, level: level, text: Array.prototype.map.call(arguments, text).join(' ').slice(0, 4000), href: location.href, nonce: NONCE }, '*'); } catch (_) {}
-      }
-      if (level === 'error') {
-        for (var i = 0; i < arguments.length; i++) {
-          if (arguments[i] instanceof Error) { send(arguments[i].message, arguments[i].stack, 'console'); break; }
-        }
-      }
+      }${forward}
       return original.apply(console, arguments);
     };
   });
@@ -90,6 +110,8 @@ export interface HtmlOptions {
   refreshRuntime?: string;
   /** The runtime's nonce, carried by every message the bridge posts to the host. */
   nonce?: string;
+  /** Forward `console.error` of an Error / Angular-coded string as an error too (see {@link errorBridgeScript}). Angular pages only. */
+  forwardConsoleErrors?: boolean;
 }
 
 /** A host script as a tag. `</script>` inside the body would end the tag early, so it is escaped. */
@@ -109,7 +131,7 @@ export function transformHtml(html: string, options: HtmlOptions): string {
   if (attributionEnabled(options.attribution)) out = injectAttribution(out);
 
   const bridge = [
-    errorBridgeScript(options.nonce),
+    errorBridgeScript(options.nonce, { forwardConsoleErrors: options.forwardConsoleErrors }),
     previewSocketScript(options.nonce),
     hotUpdateScript(base),
     ...(options.scripts ?? []).map(scriptTag),

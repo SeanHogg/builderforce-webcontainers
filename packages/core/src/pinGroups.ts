@@ -1,4 +1,5 @@
 import { isRegistryRange } from './packageCdn.js';
+import { ANGULAR_MAJORS } from './angular/versions.js';
 
 /**
  * Packages that must load at ONE version for a framework to work, pinned from
@@ -15,11 +16,9 @@ export interface PinGroup {
   lockstep: readonly string[];
   /** Lockstep packages added at the anchor's range even when undeclared (commonly imported). */
   implied: readonly string[];
-  /** Companion ranges by the anchor's major, used only when the project declares none. */
-  companions: Readonly<Record<number, Readonly<Record<string, string>>>>;
+  /** Companion ranges for the anchor majors in `majors`, used only when the project declares none. */
+  companions: ReadonlyArray<{ majors: { readonly min: number; readonly max: number }; ranges: Readonly<Record<string, string>> }>;
 }
-
-const ANGULAR_COMPANIONS = { rxjs: '~7.8.0', tslib: '^2.3.0' };
 
 export const PIN_GROUPS: readonly PinGroup[] = [
   {
@@ -37,7 +36,7 @@ export const PIN_GROUPS: readonly PinGroup[] = [
       '@angular/animations', '@angular/common', '@angular/compiler', '@angular/core',
       '@angular/forms', '@angular/platform-browser', '@angular/router',
     ],
-    companions: { 17: ANGULAR_COMPANIONS, 18: ANGULAR_COMPANIONS, 19: ANGULAR_COMPANIONS, 20: ANGULAR_COMPANIONS },
+    companions: [{ majors: ANGULAR_MAJORS, ranges: { rxjs: '~7.8.0', tslib: '^2.3.0' } }],
   },
 ];
 
@@ -56,8 +55,8 @@ export function applyPinGroups(dependencies: Readonly<Record<string, string>>, g
     for (const name of group.lockstep) if (Object.hasOwn(dependencies, name)) out[name] = range;
     for (const name of group.implied) out[name] ??= range;
     const major = rangeMajor(range);
-    const companions = major === undefined ? undefined : group.companions[major];
-    for (const [name, companion] of Object.entries(companions ?? {})) out[name] ??= companion;
+    const companions = major === undefined ? undefined : group.companions.find(({ majors }) => major >= majors.min && major <= majors.max);
+    for (const [name, companion] of Object.entries(companions?.ranges ?? {})) out[name] ??= companion;
   }
   return out;
 }

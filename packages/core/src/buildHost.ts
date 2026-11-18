@@ -12,6 +12,7 @@ import { loaderFor } from './transformer.js';
 import { basename, dirname, extname } from './paths.js';
 import { isBareSpecifier, resolveAlias, resolveLocal, resolvePackage } from './resolve.js';
 import { contentHash } from './hash.js';
+import { mapCssUrls } from './styleModules.js';
 import { compileStylesheet, preprocessStyleBlock, type StylesheetContext } from './styles/compile.js';
 import { lessCandidates, sassCandidates } from './styles/compilers.js';
 import { isCssModule, isStylesheet, styleLanguageOf } from './styles/languages.js';
@@ -79,6 +80,12 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
   function cssAssetUrl(path: string): string {
     const name = emitAsset(path);
     return isRelativeBase(base) ? `./${name}` : `${base}assets/${name}`;
+  }
+
+  /** An asset's URL from the page (CSS inlined into a <style> tag): the page sits at the site root, beside `assets/`. */
+  function pageAssetUrl(path: string): string {
+    const name = emitAsset(path);
+    return isRelativeBase(base) ? `./assets/${name}` : `${base}assets/${name}`;
   }
 
   /**
@@ -156,7 +163,8 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
       if (kind) {
         const compiler = await options.components(kind, config.dependencies);
         const preprocessStyle = (lang: string, source: string) => preprocessStyleBlock(options.styles, lang, source, path);
-        const resources = componentResources({ fs, path, styles: options.styles });
+        // Inlined CSS lands in a <style> tag in the page, so its url()s become the emitted assets' page URLs.
+        const resources = componentResources({ fs, path, styles: options.styles, rewriteCss: (file, css) => mapCssUrls(fs, file, css, pageAssetUrl) });
         const compiled = await compiler.compile(fs.readText(path) ?? '', { path, dev: false, preprocessStyle, ...resources });
         const code = withPreludes(compiled.code, path, profile);
         const typescript = compiled.typescript ? { typescript: { ...config.typescript, ...compiled.typescript } } : {};

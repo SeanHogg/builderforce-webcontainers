@@ -90,6 +90,9 @@ function parseQuery(search: string): ImportQuery | undefined {
   return undefined;
 }
 
+/** Angular reports bootstrap failures and template errors through console.error, not as uncaught errors (see errorBridgeScript). */
+const forwardsConsoleErrors = (profile: ProjectProfile): boolean => profile.framework === 'angular';
+
 const isHtmlFile = (path: string): boolean => {
   const ext = extname(path);
   return ext === '.html' || ext === '.htm';
@@ -232,7 +235,7 @@ export class DevServer {
       if (componentKindFor(file, ctx.config.dependencies)) return reply(200, JS_MIME, await compileComponent(ctx, file));
       if (loaderFor(ext)) return reply(200, JS_MIME, await this.compileWithRefresh(ctx, file));
       if (isHtmlFile(file)) {
-        return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: badge, scripts: this.previewScripts, nonce: this.options.previewNonce }));
+        return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: badge, scripts: this.previewScripts, nonce: this.options.previewNonce, forwardConsoleErrors: forwardsConsoleErrors(this.profile()) }));
       }
       return reply(200, mimeFor(ext), fs.readFile(file) ?? '');
     } catch (error) {
@@ -280,7 +283,7 @@ export class DevServer {
     const html = this.options.fs.readText(profile.htmlPath) ?? '';
     const { base, attribution } = this.options;
     const refreshRuntime = this.refreshEnabled() ? (await this.packageCdn()).urlFor('react-refresh', '/runtime') : undefined;
-    return reply(200, 'text/html; charset=utf-8', transformHtml(html, { base, entry: profile.entry, attribution, scripts: this.previewScripts, refreshRuntime, nonce: this.options.previewNonce }));
+    return reply(200, 'text/html; charset=utf-8', transformHtml(html, { base, entry: profile.entry, attribution, scripts: this.previewScripts, refreshRuntime, nonce: this.options.previewNonce, forwardConsoleErrors: forwardsConsoleErrors(profile) }));
   }
 
   private packageCdn(): Promise<PackageCdn> {

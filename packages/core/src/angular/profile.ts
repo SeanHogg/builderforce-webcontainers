@@ -39,9 +39,15 @@ function assetDir(asset: AngularAsset, sourceRoot: string): StaticDir {
   return { from, to: join('/', asset.output ?? '') };
 }
 
-/** A polyfill entry: a workspace file becomes its absolute path, anything else stays a package specifier. */
-function polyfillSpecifier(fs: VirtualFileSystem, polyfill: string): string {
-  return resolveLocal(fs, '/', join('/', polyfill)) ?? polyfill;
+/**
+ * A `polyfills` or `styles` entry as a prelude specifier: a workspace file
+ * becomes its absolute path; anything else names a package file
+ * (`zone.js`, `@angular/material/prebuilt-themes/azure-blue.css`), spelled
+ * bare — `node_modules/bootstrap/dist/css/bootstrap.min.css` included — so it
+ * loads like any package import (a package stylesheet is linked from the CDN).
+ */
+function preludeSpecifier(fs: VirtualFileSystem, entry: string): string {
+  return resolveLocal(fs, '/', join('/', entry)) ?? entry.replace(/^(?:\.\/)?node_modules\//, '');
 }
 
 export function angularProfile(fs: VirtualFileSystem, dependencies: ReadonlySet<string>): AngularProfile {
@@ -59,8 +65,7 @@ export function angularProfile(fs: VirtualFileSystem, dependencies: ReadonlySet<
     entry: workspace.main ? join('/', workspace.main) : DEFAULT_MAIN,
     staticDirs: workspace.assets.map((asset) => assetDir(asset, workspace.sourceRoot)),
     preludes: [
-      ...workspace.polyfills.map((polyfill) => polyfillSpecifier(fs, polyfill)),
-      ...workspace.styles.map((style) => join('/', style)),
+      ...[...workspace.polyfills, ...workspace.styles].map((entry) => preludeSpecifier(fs, entry)),
       '@angular/compiler',
     ],
   };

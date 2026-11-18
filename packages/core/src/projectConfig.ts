@@ -47,7 +47,10 @@ export interface ProjectConfig {
    * the component compilers see.
    */
   dependencies: Record<string, string>;
-  /** The tsconfig compiler options that change emitted code. */
+  /**
+   * The tsconfig compiler options that change emitted code. `target` is applied
+   * only at or above this runtime's floors (see `targetAtLeast` in transformer.ts).
+   */
   typescript: TypeScriptOptions;
   aliases: PathAlias[];
   /** Bare package names served as another package (`react-native` → `react-native-web`). */
@@ -93,7 +96,8 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
 
-function readDependencies(fs: VirtualFileSystem): Record<string, string> {
+/** package.json dependencies + devDependencies, name → range (comments tolerated; `{}` when unreadable). */
+export function readDependencies(fs: VirtualFileSystem): Record<string, string> {
   const pkg = readJson(fs, '/package.json') ?? {};
   const out: Record<string, string> = {};
   for (const field of ['devDependencies', 'dependencies']) {

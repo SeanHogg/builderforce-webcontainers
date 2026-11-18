@@ -2,6 +2,8 @@ import type { VirtualFileSystem } from './vfs.js';
 import { RESOLVE_EXTENSIONS } from './resolve.js';
 import { PUBLIC_DIR, type StaticDir } from './staticDirs.js';
 import { angularProfile, isAngularProject } from './angular/profile.js';
+import { findHtmlEntries } from './buildHtml.js';
+import { readDependencies } from './projectConfig.js';
 
 export type ProjectKind = 'vite' | 'cra' | 'static' | 'angular';
 
@@ -41,17 +43,13 @@ const NEEDS_NODE: ReadonlyArray<{ dependency: string; reason: string }> = [
   { dependency: '@remix-run/dev', reason: 'Remix needs its Node server.' },
   { dependency: '@sveltejs/kit', reason: 'SvelteKit needs its Node server.' },
   { dependency: 'astro', reason: 'Astro needs its build pipeline.' },
+  { dependency: '@analogjs/platform', reason: 'Analog needs its Vite build pipeline.' },
 ];
 
 const SERVER_ONLY = ['express', 'fastify', 'koa', '@nestjs/core', '@hapi/hapi'];
 
 function readDependencyNames(fs: VirtualFileSystem): Set<string> {
-  try {
-    const pkg = JSON.parse(fs.readText('/package.json') ?? '{}') as Record<string, Record<string, string> | undefined>;
-    return new Set([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})]);
-  } catch {
-    return new Set();
-  }
+  return new Set(Object.keys(readDependencies(fs)));
 }
 
 function detectFramework(deps: Set<string>): ProjectFramework | undefined {
@@ -81,16 +79,25 @@ export function detectProject(fs: VirtualFileSystem): ProjectProfile {
   const deps = readDependencyNames(fs);
 
   const framework = detectFramework(deps);
-  if (isAngularProject(fs, deps)) {
-    const angular = angularProfile(fs, deps);
-    // An Angular app without the CLI's page (a Vite-based setup) falls through to the rules below.
-    if (fs.isFile(angular.htmlPath)) return { supported: true, kind: 'angular', framework, ...angular };
-  }
+  const angular = framework === 'angular' ? angularProfile(fs, deps) : undefined;
+  // An Angular app without the CLI's page (a Vite-based setup) falls through to the rules below.
+  if (angular && isAngularProject(fs, deps) && fs.isFile(angular.htmlPath)) return { supported: true, kind: 'angular', framework, ...angular };
+  /**
+   * Every `.ts` of an Angular project goes through the Angular compiler, whose
+   * output needs `@angular/compiler` (and zone.js, polyfills, global styles)
+   * loaded first — so whatever the page, an Angular app's entry carries the preludes.
+   */
+  const preludesFor = (htmlPath: string, entry: string | undefined) => {
+    if (!angular) return entry ? { entry } : {};
+    const own = findHtmlEntries(fs, fs.readText(htmlPath) ?? '', htmlPath).find((found) => found.tag === 'script')?.path;
+    const resolved = own ?? entry;
+    return resolved ? { entry: resolved, preludes: angular.preludes } : {};
+  };
   if (fs.isFile('/index.html')) {
-    return { supported: true, kind: deps.has('vite') ? 'vite' : 'static', framework, htmlPath: '/index.html', staticDirs: PUBLIC_DIR };
+    return { supported: true, kind: deps.has('vite') ? 'vite' : 'static', framework, htmlPath: '/index.html', ...preludesFor('/index.html', undefined), staticDirs: PUBLIC_DIR };
   }
   if (fs.isFile('/public/index.html')) {
-    return { supported: true, kind: 'cra', framework, htmlPath: '/public/index.html', entry: findEntry(fs), staticDirs: PUBLIC_DIR };
+    return { supported: true, kind: 'cra', framework, htmlPath: '/public/index.html', ...preludesFor('/public/index.html', findEntry(fs)), staticDirs: PUBLIC_DIR };
   }
   if (SERVER_ONLY.some((name) => deps.has(name))) {
     return { supported: false, staticDirs: PUBLIC_DIR, reason: 'This is a Node server app with no browser entry page.' };

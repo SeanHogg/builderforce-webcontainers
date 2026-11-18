@@ -1,5 +1,4 @@
 import {
-  ANGULAR_MAJORS,
   angularCompilerFor,
   createSvelteCompiler,
   createVueCompiler,
@@ -38,9 +37,10 @@ export function createCdnComponentCompilers(options: CdnComponentCompilerOptions
   return (kind, dependencies) => {
     // Angular's JIT transforms are the core's own; the compiler that turns its
     // templates into code is `@angular/compiler`, served to the page by esm.sh.
+    // A range naming no major (`latest`, `*`) is not version-gated (see angularCompilerFor).
     if (kind === 'angular') {
       try {
-        return Promise.resolve(angularCompilerFor({ ...dependencies, '@angular/core': rangeOf(dependencies, '@angular/core', String(ANGULAR_MAJORS.max)) }));
+        return Promise.resolve(angularCompilerFor(dependencies));
       } catch (error) {
         return Promise.reject(error);
       }

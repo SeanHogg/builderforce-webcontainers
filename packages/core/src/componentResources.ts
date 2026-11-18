@@ -22,9 +22,14 @@ export interface ComponentResourceOptions {
   rewriteCss?: (file: string, css: string) => string;
 }
 
+/** The VFS file a component's `templateUrl` / `styleUrl` names: root-absolute, or relative to the component. */
+export function resolveResourcePath(componentPath: string, file: string): string {
+  return file.startsWith('/') ? join(file) : join(dirname(componentPath), file);
+}
+
 export function componentResources(options: ComponentResourceOptions): Pick<ComponentRequest, 'readResource' | 'compileStylesheet'> {
   const { fs, path, styles, track } = options;
-  const resolve = (file: string) => (file.startsWith('/') ? join(file) : join(dirname(path), file));
+  const resolve = (file: string) => resolveResourcePath(path, file);
 
   const readResource = (file: string): string | undefined => {
     const resolved = resolve(file);

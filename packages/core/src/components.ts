@@ -31,6 +31,14 @@ const COMPONENT_KINDS: ReadonlyArray<{ kind: ComponentKind; extensions: readonly
   { kind: 'angular', extensions: ['.ts', '.mts'], dependency: '@angular/core', exclude: /\.d\.[mc]?ts$|\/node_modules\// },
 ];
 
+/** The single-file component extensions: the kinds chosen by extension alone. */
+export const COMPONENT_EXTENSIONS: readonly ComponentExtension[] = COMPONENT_KINDS.filter((row) => !row.dependency).map((row) => row.kind as ComponentExtension);
+
+/** `ext` as a {@link ComponentExtension}, or undefined when it is not one. */
+export function componentExtension(ext: string): ComponentExtension | undefined {
+  return (COMPONENT_EXTENSIONS as readonly string[]).includes(ext) ? (ext as ComponentExtension) : undefined;
+}
+
 /** The compiler a file needs, or undefined for a file served as plain TS/JS (or not a script at all). */
 export function componentKindFor(path: string, dependencies: Readonly<Record<string, string>>): ComponentKind | undefined {
   const ext = extname(path);
@@ -92,7 +100,7 @@ export type ComponentCompilers = (
 export function staticComponentCompilers(compilers: Partial<Record<ComponentKind, ComponentCompiler>>): ComponentCompilers {
   return (kind) => {
     const compiler = compilers[kind];
-    return compiler ? Promise.resolve(compiler) : Promise.reject(new Error(`No compiler for ${kind === 'angular' ? 'Angular' : kind} files is configured.`));
+    return compiler ? Promise.resolve(compiler) : Promise.reject(new Error(`No compiler for ${kind} files is configured.`));
   };
 }
 

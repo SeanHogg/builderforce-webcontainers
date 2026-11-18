@@ -1,6 +1,8 @@
 import type { ComponentRequest } from '../components.js';
 import { styleLanguageOf } from '../styles/languages.js';
-import { applyEdits, findDecoratorCalls, maskCode, matchBracket, objectProperties, skipSpace, splitTopLevel, stringLiteralValue, trimRange, type Edit, type ObjectProperty } from './scanner.js';
+import { maskCode, matchBracket, skipSpace, splitTopLevel, trimRange } from './scanner.js';
+import { applyEdits, findDecoratorCalls, objectProperties, stringLiteralValue, type Edit, type ObjectProperty } from './syntax.js';
+import type { ScannedSource } from './imports.js';
 
 /**
  * Inline a component's external resources, as the Angular CLI does in JIT mode:
@@ -62,10 +64,10 @@ function removal(masked: string, property: ObjectProperty): Edit {
   return { start, end, text: masked.slice(start, end).replace(/[^\n]/g, '') };
 }
 
-export async function inlineResources(source: string, request: ResourceRequest): Promise<string> {
-  if (!/\b(templateUrl|styleUrls?)\b/.test(source)) return source;
-  const masked = maskCode(source);
+/** The edits inlining every `@Component`'s resources (see {@link ScannedSource}). */
+export async function resourceEdits({ source, masked }: Pick<ScannedSource, 'source' | 'masked'>, request: ResourceRequest): Promise<Edit[]> {
   const edits: Edit[] = [];
+  if (!/\b(templateUrl|styleUrls?)\b/.test(source)) return edits;
 
   for (const call of findDecoratorCalls(masked, ['Component'])) {
     const open = skipSpace(masked, call.open + 1);
@@ -102,6 +104,11 @@ export async function inlineResources(source: string, request: ResourceRequest):
     edits.push({ start: first!.range.start, end: first!.range.end, text: styles });
     for (const property of [...rest, ...(inline ? [inline] : [])]) edits.push(removal(masked, property));
   }
+  return edits;
+}
+
+export async function inlineResources(source: string, request: ResourceRequest): Promise<string> {
+  const edits = await resourceEdits({ source, masked: maskCode(source) }, request);
   return edits.length ? applyEdits(source, edits) : source;
 }
 

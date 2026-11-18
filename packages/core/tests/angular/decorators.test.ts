@@ -24,6 +24,7 @@ async function evaluate(source: string, zone: boolean): Promise<{ code: string; 
     Inject: (token: unknown) => () => { recorded.injectToken = token; },
     Optional: () => () => {},
     ɵɵngJitInput: (options: object) => (proto: any, key: string) => { (proto.constructor.inputs ??= {})[key] = options; },
+    input: () => undefined,
     TOKEN: 'TOKEN',
   };
   const body = code
@@ -36,6 +37,7 @@ async function evaluate(source: string, zone: boolean): Promise<{ code: string; 
 }
 
 const SOURCE = [
+  `import { Component, Inject, Injectable, Optional, input } from '@angular/core';`,
   `@Injectable() class Svc { async load() { await Promise.resolve(); return 1; } }`,
   `class Base { set value(v: number) { (this as any).seen = v; } }`,
   `@Component({ selector: 'x', template: '<p></p>' })`,
@@ -44,7 +46,6 @@ const SOURCE = [
   `  name = input<string>();`,
   `  constructor(private svc: Svc, @Optional() @Inject(TOKEN) private cfg: Config) { super(); }`,
   `}`,
-  `function input<T>(): T | undefined { return undefined; }`,
 ].join('\n');
 
 describe('Angular decorator lowering', () => {

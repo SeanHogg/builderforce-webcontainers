@@ -261,3 +261,23 @@ describe('typecheckProject with Angular diagnostics', () => {
     expect(files).toEqual([...files].sort((a, b) => a.localeCompare(b)));
   });
 });
+
+describe('angularDiagnostics (review fixes)', () => {
+  it('reads an angular.json with comments and trailing commas', () => {
+    const commented = ANGULAR_JSON.replace('"version": 1,', '// ng new wrote this\n  "version": 1,').replace(/("builder": "@angular\/build:application",)/, '$1 /* the app build */')
+      .replace('"projects": {', '"projects": {\n    "lib": { "projectType": "library", "architect": { "deploy": { "builder": "@angular/fire:deploy" }, }, },');
+    const found = ng({ 'angular.json': commented });
+    expect(found.map((d) => [d.file, d.code])).toEqual([['angular.json', ANGULAR_DIAGNOSTIC.unsupportedBuilder]]);
+  });
+
+  it('flags arrows in @let declarations', () => {
+    const found = ng({ 'src/app/app.html': "@let names = items.map(i => i.name);\n@let label = 'a => b';\n<p>{{ names }}</p>" });
+    expect(found.map((d) => [d.file, d.line, d.column])).toEqual([['src/app/app.html', 1, '@let names = items.map(i '.length + 1]]);
+  });
+
+  it('reads templateUrl from the masked source: comments and regex literals do not confuse it', () => {
+    const app = `import { Component } from '@angular/core';\nconst re = /templateUrl: 'nope.html'/;\n// templateUrl: './commented.html'\n@Component({ selector: 'app-root', templateUrl: './app.html' })\nexport class App {}\n`;
+    const found = ng({ 'src/app/app.ts': app, 'src/app/app.html': '{{ a.map(x => x) }}', 'src/app/nope.html': '{{ b.map(y => y) }}', 'src/app/commented.html': '{{ c.map(z => z) }}' });
+    expect(found.map((d) => d.file)).toEqual(['src/app/app.html']);
+  });
+});

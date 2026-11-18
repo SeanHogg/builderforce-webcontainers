@@ -9,7 +9,7 @@
  * behind the same port without re-implementing resolution.
  */
 import type { EsbuildLike, EsbuildTypeScriptOptions, Loader, TypeScriptOptions } from './transformer.js';
-import { createEsbuildTransformer, esbuildTypeScriptOptions } from './transformer.js';
+import { createEsbuildTransformer, esbuildTypeScriptOptions, targetAtLeast, TARGET_FLOOR } from './transformer.js';
 
 export type BundleLoader = Loader | 'css' | 'local-css' | 'json' | 'text';
 
@@ -149,7 +149,7 @@ export function createEsbuildBundler(esbuild: EsbuildBuildLike): Bundler {
   return {
     async bundle(request) {
       const { host } = request;
-      const target = request.typescript?.target ?? 'es2022';
+      const target = targetAtLeast(request.typescript?.target, TARGET_FLOOR.bundle);
 
       /** A module with its own TypeScript options, compiled to JS on its own (see {@link EsbuildBuildLike}). */
       async function load(path: string, query: string | undefined): Promise<{ contents: string | Uint8Array; loader: BundleLoader }> {
@@ -164,7 +164,7 @@ export function createEsbuildBundler(esbuild: EsbuildBuildLike): Bundler {
           sourcefile: path,
           define: request.define,
           jsx: request.jsx,
-          typescript: { target, ...request.typescript, ...loaded.typescript },
+          typescript: { ...request.typescript, ...loaded.typescript, target },
         });
         return { contents: code, loader: 'js' };
       }

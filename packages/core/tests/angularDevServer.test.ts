@@ -271,7 +271,7 @@ describe('Angular through the dev server', () => {
     const app = await body(server, '/src/app/app.component.ts');
     expect(app).not.toContain('templateUrl');
     expect(app).not.toContain('styleUrls');
-    expect(app).toContain('*ngFor=\\"let item of items\\"');
+    expect(app).toContain('<li *ngFor="let item of items">');
     expect(app).toMatch(/li \{\\n\s*color: rebeccapurple;\\n\}/);
     expect(app).toMatch(/ctorParameters = \(\) => \[\{\s*type: DataService\s*\}\]/);
     expect(app).toContain(`${BASE}src/app/data.service.ts`);
@@ -314,15 +314,85 @@ describe('Angular through buildProject', () => {
       expect(js).toContain('bootstrapApplication');
       expect(js).not.toContain('templateUrl');
       expect(js).toMatch(/__decorateClass/);
+      expect(js).not.toContain('sourceMappingURL=data:'); // the per-module pre-pass leaves no inline maps behind
+      expect(html).toMatch(/<base href="\.\/">[\s\S]*<script type="module"[^>]*src="\.\/assets\/main-/);
       expect([...out.keys()].some((path) => /^assets\/main-.*\.css$/.test(path))).toBe(true);
       if (name === 'default') expect(out.get('favicon.ico')).toBe('ico');
       if (name === 'scss + service') {
         expect(out.get('assets/logo.svg')).toBe('<svg/>');
-        expect(js).toMatch(/ctorParameters = \(\) => \[\{ type: DataService \}\]/);
+        expect(js).toMatch(/ctorParameters = \(\) => \[\{\s*type: DataService\s*\}\]/);
         expect(js).not.toMatch(/\basync load\b/);
         expect(js.indexOf('zone.js')).toBeLessThan(js.indexOf('@angular/compiler'));
       }
       if (name === 'zoneless') expect(js).toMatch(/async refresh\(\)/);
     });
   }
+});
+
+describe('Angular review fixes', () => {
+  /** The default app, with package global styles and a component stylesheet that uses url(). */
+  function themedApp() {
+    const fs = defaultApp();
+    fs.writeFile('/angular.json', angularJson({
+      browser: 'src/main.ts', polyfills: ['zone.js'], assets: [{ glob: '**/*', input: 'public' }],
+      styles: ['@angular/material/prebuilt-themes/azure-blue.css', 'node_modules/bootstrap/dist/css/bootstrap.min.css', 'src/styles.css'],
+    }));
+    fs.writeFile('/src/app/app.css', 'h1 { background: url(./bg.png) no-repeat; } p { background: url("img/dot.svg#a"); }');
+    fs.writeFile('/src/app/bg.png', 'PNG');
+    fs.writeFile('/src/app/img/dot.svg', '<svg/>');
+    fs.writeFile('/src/main.ts', `${fs.readText('/src/main.ts')}\nif (ngDevMode) console.log('dev only');`);
+    return fs;
+  }
+
+  it('links package global styles from the CDN instead of a nonexistent VFS path (dev)', async () => {
+    const server = serve(themedApp());
+    const imports = leadingImports(await body(server, '/src/main.ts'));
+    expect(imports.slice(0, 5)).toEqual([
+      'https://esm.sh/zone.js@~0.15.0?dev',
+      `${BASE}bfwc-package-css/@angular/material/prebuilt-themes/azure-blue.css`,
+      `${BASE}bfwc-package-css/bootstrap/dist/css/bootstrap.min.css`,
+      `${BASE}src/styles.css?import`,
+      'https://esm.sh/@angular/compiler@^20.0.0?dev',
+    ]);
+    const link = await body(server, '/bfwc-package-css/@angular/material/prebuilt-themes/azure-blue.css');
+    expect(link).toContain("link.rel = 'stylesheet'");
+    expect(link).toContain('link.href = "https://esm.sh/@angular/material/prebuilt-themes/azure-blue.css?');
+  });
+
+  it('builds package global styles into the CSS bundle, hashes url() assets of inlined component styles, defines ngDevMode false', async () => {
+    const result = await buildProject({ files: themedApp(), bundler, components, styles, minify: false });
+    const out = new Map(result.files.map((file) => [file.path, text(file.data)]));
+    const [, css] = [...out].find(([path]) => /^assets\/main-.*\.css$/.test(path))!;
+    expect(css).toContain('@import "https://esm.sh/@angular/material/prebuilt-themes/azure-blue.css?');
+    expect(css).toContain('@import "https://esm.sh/bootstrap/dist/css/bootstrap.min.css?');
+    const [, js] = [...out].find(([path]) => /^assets\/main-.*\.js$/.test(path))!;
+    const png = [...out.keys()].find((path) => /^assets\/bg-[\w-]+\.png$/.test(path))!;
+    const svg = [...out.keys()].find((path) => /^assets\/dot-[\w-]+\.svg$/.test(path))!;
+    expect(out.get(png)).toBe('PNG');
+    expect(js).toContain(`url(./${png})`);
+    expect(js).toContain(`./${svg}#a`);
+    expect(js).not.toContain('ngDevMode');
+    expect(js).not.toContain('./bg.png');
+  });
+
+  it('turns console.error forwarding on for Angular pages only', async () => {
+    const angularHtml = await body(serve(defaultApp()), '/');
+    expect(angularHtml).toContain('instanceof Error) { raised');
+    const vite = project({ 'package.json': JSON.stringify({ dependencies: { react: '^18.3.1' } }), 'index.html': '<head></head><div id="root"></div>' });
+    expect(await body(serve(vite), '/')).not.toContain('instanceof Error) { raised');
+  });
+
+  it('gives an @angular/core app without the CLI layout the Angular preludes on its page entry', async () => {
+    const fs = project({
+      'package.json': JSON.stringify({ dependencies: { '@angular/core': '^20.0.0', '@angular/platform-browser': '^20.0.0', 'zone.js': '~0.15.0' }, devDependencies: { vite: '^6.0.0' } }),
+      'index.html': '<!doctype html><head></head><body><app-root></app-root><script type="module" src="/src/main.ts"></script></body>',
+      'src/main.ts': `import { bootstrapApplication } from '@angular/platform-browser';\nimport { App } from './app';\nbootstrapApplication(App);`,
+      'src/app.ts': `import { Component } from '@angular/core';\n@Component({ selector: 'app-root', template: '<p>hi</p>' })\nexport class App {}`,
+    });
+    const server = serve(fs);
+    expect(server.profile()).toMatchObject({ kind: 'vite', framework: 'angular', entry: '/src/main.ts', preludes: ['zone.js', '@angular/compiler'] });
+    expect(leadingImports(await body(server, '/src/main.ts')).slice(0, 2)).toEqual(['https://esm.sh/zone.js@~0.15.0?dev', 'https://esm.sh/@angular/compiler@^20.0.0?dev']);
+    const html = await body(server, '/');
+    expect(html.match(/<script type="module"/g)).toHaveLength(1);
+  });
 });

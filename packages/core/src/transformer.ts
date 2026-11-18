@@ -33,6 +33,29 @@ export interface TypeScriptOptions {
   lowerAsync?: boolean;
 }
 
+/** The output floor of the dev server's per-module transform and of a production bundle. */
+export const TARGET_FLOOR = { transform: 'es2020', bundle: 'es2022' } as const;
+
+/** `es2015` → 2015, `esnext` → Infinity; undefined for anything else. */
+function targetYear(target: string): number | undefined {
+  const lower = target.toLowerCase();
+  if (lower === 'esnext') return Number.POSITIVE_INFINITY;
+  const m = /^es(\d{4})$/.exec(lower);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * The esbuild target for a tsconfig `target`, never below `floor`. A project's
+ * own target is honoured only when it is at least the floor: the floors are what
+ * this runtime always emitted, and a lower tsconfig target (CRA's `es5`, Vite's
+ * `ES2017`/`ES2020`) would break code that worked before — top-level await in a
+ * bundle, for one. One helper for the transformer and the bundler.
+ */
+export function targetAtLeast(target: string | undefined, floor: string): string {
+  const year = target === undefined ? undefined : targetYear(target);
+  return year !== undefined && year >= targetYear(floor)! ? target!.toLowerCase() : floor;
+}
+
 /** The esbuild options a {@link TypeScriptOptions} maps to (shared by the transformer and the bundler). */
 export interface EsbuildTypeScriptOptions {
   tsconfigRaw?: { compilerOptions: { experimentalDecorators?: boolean; useDefineForClassFields?: boolean } };
@@ -78,7 +101,7 @@ export function createEsbuildTransformer(esbuild: EsbuildLike): Transformer {
         loader: request.loader,
         sourcefile: request.sourcefile,
         format: 'esm',
-        target: request.typescript?.target ?? 'es2020',
+        target: targetAtLeast(request.typescript?.target, TARGET_FLOOR.transform),
         define: request.define,
         jsx: request.jsx.runtime === 'automatic' ? 'automatic' : 'transform',
         ...(request.jsx.runtime === 'automatic' ? { jsxImportSource: request.jsx.importSource } : {}),

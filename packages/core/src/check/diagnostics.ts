@@ -55,3 +55,16 @@ export function sortDiagnostics(diagnostics: CheckDiagnostic[]): CheckDiagnostic
     })
     .sort((a, b) => (a.file ?? '').localeCompare(b.file ?? '') || a.line - b.line || a.column - b.column);
 }
+
+/** 1-based line and column of `offset` in `text`, like an editor's gutter. */
+export function lineColumn(text: string, offset: number): { line: number; column: number } {
+  let line = 1;
+  let lineStart = 0;
+  for (let i = 0; i < offset; i++) {
+    if (text.charCodeAt(i) === 10) {
+      line++;
+      lineStart = i + 1;
+    }
+  }
+  return { line, column: offset - lineStart + 1 };
+}

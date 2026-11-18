@@ -34,6 +34,79 @@ the project in a Web Worker. `.vue` and `.svelte` files need no setup. See the
 The package re-exports everything from
 [`@seanhogg/builderforce-webcontainers-core`](../core).
 
+## Angular
+
+Angular 17–20 (the supported majors) projects made by `ng new` (standalone components) run in the
+instant preview and build with `runtime.build()` unchanged, in JIT mode: the
+runtime does at load time what the Angular CLI does at build time, and
+`@angular/compiler` compiles templates in the page.
+
+Supported:
+
+- `angular.json` build options: `browser` / `main`, `index`, `polyfills`,
+  global `styles` (`.css`, `.scss`, `.sass`, `.less`; `inject: false` entries are
+  skipped; a package stylesheet such as
+  `@angular/material/prebuilt-themes/azure-blue.css` or
+  `node_modules/bootstrap/dist/css/bootstrap.min.css` is loaded from the package
+  CDN) and `assets` (string paths and `{ glob, input, output }` objects).
+  Every other option (`aot`, `optimization`, `budgets`, `ssr`, `prerender`,
+  `i18n`, …) is ignored. Without `angular.json`, `src/index.html` and
+  `src/main.ts` are used.
+- `templateUrl`, `styleUrl` and `styleUrls`, including Sass and Less.
+- Constructor injection (with `@Inject`, `@Optional`, `@Self`, `@SkipSelf`,
+  `@Host`, `@Attribute`, imported from `@angular/core` under any alias) and
+  `inject()`. Parameter types map as Angular's own compiler maps them:
+  `T | null` → `T`, `string`/`number`/`boolean` → `String`/`Number`/`Boolean`,
+  function types → `Function`, arrays and tuples → `Array`, a class → itself.
+  Any other type (an interface, a union, a type-only import) becomes `undefined`;
+  Angular then reports NG0202 only if that parameter is actually injected without
+  `@Inject(TOKEN)`.
+- Signal `input()` / `model()` / `output()` / `outputFromObservable()` and the
+  signal queries (`viewChild`, `viewChildren`, `contentChild`, `contentChildren`),
+  when imported from `@angular/core` (aliases and `import * as ng` included); a
+  function of your own named `input` is left alone.
+- Errors Angular only logs — a failed `bootstrapApplication(...).catch(console.error)`,
+  its ErrorHandler, template checks such as NG0303 — reach `runtime.onError` with
+  `source: 'console'` and their `code`. This console forwarding is on for Angular
+  apps only; in other apps `console.error` is console output.
+- `ngDevMode` is defined `false` in `runtime.build()` output.
+- zone.js apps (async/await in your code is lowered so zone.js can track it)
+  and zoneless apps (`provideZonelessChangeDetection()`, no `zone.js` dependency).
+- One Angular version: every `@angular/*` framework package loads at the
+  `@angular/core` range, and the commonly imported ones are pinned even when
+  `package.json` does not list them.
+
+Limits: no AOT, no SSR or prerendering, no CLI builders or `ng` commands, no
+schematics (`ng add @angular/material` and friends). NgModule-bootstrapped apps
+are untested and best-effort. async/await inside packages loaded from the CDN
+stays native, so zone.js does not see it. An asset glob other than "everything"
+(`**/*`) copies the whole input folder. An `@angular/core` range outside 17–20
+is refused; a range naming no major (`latest`, `next`, `*`) is not checked, so
+pin a supported major. An Analog project runs in the Node runtime (it needs its
+Vite pipeline); an `@angular/core` app without the CLI layout (its own
+`index.html`) gets the same preludes on its page entry.
+
+```text
+angular.json
+package.json          @angular/core, @angular/common, @angular/platform-browser, zone.js, …
+tsconfig.json
+public/favicon.ico
+src/index.html        <base href="/"> … <app-root></app-root>
+src/main.ts           bootstrapApplication(App, appConfig)
+src/styles.scss
+src/app/app.config.ts
+src/app/app.ts        @Component({ selector: 'app-root', templateUrl: './app.html', styleUrl: './app.scss' })
+src/app/app.html
+src/app/app.scss
+```
+
+```ts
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+runtime.writeTree(files); // the tree above
+runtime.profile(); // { supported: true, kind: 'angular', framework: 'angular', entry: '/src/main.ts', … }
+iframe.src = runtime.url;
+```
+
 ## The `./ml` subpath
 
 The in-browser ML runtime lives on its own subpath so the root stays the dev

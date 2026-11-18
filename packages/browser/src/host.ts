@@ -134,9 +134,11 @@ export interface PreviewRuntime {
   build(options?: RuntimeBuildOptions): Promise<BuildResult>;
   /**
    * Errors raised inside the preview: uncaught throws (`source: 'error'`), unhandled
-   * rejections (`'rejection'`) and Error objects passed to `console.error` (`'console'`) —
-   * how a failed Angular bootstrap or Angular's ErrorHandler reports, with no uncaught
-   * error at all. A framework error code is extracted: `{ code: 'NG0202', message: 'NG0202: …' }`.
+   * rejections (`'rejection'`) and, in an Angular app only, `console.error` calls given an
+   * Error object or an Angular-coded string (`'console'`) — how a failed Angular bootstrap,
+   * Angular's ErrorHandler and its template checks (NG0303) report, with no uncaught error
+   * at all. Other frameworks' `console.error` stays console output. A framework error code
+   * is extracted: `{ code: 'NG0202', message: 'NG0202: …' }`.
    * At most 100 per page load.
    */
   onError(listener: (error: PreviewError) => void): () => void;

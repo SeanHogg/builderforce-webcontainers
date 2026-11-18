@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONSOLE_MESSAGE_TYPE, ERROR_MESSAGE_LIMIT, ERROR_MESSAGE_TYPE, errorBridgeScript } from '../src/html.js';
+import { CONSOLE_MESSAGE_TYPE, ERROR_MESSAGE_LIMIT, ERROR_MESSAGE_TYPE, errorBridgeScript, type ErrorBridgeOptions } from '../src/html.js';
 import { previewErrorText } from '../src/previewErrorText.js';
 
 interface Posted {
@@ -8,14 +8,14 @@ interface Posted {
 }
 
 /** Runs the bridge against a stubbed window: a parent that records messages, a console that records calls. */
-function runBridge(nonce = 'n0nce') {
+function runBridge(nonce = 'n0nce', options: ErrorBridgeOptions = { forwardConsoleErrors: true }) {
   const posted: Posted[] = [];
   const listeners: Record<string, (event: unknown) => void> = {};
   const logged: unknown[][] = [];
   const record = (...args: unknown[]) => void logged.push(args);
   const fakeConsole: Record<string, unknown> = { log: record, info: record, warn: record, error: record, debug: record };
   const fakeWindow: Record<string, unknown> = {};
-  const body = errorBridgeScript(nonce).replace(/^<script>/, '').replace(/<\/script>$/, '');
+  const body = errorBridgeScript(nonce, options).replace(/^<script>/, '').replace(/<\/script>$/, '');
   new Function('window', 'parent', 'location', 'addEventListener', 'console', body)(
     fakeWindow,
     { postMessage: (message: Posted) => posted.push(message) },
@@ -59,6 +59,25 @@ describe('errorBridgeScript', () => {
     console.log(new Error('logged, not raised'));
     expect(consolesOf(posted)).toHaveLength(2);
     expect(errorsOf(posted)).toEqual([]);
+  });
+
+  it("forwards Angular's string-form errors (console.error(formatRuntimeError(...))) with their code", () => {
+    const { posted, console } = runBridge();
+    const line = "NG0303: Can't bind to 'foo' since it isn't a known property of 'div' (used in the '_App' component template).";
+    console.error(line);
+    console.error('plain text, no code', 'NG12 is not a code either');
+    const errors = errorsOf(posted);
+    expect(errors).toEqual([expect.objectContaining({ source: 'console', message: line })]);
+    expect(previewErrorText(String(errors[0]!.message), errors[0]!.stack as string | undefined)).toEqual({ message: line, code: 'NG0303' });
+  });
+
+  it('without forwardConsoleErrors (every non-Angular page), console.error is console output only', () => {
+    const { posted, console } = runBridge('n0nce', {});
+    console.error(new Error('handled by the app'));
+    console.error('NG0303: looks Angular, but this page is not');
+    expect(consolesOf(posted)).toHaveLength(2);
+    expect(errorsOf(posted)).toEqual([]);
+    expect(errorBridgeScript('x')).not.toContain('instanceof Error) { raised');
   });
 
   it(`caps errors at ${ERROR_MESSAGE_LIMIT} per page load, apart from the console cap`, () => {

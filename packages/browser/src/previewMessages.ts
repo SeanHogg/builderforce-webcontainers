@@ -1,6 +1,7 @@
 /**
  * What a preview reports to the host page: errors (uncaught, rejected, or
- * Error objects given to console.error — normalised by previewErrorText) and console output,
+ * in Angular apps, Error objects / NG-coded strings given to console.error —
+ * normalised by previewErrorText) and console output,
  * posted by the bridge script every served page starts with. One window
  * listener per runtime, accepting only messages from the preview origin whose
  * page sits under this runtime's base, so two runtimes on one page never hear
@@ -17,7 +18,7 @@ export interface PreviewError {
   message: string;
   stack?: string;
   href: string;
-  /** An uncaught throw, an unhandled rejection, or an Error object passed to `console.error`. */
+  /** An uncaught throw, an unhandled rejection, or (Angular apps) an Error / NG-coded string passed to `console.error`. */
   source: PreviewErrorSource;
   /** The framework error code (`NG0202`), when the error names one. */
   code?: string;

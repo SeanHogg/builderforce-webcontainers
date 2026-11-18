@@ -96,7 +96,8 @@ export async function buildProject(options: BuildOptions): Promise<BuildResult> 
     ? await options.bundler.bundle({
       entryPoints,
       host,
-      define: buildDefine(config, base, 'production'),
+      // Angular's production builds define `ngDevMode` false, dropping its dev-only checks.
+      define: { ...buildDefine(config, base, 'production'), ...(profile.framework === 'angular' ? { ngDevMode: 'false' } : {}) },
       jsx: config.jsx,
       minify: options.minify ?? true,
       typescript: config.typescript,
