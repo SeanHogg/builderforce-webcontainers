@@ -114,12 +114,17 @@ describe('startApplicationRuntime', () => {
     expect(runtime.getService('worker')?.state).toBe('running');
   });
 
-  it('declines a service no provider runs, with the reason, and runs the rest', async () => {
+  it('starts nothing when any service is declined: the reason, never a half-started app', async () => {
     const fake = fakeProvider({ autoReady: ['web'] });
     const runtime = startApplicationRuntime(app(svc('ml', { runtime: 'python' }), svc('web', { port: 3000 })), { providers: [fake.provider], ...fast });
+    const errors: ServiceError[] = [];
+    runtime.onError((error) => errors.push(error));
     const failure = (await runtime.start().catch((error: unknown) => error)) as ApplicationStartError;
+    expect(failure).toBeInstanceOf(ApplicationStartError);
     expect(failure.failures).toEqual([{ serviceId: 'ml', phase: 'declined', message: 'No runtime provider for "python" (available: fake).', willRestart: false }]);
-    expect(runtime.getService('web')?.state).toBe('running');
+    expect(errors).toEqual(failure.failures);
+    expect(fake.started).toHaveLength(0);
+    expect(runtime.listServices().map((s) => s.state)).toEqual(['discovered', 'discovered']);
   });
 
   it('fails a service that is not ready in time, and kills its process', async () => {
@@ -136,7 +141,7 @@ describe('startApplicationRuntime', () => {
     const started = runtime.start();
     await until(() => fake.of('migrate').length === 1);
     expect(fake.of('api')).toHaveLength(0);
-    fake.last('migrate').markReady(); // the fake's readiness; a real provider resolves it on exit 0
+    // No markReady: the exit itself is the readiness, whatever the provider's ready() does.
     fake.last('migrate').exit(0);
     await started;
     expect(runtime.getService('migrate')?.state).toBe('stopped');

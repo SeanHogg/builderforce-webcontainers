@@ -12,7 +12,7 @@ export { serviceGraph } from './serviceGraph.js';
 export type { ServiceGraph } from './serviceGraph.js';
 export { createLifecycle, canTransition, IllegalTransitionError, SERVICE_TRANSITIONS, ACTIVE_STATES } from './lifecycle.js';
 export type { ServiceLifecycle, ServiceState, StateChange } from './lifecycle.js';
-export { serviceEnv, serviceMap, databaseUrl, envName, receivesDatabaseCredentials, CREDENTIAL_POLICY, DATABASE_URL_SCHEMES } from './serviceEnv.js';
+export { serviceEnv, serviceMap, databaseUrl, envName, receivesDatabaseCredentials, withoutDatabaseCredentials, CREDENTIAL_POLICY, DATABASE_URL_SCHEMES } from './serviceEnv.js';
 export { restartDecision, DEFAULT_RESTART_LIMITS } from './restartPolicy.js';
 export type { RestartDecision, RestartLimits } from './restartPolicy.js';
 export { createProviderRegistry, acceptApplication } from './runtimeProvider.js';

@@ -17,6 +17,8 @@ import {
   type Bundler,
   type ComponentCompilers,
   type FileTree,
+  type HttpRequestData,
+  type HttpResponseData,
   type PackageCdnFactory,
   type PortChange,
   type ProcessOptions,
@@ -162,6 +164,12 @@ export interface PreviewRuntime {
    */
   listProcesses(): ProcessInfo[];
   /**
+   * Send an HTTP request to the virtual server on `port` from inside the runtime
+   * (its own localhost, not the network) and wait for the whole response;
+   * undefined when nothing listens there. `method` defaults to GET.
+   */
+  request(port: number, request: Partial<HttpRequestData> & { url: string }): Promise<HttpResponseData | undefined>;
+  /**
    * Cookies virtual servers set, per port. A service worker cannot set cookies,
    * so the runtime keeps them and sends them back on later requests (and
    * WebSocket handshakes); inspect or `clear()` them here.
@@ -295,6 +303,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     onServerListening: (listener) => processes.servers.onListening(listener),
     onPortChange: (listener) => processes.servers.onPortChange(listener),
     listProcesses: () => processes.list().map((info) => ({ ...info, cwd: baseToProject(root, info.cwd) ?? info.cwd })),
+    request: (port, request) => processes.request(port, { method: 'GET', headers: {}, body: null, ...request }),
     cookies,
     dispose() {
       bridge.dispose();

@@ -6,7 +6,7 @@
  * What it cannot run it declines with a reason, so a host can pick another target.
  */
 import { readinessOf, type Acceptance, type ReadinessKind, type RuntimeProvider, type ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
-import { untilHttpHealthy, type NodeServiceHost } from './nodeReadiness.js';
+import { portHeld, untilHttpHealthy, type NodeServiceHost } from './nodeReadiness.js';
 import type { RuntimeProcess, ServerAddress } from '@seanhogg/builderforce-webcontainers-core';
 
 /** Commands the browser runtime cannot host, by name, with the reason it gives. */
@@ -48,6 +48,9 @@ export function createNodeProvider(host: NodeServiceHost, options: NodeProviderO
     start(service, context) {
       const readiness = readinessOf(service);
       const port = service.port;
+      if (port !== undefined && (readiness.kind === 'port' || readiness.kind === 'http') && portHeld(host, port)) {
+        throw new Error(`Port ${port} is already in use by another process.`);
+      }
       let url: string | undefined;
       let opened!: () => void;
       const portOpen = new Promise<void>((resolve) => (opened = resolve));
@@ -77,6 +80,7 @@ export function createNodeProvider(host: NodeServiceHost, options: NodeProviderO
         url = undefined;
         unsubscribe.forEach((stop) => stop());
         stopProbing();
+        context.signal.removeEventListener('abort', stopProbing);
         return code;
       });
       const exitsBefore = (what: string) =>

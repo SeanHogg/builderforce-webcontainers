@@ -62,6 +62,29 @@ describe('validateSpec', () => {
     ]);
   });
 
+  it('reports env-name collisions, digit-first ids, bad timeouts, empty health paths, empty runtimes and a missing project id', () => {
+    const issues = validateSpec({
+      projectId: ' ',
+      services: [
+        svc('web-app', { port: 3000 }),
+        svc('web_app', { port: 3001 }),
+        svc('1api'),
+        svc('a', { port: 1, readiness: { kind: 'port', timeoutMs: 0 } }),
+        svc('b', { port: 2, readiness: { kind: 'http', path: '', timeoutMs: Number.NaN } }),
+        svc('c', { runtime: '' }),
+      ],
+    });
+    expect(issues).toEqual([
+      { code: 'missing-project-id' },
+      { code: 'invalid-id', serviceId: '1api' },
+      { code: 'invalid-timeout', serviceId: 'a', timeoutMs: 0 },
+      { code: 'missing-health-path', serviceId: 'b' },
+      { code: 'invalid-timeout', serviceId: 'b', timeoutMs: Number.NaN },
+      { code: 'missing-runtime', serviceId: 'c' },
+      { code: 'env-name-collision', envName: 'WEB_APP', serviceIds: ['web-app', 'web_app'] },
+    ]);
+  });
+
   it('assertValidSpec throws ApplicationSpecError carrying the issues', () => {
     const spec = app(svc('web', { dependsOn: ['api'] }));
     expect(() => assertValidSpec(spec)).toThrow(ApplicationSpecError);
@@ -84,9 +107,6 @@ describe('serviceGraph', () => {
     expect(graph.startOrder).toEqual(['db', 'jobs', 'api', 'web']);
     expect(graph.stopOrder).toEqual(['web', 'api', 'jobs', 'db']);
     expect(graph.dependenciesOf('web')).toEqual(['api', 'jobs']);
-    expect(graph.dependentsOf('db')).toEqual(['jobs', 'api', 'web']);
-    expect(graph.dependentsOf('api')).toEqual(['web']);
-    expect(graph.dependentsOf('web')).toEqual([]);
   });
 
   it('keeps spec order for independent services and throws on an invalid spec', () => {
@@ -149,6 +169,22 @@ describe('serviceEnv', () => {
     expect(env.DB_DATABASE_URL).toBeUndefined();
     expect(env.API_URL).toBe('http://localhost:8000');
     expect(env.SHARED).toBe('mine');
+  });
+
+  it('strips database credentials from the app-wide env for a frontend, whatever their name; its own env is an opt-in', () => {
+    const generated = 'postgres://postgres:p%40ss@localhost:5432/app';
+    const withSecrets: ApplicationSpec = {
+      ...spec,
+      env: { DATABASE_URL: 'postgres://x', REPORTS_DATABASE_URL: 'postgres://y', PGURL: generated, PLAIN: 'ok' },
+      services: spec.services.map((s) => (s.id === 'web' ? { ...s, env: { MY_DB: 'explicit' } } : s)),
+    };
+    const web = serviceEnv(withSecrets, 'web');
+    expect(web).not.toHaveProperty('DATABASE_URL');
+    expect(web).not.toHaveProperty('REPORTS_DATABASE_URL');
+    expect(web).not.toHaveProperty('PGURL');
+    expect(web).toMatchObject({ PLAIN: 'ok', MY_DB: 'explicit' });
+    // A backend keeps the app-wide env (its generated DATABASE_URL still wins).
+    expect(serviceEnv(withSecrets, 'api')).toMatchObject({ PGURL: generated, REPORTS_DATABASE_URL: 'postgres://y', DATABASE_URL: generated });
   });
 
   it('throws for an unknown service', () => {

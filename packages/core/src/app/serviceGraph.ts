@@ -13,8 +13,6 @@ export interface ServiceGraph {
   readonly stopOrder: readonly string[];
   /** Direct dependencies of a service. */
   dependenciesOf(serviceId: string): readonly string[];
-  /** Every service that depends on this one, directly or through others, in start order. */
-  dependentsOf(serviceId: string): readonly string[];
 }
 
 /** Throws `ApplicationSpecError` for an invalid spec (unknown dependencies, cycles, …). */
@@ -33,22 +31,9 @@ export function serviceGraph(spec: ApplicationSpec): ServiceGraph {
     startOrder.push(next.id);
     for (const dependent of directDependents.get(next.id)!) remaining.set(dependent, remaining.get(dependent)! - 1);
   }
-  const position = new Map(startOrder.map((id, index) => [id, index]));
-
   return {
     startOrder,
     stopOrder: [...startOrder].reverse(),
     dependenciesOf: (serviceId) => dependencies.get(serviceId) ?? [],
-    dependentsOf(serviceId) {
-      const found = new Set<string>();
-      const queue = [...(directDependents.get(serviceId) ?? [])];
-      while (queue.length > 0) {
-        const id = queue.shift()!;
-        if (found.has(id)) continue;
-        found.add(id);
-        queue.push(...directDependents.get(id)!);
-      }
-      return [...found].sort((a, b) => position.get(a)! - position.get(b)!);
-    },
   };
 }

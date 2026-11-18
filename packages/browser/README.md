@@ -96,16 +96,24 @@ iframe.src = app.getUrl('web')!;
   never stops the others; a running frontend keeps running while its API restarts.
 - **Environment.** Every service gets `<ID>_URL=http://localhost:<port>` for each
   application service (`API_URL` for `api`), `PORT`, `BUILDERFORCE_SERVICE` and
-  `BUILDERFORCE_PROJECT_ID`. Backends get `DATABASE_URL` for the databases they
-  depend on; a `frontend` never does.
+  `BUILDERFORCE_PROJECT_ID`. A backend gets `<DB>_DATABASE_URL` for each database
+  it depends on, and `DATABASE_URL` only when it depends on exactly one. A
+  `frontend` never gets database credentials: not generated ones, and not
+  `DATABASE_URL`-like entries of the app-wide `env` (only its own `env` can opt in).
 - **Logs.** `app.logs()` is a `ReadableStream` of lines from every service
-  (`app.logs('api')` for one), history first, then live.
+  (`app.logs('api')` for one), history first, then live. A reader that falls
+  `logReaderBuffer` entries behind loses the overflow and gets a line saying how
+  many. Streams stay open across `stop()`/`start()`; `app.dispose()` stops the
+  app and ends them (so `for await` loops finish).
 - **Errors.** `start()` rejects with `ApplicationStartError` naming the services
   that failed for good; `onError` reports every failure as it happens, with
-  whether it will restart.
+  whether it will restart. A service stopped before it was ready is not a
+  failure. `restart(id)` leaves dependents running; a dependent still waiting
+  for the restarted service keeps waiting.
 
 Runtimes plug in as `RuntimeProvider`s (`{ id, accepts(service), start(service, ctx) }`).
-A service whose runtime has no provider, or whose provider declines it (the
-`node` provider declines databases, `wrangler dev` and Docker), fails with the
-reason instead of half-running. `validateSpec`, `serviceGraph`, `serviceEnv` and
-the lifecycle state machine are exported too, as pure functions.
+`start()` first checks that every service has a provider that accepts it (the
+`node` provider declines databases, `wrangler dev` and Docker). If any is
+declined, nothing starts and `start()` rejects with the reasons (phase
+`declined`) — never a half-started app. `validateSpec`, `serviceGraph`,
+`serviceEnv` and the lifecycle state machine are exported too, as pure functions.

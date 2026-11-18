@@ -22,8 +22,14 @@ export interface ServiceLogEntry {
   at: number;
 }
 
-/** Where a service failed. `declined` and `dependency` never restart; the rest follow the restart policy. */
-export type ServiceErrorPhase = 'declined' | 'dependency' | 'start' | 'readiness' | 'exit';
+/**
+ * Where a service failed. `declined` and `dependency` never restart; `start`,
+ * `readiness` and `exit` follow the restart policy. `stopped` is not a failure:
+ * the service was stopped (by `stop()`, or a stop racing a `restart()`) before
+ * it was ready. It is never reported through `onError`, and `start()` does not
+ * count it as a failure.
+ */
+export type ServiceErrorPhase = 'declined' | 'dependency' | 'start' | 'readiness' | 'exit' | 'stopped';
 
 export interface ServiceError {
   serviceId: string;
@@ -64,28 +70,47 @@ export interface ApplicationRuntimeOptions {
   restart?: RestartLimits;
   /** A service that stayed ready this long has its restart count reset when it exits. Default 10000ms. */
   stableAfterMs?: number;
+  /** How long a service waits for its dependencies to be ready before it fails (phase `dependency`). Default 600000ms. */
+  dependencyTimeoutMs?: number;
   /** Lines of log history kept for late `logs()` readers. Default 5000. */
   logHistory?: number;
+  /** Entries a `logs()` reader may fall behind by; past it, entries are dropped and a `runtime` line says how many. Default 1000. */
+  logReaderBuffer?: number;
 }
 
 export interface ApplicationRuntime {
   readonly projectId: string;
   /**
    * Start every service: each one after the services it depends on are ready.
-   * Resolves when all are ready; rejects with `ApplicationStartError` naming the
-   * services that failed for good — the others keep running.
+   * First, every service must be accepted by a provider: if any is declined,
+   * nothing starts and this rejects with `ApplicationStartError` (phase
+   * `declined`) — never a half-started application. Otherwise resolves when all
+   * are ready (or were stopped meanwhile); rejects with `ApplicationStartError`
+   * naming the services that failed for good — the others keep running.
    */
   start(): Promise<void>;
-  /** Stop every service, dependents first: `SIGTERM`, then `SIGKILL` after the stop timeout. */
+  /** Stop every service, dependents first: `SIGTERM`, then `SIGKILL` after the stop timeout. `logs()` streams stay open (a later `start()` continues them). */
   stop(): Promise<void>;
-  /** Stop and start one service. Other services, dependents included, keep running. Resolves when it is ready again. */
+  /**
+   * Stop and start one service. Other services, dependents included, keep
+   * running; a dependent still waiting for it keeps waiting. Resolves when it is
+   * ready again. Its dependencies must be up: restarting a service whose
+   * dependency is not running fails it (phase `dependency`) at once.
+   */
   restart(serviceId: string): Promise<void>;
+  /** `stop()`, then close every `logs()` stream (so `for await` loops end). The runtime cannot start again. */
+  dispose(): Promise<void>;
   getService(serviceId: string): ServiceSnapshot | undefined;
   /** Every service, in start order. */
   listServices(): ServiceSnapshot[];
   /** Where a browser reaches the service (its preview URL), once it listens. */
   getUrl(serviceId: string): string | undefined;
-  /** Output, live, after the history kept so far: one service's, or every service's merged. Cancel the stream to stop reading. */
+  /**
+   * Output, live, after the history kept so far: one service's, or every
+   * service's merged. A reader that falls `logReaderBuffer` entries behind loses
+   * the overflow (a `runtime` entry counts it). Open until `dispose()`; cancel
+   * the stream to stop reading sooner.
+   */
   logs(serviceId?: string): ReadableStream<ServiceLogEntry>;
   onStateChange(listener: (change: StateChange) => void): () => void;
   onError(listener: (error: ServiceError) => void): () => void;

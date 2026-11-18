@@ -5,9 +5,10 @@
  * others alone; `stop()` stops dependents before what they depend on.
  *
  * The spec is validated up front (`ApplicationSpecError`). Nothing starts until
- * `start()`.
+ * `start()`, and `start()` starts nothing unless every service is accepted.
  */
 import {
+  acceptApplication,
   createProviderRegistry,
   serviceEnv,
   serviceGraph,
@@ -15,50 +16,41 @@ import {
   type ProviderRegistry,
   type StateChange,
 } from '@seanhogg/builderforce-webcontainers-core/app';
+import { messageOf } from './asyncHelpers.js';
+import { ServiceFailure } from './awaitReadiness.js';
 import { createListeners } from './listeners.js';
 import { createServiceLogs } from './serviceLogs.js';
-import { ServiceFailure, superviseService, type SupervisedService } from './superviseService.js';
+import { superviseService, type SupervisedService } from './superviseService.js';
 import { ApplicationStartError, type ApplicationRuntime, type ApplicationRuntimeOptions, type ServiceError } from './types.js';
 
-const DEFAULTS = { readinessTimeoutMs: 120_000, stopTimeoutMs: 5_000, stableAfterMs: 10_000 };
+const DEFAULTS = { readinessTimeoutMs: 120_000, dependencyTimeoutMs: 600_000, stopTimeoutMs: 5_000, stableAfterMs: 10_000 };
 
 const isRegistry = (providers: ApplicationRuntimeOptions['providers']): providers is ProviderRegistry => 'resolve' in providers;
 
-/** Rejects as soon as `signal` aborts, whatever `promise` does. */
-function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new Error('Cancelled.'));
-  return Promise.race([promise, new Promise<never>((_, reject) => signal.addEventListener('abort', () => reject(new Error('Cancelled.')), { once: true }))]);
-}
-
-function errorOf(reason: unknown, serviceId: string): ServiceError {
-  if (reason instanceof ServiceFailure) return reason.error;
-  return { serviceId, phase: 'start', message: reason instanceof Error ? reason.message : String(reason), willRestart: false };
+/** Wait for each start; throw one `ApplicationStartError` for the services that failed (a service stopped meanwhile did not fail). */
+async function settle(starts: Array<[string, Promise<void>]>): Promise<void> {
+  const results = await Promise.allSettled(starts.map(([, start]) => start));
+  const failures = results.flatMap((result, index): ServiceError[] => {
+    if (result.status === 'fulfilled') return [];
+    const error: ServiceError =
+      result.reason instanceof ServiceFailure ? result.reason.error : { serviceId: starts[index]![0], phase: 'start', message: messageOf(result.reason), willRestart: false };
+    return error.phase === 'stopped' ? [] : [error];
+  });
+  if (failures.length > 0) throw new ApplicationStartError(failures);
 }
 
 export function startApplicationRuntime(spec: ApplicationSpec, options: ApplicationRuntimeOptions): ApplicationRuntime {
   const graph = serviceGraph(spec);
   const registry = isRegistry(options.providers) ? options.providers : createProviderRegistry(options.providers);
-  const logs = createServiceLogs(options.logHistory);
+  const logs = createServiceLogs({ history: options.logHistory, readerBuffer: options.logReaderBuffer });
   const stateChanges = createListeners<StateChange>();
   const errors = createListeners<ServiceError>();
   const services = new Map<string, SupervisedService>();
-
-  const dependenciesReady = (serviceId: string, signal: AbortSignal) =>
-    untilAborted(
-      Promise.all(
-        graph.dependenciesOf(serviceId).map((dependency) =>
-          services
-            .get(dependency)!
-            .whenReady()
-            .catch((reason: unknown) => {
-              throw new Error(`Dependency "${dependency}" is not available: ${errorOf(reason, dependency).message}`);
-            }),
-        ),
-      ).then(() => undefined),
-      signal,
-    );
+  let disposed = false;
 
   for (const id of graph.startOrder) {
+    // Start order: every dependency is created before its dependents.
+    const dependencies = graph.dependenciesOf(id).map((dependency) => services.get(dependency)!);
     services.set(
       id,
       superviseService({
@@ -68,8 +60,9 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
         logs,
         onStateChange: (change) => stateChanges.emit(change),
         onError: (error) => errors.emit(error),
-        dependenciesReady: (signal) => dependenciesReady(id, signal),
+        dependencies: () => dependencies,
         readinessTimeoutMs: options.readinessTimeoutMs ?? DEFAULTS.readinessTimeoutMs,
+        dependencyTimeoutMs: options.dependencyTimeoutMs ?? DEFAULTS.dependencyTimeoutMs,
         stopTimeoutMs: options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs,
         restart: options.restart ?? {},
         stableAfterMs: options.stableAfterMs ?? DEFAULTS.stableAfterMs,
@@ -82,25 +75,38 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
     if (!found) throw new Error(`No service "${serviceId}" in this application.`);
     return found;
   };
-
-  /** Run each start; throw one `ApplicationStartError` for every service that failed for good. */
-  const settle = async (starts: Array<[string, Promise<void>]>) => {
-    const results = await Promise.allSettled(starts.map(([, start]) => start));
-    const failures = results.flatMap((result, index) => (result.status === 'rejected' ? [errorOf(result.reason, starts[index]![0])] : []));
-    if (failures.length > 0) throw new ApplicationStartError(failures);
+  const assertLive = () => {
+    if (disposed) throw new Error('This application runtime was disposed.');
+  };
+  const stopAll = async () => {
+    for (const id of graph.stopOrder) await service(id).stop();
   };
 
   return {
     projectId: spec.projectId,
-    // In start order, so every dependency's readiness exists before its dependents ask for it.
-    start: () => settle(graph.startOrder.map((id) => [id, service(id).start()])),
-    async stop() {
-      for (const id of graph.stopOrder) await service(id).stop();
+    async start() {
+      assertLive();
+      // All or nothing: a declined service means another target, never a half-started app.
+      const acceptance = acceptApplication(spec.services, registry);
+      if (!acceptance.ok) {
+        const failures = acceptance.declined.map(({ serviceId, reason }): ServiceError => ({ serviceId, phase: 'declined', message: reason, willRestart: false }));
+        failures.forEach((failure) => errors.emit(failure));
+        throw new ApplicationStartError(failures);
+      }
+      // In start order, so each service exists and is on its way before its dependents look at it.
+      await settle(graph.startOrder.map((id) => [id, service(id).start()]));
     },
+    stop: stopAll,
     async restart(serviceId) {
+      assertLive();
       const target = service(serviceId);
-      await target.stop();
-      await settle([[serviceId, target.start()]]);
+      await settle([[serviceId, target.restart()]]);
+    },
+    async dispose() {
+      if (disposed) return;
+      disposed = true;
+      await stopAll();
+      logs.close();
     },
     getService: (serviceId) => services.get(serviceId)?.snapshot(),
     listServices: () => graph.startOrder.map((id) => service(id).snapshot()),

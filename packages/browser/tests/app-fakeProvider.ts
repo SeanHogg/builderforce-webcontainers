@@ -22,16 +22,22 @@ export class FakeProcess {
     readonly stubborn = false,
     private readonly log: string[] = [],
   ) {
-    this.output = new ReadableStream<string>({ start: (controller) => void (this.outputController = controller) });
+    // Like a real process's output: a cancelled stream is not closed (or written) again.
+    this.output = new ReadableStream<string>({
+      start: (controller) => void (this.outputController = controller),
+      cancel: () => void (this.outputOpen = false),
+    });
     this.readyPromise.catch(() => undefined);
   }
+
+  private outputOpen = true;
 
   get exited() {
     return this.exitCode !== undefined;
   }
 
   write(text: string) {
-    this.outputController.enqueue(text);
+    if (this.outputOpen) this.outputController.enqueue(text);
   }
 
   markReady() {
@@ -42,7 +48,8 @@ export class FakeProcess {
     if (this.exitCode !== undefined) return;
     this.exitCode = code;
     this.rejectReady(new Error(`Exited with code ${code} before it was ready.`));
-    this.outputController.close();
+    if (this.outputOpen) this.outputController.close();
+    this.outputOpen = false;
     this.resolveExit(code);
   }
 
@@ -76,7 +83,18 @@ export interface FakeProvider {
   stubborn: Set<string>;
 }
 
-export function fakeProvider(options: { autoReady?: string[] } = {}): FakeProvider {
+/** A promise and its resolver, for gating a step from the test. */
+export function gate(): { promise: Promise<void>; open(): void } {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => (open = resolve));
+  return { promise, open };
+}
+
+/**
+ * `autoReady`: services whose processes become ready on their own.
+ * `startGate`: hold the provider's start of a service until the returned promise settles.
+ */
+export function fakeProvider(options: { autoReady?: string[]; startGate?: (serviceId: string) => Promise<void> | undefined } = {}): FakeProvider {
   const started: FakeProcess[] = [];
   const kills: string[] = [];
   const stubborn = new Set<string>();
@@ -95,10 +113,14 @@ export function fakeProvider(options: { autoReady?: string[] } = {}): FakeProvid
       id: 'fake',
       accepts: (service) => (service.type === 'application' ? { ok: true } : { ok: false, reason: `fake runs applications, not ${service.type}` }),
       start(service, context) {
-        const proc = new FakeProcess(service, context.env, stubborn.has(service.id), kills);
-        started.push(proc);
-        if (options.autoReady?.includes(service.id)) queueMicrotask(() => proc.markReady());
-        return proc.handle();
+        const launch = () => {
+          const proc = new FakeProcess(service, context.env, stubborn.has(service.id), kills);
+          started.push(proc);
+          if (options.autoReady?.includes(service.id)) queueMicrotask(() => proc.markReady());
+          return proc.handle();
+        };
+        const gate = options.startGate?.(service.id);
+        return gate ? gate.then(launch) : launch();
       },
     },
   };

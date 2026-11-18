@@ -1,8 +1,10 @@
 /**
- * Run ONE service through its lifecycle: wait for its dependencies, start it on
- * the provider that accepts it, hold it to its readiness (with a timeout), and
- * when its process exits on its own apply its restart policy. A failure here
- * touches only this service; dependents that are already running keep running.
+ * Run ONE service through its lifecycle: wait for its dependencies (following
+ * their readiness as it changes), start it on the provider that accepts it,
+ * hold it to its readiness, and when its process exits on its own apply its
+ * restart policy. A failure here touches only this service; dependents that are
+ * already running keep running. Stopping is `stopService.ts`; restarts wait in
+ * `restartScheduler.ts`.
  */
 import {
   ACTIVE_STATES,
@@ -18,7 +20,11 @@ import {
   type ServiceSpec,
   type StateChange,
 } from '@seanhogg/builderforce-webcontainers-core/app';
-import { discardOutput, exitWithin, stopProcess } from './stopProcess.js';
+import { messageOf, within } from './asyncHelpers.js';
+import { ServiceFailure, untilReady, type ReadinessSource } from './awaitReadiness.js';
+import { createListeners } from './listeners.js';
+import { createRestartScheduler } from './restartScheduler.js';
+import { abandonProcess, exitWithin, stopRun, type ServiceRun } from './stopService.js';
 import type { ServiceLogs } from './serviceLogs.js';
 import type { ServiceError, ServiceErrorPhase, ServiceSnapshot } from './types.js';
 
@@ -29,68 +35,24 @@ export interface SuperviseOptions {
   logs: ServiceLogs;
   onStateChange(change: StateChange): void;
   onError(error: ServiceError): void;
-  /** Resolves once every dependency is ready; rejects with why one will not be (or when `signal` aborts). */
-  dependenciesReady(signal: AbortSignal): Promise<void>;
+  /** The services this one depends on. */
+  dependencies(): readonly ReadinessSource[];
   readinessTimeoutMs: number;
+  dependencyTimeoutMs: number;
   stopTimeoutMs: number;
   restart: RestartLimits;
   stableAfterMs: number;
 }
 
-export interface SupervisedService {
-  readonly id: string;
-  /** Start it unless it is already starting or up. Resolves when ready; rejects with `ServiceFailure` when it fails for good. */
+export interface SupervisedService extends ReadinessSource {
+  /** Start it unless it is up or on its way. Resolves when ready; rejects with `ServiceFailure` when it will not be. */
   start(): Promise<void>;
   /** Stop it (cancelling a pending start or restart); resolves once its process has exited. */
   stop(): Promise<void>;
-  /** Settles when the service is ready, or has failed for good. */
-  whenReady(): Promise<void>;
+  /** Stop, then start — unless another stop arrives meanwhile. Dependents waiting for it keep waiting. */
+  restart(): Promise<void>;
   url(): string | undefined;
   snapshot(): ServiceSnapshot;
-}
-
-/** Why a service will not become ready (it failed for good, or was stopped first). */
-export class ServiceFailure extends Error {
-  constructor(readonly error: ServiceError) {
-    super(error.message);
-    this.name = 'ServiceFailure';
-  }
-}
-
-interface Deferred {
-  promise: Promise<void>;
-  resolve(): void;
-  reject(error: Error): void;
-  readonly settled: boolean;
-}
-
-function deferred(): Deferred {
-  let settled = false;
-  let resolve!: () => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<void>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  promise.catch(() => undefined); // a failure nobody waits for is not an unhandled rejection
-  return {
-    promise,
-    resolve: () => ((settled = true), resolve()),
-    reject: (error) => ((settled = true), reject(error)),
-    get settled() {
-      return settled;
-    },
-  };
-}
-
-/** One attempt at running the process. Callbacks from an attempt that is no longer `active` are ignored. */
-interface Run {
-  controller: AbortController;
-  handle?: ServiceHandle;
-  readyAt?: number;
-  exitCode?: number;
-  /** A one-off (`exit-zero`) service exited 0 before its readiness was seen. */
-  completed?: boolean;
 }
 
 interface Outcome {
@@ -101,100 +63,127 @@ interface Outcome {
   clean?: boolean;
 }
 
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(message)), ms)));
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
 export function superviseService(options: SuperviseOptions): SupervisedService {
   const { spec, logs } = options;
   const readiness = readinessOf(spec);
   const policy = restartPolicyOf(spec);
-  const lifecycle = createLifecycle(spec.id, options.onStateChange);
   const timeoutMs = readiness.timeoutMs ?? options.readinessTimeoutMs;
-  let ready = deferred();
-  let active: Run | undefined;
+  const changes = createListeners<void>();
+  const lifecycle = createLifecycle(spec.id, (change) => {
+    options.onStateChange(change);
+    changes.emit();
+  });
+  const scheduler = createRestartScheduler();
+  const serviceError = (phase: ServiceErrorPhase, message: string, willRestart = false, exitCode?: number): ServiceError => ({ serviceId: spec.id, phase, message, exitCode, willRestart });
+
+  let active: ServiceRun | undefined;
+  /** Ready for dependents: running, or a one-off that finished. */
+  let satisfied = false;
+  /** Between a `restart()`'s stop and its start. */
+  let restarting = false;
   let attempt = 0;
-  let restartTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Set while a restart is scheduled; `stop` clears it to cancel the restart. */
-  let pendingRestart: object | undefined;
+  /** Counts `stop()` calls, coalesced ones too: a start queued behind a stop is dropped when another stop arrived. */
+  let stopRequests = 0;
   let stopping: Promise<void> | undefined;
+  /** The last process's exit: a launch waits for it (bounded), so a new process never races the old one for its port. */
+  let lastExit: Promise<unknown> | undefined;
   let exitCode: number | undefined;
   let lastError: ServiceError | undefined;
+  let downReason = serviceError('stopped', 'Not started.');
 
-  const launch = () => {
-    const run: Run = { controller: new AbortController() };
+  function launch(): void {
+    const run: ServiceRun = { controller: new AbortController() };
     active = run;
+    satisfied = false;
     void execute(run);
-  };
+  }
 
-  async function execute(run: Run): Promise<void> {
+  async function execute(run: ServiceRun): Promise<void> {
     lifecycle.transition('preparing');
     try {
-      await options.dependenciesReady(run.controller.signal);
+      await untilReady(options.dependencies(), { signal: run.controller.signal, timeoutMs: options.dependencyTimeoutMs });
     } catch (error) {
-      return end(run, { phase: 'dependency', message: messageOf(error) });
+      const message = error instanceof ServiceFailure ? `Dependency "${error.error.serviceId}" is not available: ${error.error.message}` : `Dependencies not ready: ${messageOf(error)}`;
+      return end(run, { phase: 'dependency', message });
     }
     if (active !== run) return;
     const resolution = options.registry.resolve(spec);
     if (!resolution.ok) return end(run, { phase: 'declined', message: resolution.reason });
+    if (lastExit) await within(lastExit, { ms: options.stopTimeoutMs, onTimeout: () => undefined, signal: run.controller.signal, onAbort: () => undefined });
+    if (active !== run) return;
 
     lifecycle.transition('starting');
     let handle: ServiceHandle;
     try {
-      handle = await resolution.provider.start(spec, { env: options.env, signal: run.controller.signal });
+      run.handlePromise = Promise.resolve(resolution.provider.start(spec, { env: options.env, signal: run.controller.signal }));
+      handle = await run.handlePromise;
     } catch (error) {
       return end(run, { phase: 'start', message: messageOf(error) });
     }
+    run.handle = handle;
     if (active !== run) {
-      // Stopped while the provider was starting it.
-      handle.kill('SIGKILL');
-      discardOutput(handle.output);
+      // Stopped while the provider was starting it: the stop owns the process, unless it gave up waiting.
+      if (run.abandoned) lastExit = abandonProcess(handle);
+      else void handle.output.cancel().catch(() => undefined);
       return;
     }
-    run.handle = handle;
     logs.pipe(spec.id, handle.output);
+    lastExit = handle.wait();
     void handle.wait().then((code) => exited(run, code));
 
     try {
-      await withTimeout(handle.ready(), timeoutMs, `Not ready after ${timeoutMs}ms (${readiness.kind} readiness).`);
+      await within(handle.ready(), {
+        ms: timeoutMs,
+        onTimeout: () => {
+          throw new Error(`Not ready after ${timeoutMs}ms (${readiness.kind} readiness).`);
+        },
+        signal: run.controller.signal,
+      });
     } catch (error) {
+      if (active !== run) return;
       const code = run.exitCode ?? (await exitWithin(handle, 0));
+      if (active !== run) return;
+      if (readiness.kind === 'exit-zero' && code === 0) {
+        run.completed = true; // finished: its exit is its readiness, whatever ready() said
+        return becomeReady(run);
+      }
       return end(run, { phase: code === undefined ? 'readiness' : 'exit', message: messageOf(error), exitCode: code });
     }
-    if (active !== run) return;
-    lifecycle.transition('ready');
-    run.readyAt = Date.now();
-    lastError = undefined;
-    lifecycle.transition('running');
-    ready.resolve();
-    if (run.completed) complete();
+    if (active === run) becomeReady(run);
   }
 
-  function exited(run: Run, code: number): void {
+  function becomeReady(run: ServiceRun): void {
+    run.readyAt = Date.now();
+    lastError = undefined;
+    lifecycle.transition('ready');
+    satisfied = true;
+    lifecycle.transition('running');
+    if (run.completed) complete(run);
+  }
+
+  function exited(run: ServiceRun, code: number): void {
     run.exitCode = code;
     exitCode = code;
     if (active !== run) return;
     if (readiness.kind === 'exit-zero' && code === 0) {
+      // A one-off finished: that IS its readiness, whatever the provider's ready() does.
       run.completed = true;
-      if (lifecycle.state === 'running') complete();
-      return; // still `starting`: `execute` sees readiness, then completes it
+      if (lifecycle.state === 'running') complete(run);
+      else if (lifecycle.state === 'starting') becomeReady(run);
+      return;
     }
-    const wasRunning = lifecycle.state === 'running';
-    end(run, { phase: 'exit', message: `Exited with code ${code}.`, exitCode: code, clean: wasRunning && code === 0 });
+    end(run, { phase: 'exit', message: `Exited with code ${code}.`, exitCode: code, clean: lifecycle.state === 'running' && code === 0 });
   }
 
   /** A one-off service finished: stopped, and its readiness stays met for its dependents. */
-  function complete(): void {
+  function complete(run: ServiceRun): void {
     active = undefined;
+    run.controller.abort();
     logs.note(spec.id, 'Completed.');
     lifecycle.transition('stopped');
   }
 
-  function end(run: Run, outcome: Outcome): void {
+  function end(run: ServiceRun, outcome: Outcome): void {
     if (active !== run) return;
     active = undefined;
     run.controller.abort();
@@ -203,75 +192,76 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
 
     const terminal = outcome.phase === 'declined' || outcome.phase === 'dependency';
     const decision: RestartDecision = terminal ? { restart: false, reason: 'policy' } : restartDecision(policy, readiness.kind, outcome.exitCode ?? 1, attempt, options.restart);
+    const error = serviceError(outcome.phase, outcome.message, decision.restart, outcome.exitCode);
+    satisfied = false;
+    downReason = error;
+    // Scheduled before the transition, so waiters hearing it see a restart pending, not a service down.
+    if (decision.restart) scheduler.schedule(decision.delayMs, launch);
     lifecycle.transition(outcome.clean ? 'stopped' : 'failed');
-    // Leaving `running` (or never reaching it): dependents asking from now on wait for the next start.
-    if (ready.settled) ready = deferred();
 
-    let error: ServiceError | undefined;
-    if (!outcome.clean) {
-      error = { serviceId: spec.id, phase: outcome.phase, message: outcome.message, exitCode: outcome.exitCode, willRestart: decision.restart };
+    if (outcome.clean) logs.note(spec.id, 'Exited with code 0.');
+    else {
       lastError = error;
       logs.note(spec.id, `Failed (${outcome.phase}): ${outcome.message}`);
       options.onError(error);
-    } else logs.note(spec.id, 'Exited with code 0.');
-
+    }
     if (decision.restart) {
       attempt += 1;
       logs.note(spec.id, `Restarting in ${decision.delayMs}ms (${policy}, attempt ${attempt}).`);
-      scheduleRestart(decision.delayMs, run);
-    } else {
-      ready.reject(new ServiceFailure(error ?? { serviceId: spec.id, phase: 'exit', message: 'Exited with code 0.', exitCode: 0, willRestart: false }));
     }
   }
 
-  /** Start again after `delayMs`, once the previous process has exited (it may still hold its port). */
-  function scheduleRestart(delayMs: number, previous: Run): void {
-    const token = {};
-    pendingRestart = token;
-    restartTimer = setTimeout(async () => {
-      restartTimer = undefined;
-      if (previous.handle && previous.exitCode === undefined) await exitWithin(previous.handle, options.stopTimeoutMs);
-      if (pendingRestart !== token) return; // stopped meanwhile
-      pendingRestart = undefined;
-      launch();
-    }, delayMs);
-  }
-
   async function stopNow(): Promise<void> {
-    if (restartTimer !== undefined) clearTimeout(restartTimer);
-    restartTimer = undefined;
-    pendingRestart = undefined;
+    scheduler.cancel();
     const run = active;
     active = undefined;
-    run?.controller.abort();
+    // Synchronously: from now on dependents do not see it as ready.
+    satisfied = false;
+    downReason = serviceError('stopped', 'Stopped.');
     if (ACTIVE_STATES.has(lifecycle.state)) {
       lifecycle.transition('stopping');
-      if (run?.handle && run.exitCode === undefined) {
-        const code = await stopProcess(run.handle, options.stopTimeoutMs);
-        if (code === undefined) logs.note(spec.id, `Did not exit within ${options.stopTimeoutMs}ms of SIGKILL.`);
-      }
+      const stopped = run ? await stopRun(run, options.stopTimeoutMs) : undefined;
+      if (stopped) lastExit = stopped.wait();
       lifecycle.transition('stopped');
     } else if (lifecycle.state === 'failed') lifecycle.transition('stopped');
-    if (!ready.settled) ready.reject(new ServiceFailure({ serviceId: spec.id, phase: 'exit', message: 'Stopped before it was ready.', willRestart: false }));
-    ready = deferred();
+    else changes.emit(); // a finished one-off is no longer ready
   }
 
   const service: SupervisedService = {
     id: spec.id,
     async start() {
+      const requests = stopRequests;
       if (stopping) await stopping;
-      if (ACTIVE_STATES.has(lifecycle.state) || pendingRestart !== undefined) return ready.promise;
-      if (ready.settled) ready = deferred();
-      attempt = 0;
-      const pending = ready.promise;
-      launch();
-      return pending;
+      if (requests !== stopRequests) throw new ServiceFailure(serviceError('stopped', 'Stopped before it started.'));
+      if (!satisfied && !ACTIVE_STATES.has(lifecycle.state) && !scheduler.pending) {
+        attempt = 0;
+        launch();
+      }
+      return untilReady([service]);
     },
     stop() {
+      stopRequests += 1;
       stopping ??= stopNow().finally(() => (stopping = undefined));
       return stopping;
     },
-    whenReady: () => ready.promise,
+    async restart() {
+      restarting = true;
+      try {
+        const stopped = service.stop();
+        const requests = stopRequests;
+        await stopped;
+        if (requests !== stopRequests) throw new ServiceFailure(serviceError('stopped', 'Stopped while restarting.'));
+        attempt = 0;
+        launch();
+      } finally {
+        restarting = false;
+        changes.emit();
+      }
+      return untilReady([service]);
+    },
+    readiness: () => (satisfied ? 'ready' : ACTIVE_STATES.has(lifecycle.state) || scheduler.pending || restarting ? 'pending' : 'down'),
+    failure: () => downReason,
+    onChange: (listener) => changes.on(listener),
     url: () => active?.handle?.url(),
     snapshot: () => ({
       id: spec.id,

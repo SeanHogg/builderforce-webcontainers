@@ -9,6 +9,7 @@
  */
 export { startApplicationRuntime } from './app/startApplicationRuntime.js';
 export { ApplicationStartError } from './app/types.js';
+export { ServiceFailure } from './app/awaitReadiness.js';
 export type { ApplicationRuntime, ApplicationRuntimeOptions, ServiceError, ServiceErrorPhase, ServiceLogEntry, ServiceSnapshot } from './app/types.js';
 export { createNodeProvider, acceptsNodeService, NODE_DECLINED_COMMANDS, NODE_READINESS } from './app/nodeProvider.js';
 export type { NodeProviderOptions } from './app/nodeProvider.js';

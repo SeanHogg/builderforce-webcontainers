@@ -4,7 +4,8 @@
  * the runtime's in-runtime localhost — never the page's network.
  */
 import type { PortChange, ProcessOptions, RuntimeProcess, ServerAddress } from '@seanhogg/builderforce-webcontainers-core';
-import { discardOutput, exitWithin } from './stopProcess.js';
+import { sleep, within } from './asyncHelpers.js';
+import { exitWithin } from './stopService.js';
 
 /** The slice of a runtime (`startPreviewRuntime()`'s, or the core `Kernel` adapted) the Node provider uses. */
 export interface NodeServiceHost {
@@ -14,20 +15,30 @@ export interface NodeServiceHost {
   /** A virtual server opened or closed its port. */
   onPortChange(listener: (change: PortChange) => void): () => void;
   /**
-   * Send a request to a virtual server directly, without a process (the core
-   * `Kernel.request`). Without it, `http` readiness probes from inside the
-   * runtime with a short `node -e` fetch to localhost.
+   * Send a request to a virtual server directly, without a process
+   * (`PreviewRuntime.request`, the core `Kernel.request`). Without it, `http`
+   * readiness probes from inside the runtime with a short `node -e` fetch.
    */
   request?(port: number, request: { url: string }): Promise<{ status: number } | undefined>;
+  /**
+   * Processes running, with their ports (`PreviewRuntime.listProcesses`). With
+   * it, a service whose port another process still holds fails at once instead
+   * of waiting out its readiness timeout.
+   */
+  listProcesses?(): ReadonlyArray<{ ports: readonly number[] }>;
 }
 
 /** 2xx and 3xx count as answering. */
 export const isHealthy = (status: number) => status >= 200 && status < 400;
 
+/** Whether some process of `host` listens on `port` (false when the host cannot tell). */
+export const portHeld = (host: NodeServiceHost, port: number): boolean => host.listProcesses?.().some((info) => info.ports.includes(port)) ?? false;
+
 /**
  * A program the runtime's Node runs: exits 0 when `GET url` is healthy, 1
- * otherwise. It sets `process.exitCode` and lets the event loop drain rather
- * than calling `process.exit()` inside a promise callback.
+ * otherwise. It sets `process.exitCode` and lets the event loop drain: a
+ * `process.exit()` inside a promise callback would surface, under the
+ * in-process `Kernel`, as the host's unhandled rejection.
  */
 export function httpProbeScript(url: string): string {
   return (
@@ -37,25 +48,19 @@ export function httpProbeScript(url: string): string {
   );
 }
 
-/** Ask once whether `http://localhost:<port><path>` is healthy, from inside the runtime. */
+/** Ask once, within `timeoutMs`, whether `http://localhost:<port><path>` is healthy, from inside the runtime. */
 export async function probeHttp(host: NodeServiceHost, port: number, path: string, timeoutMs: number): Promise<boolean> {
   const url = path.startsWith('/') ? path : `/${path}`;
   if (host.request) {
-    const response = await host.request(port, { url }).catch(() => undefined);
+    const response = await within(host.request(port, { url }), { ms: timeoutMs, onTimeout: () => undefined }).catch(() => undefined);
     return response !== undefined && isHealthy(response.status);
   }
   const probe = host.run('node', ['-e', httpProbeScript(`http://localhost:${port}${url}`)]);
-  discardOutput(probe.combinedOutput);
+  void probe.combinedOutput.cancel().catch(() => undefined);
   const code = await exitWithin(probe, timeoutMs);
   if (code === undefined) probe.kill('SIGKILL');
   return code === 0;
 }
-
-const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true });
-  });
 
 /** Probe until healthy; rejects when `signal` aborts (the process exited, the service stopped). */
 export async function untilHttpHealthy(host: NodeServiceHost, port: number, path: string, intervalMs: number, signal: AbortSignal): Promise<void> {

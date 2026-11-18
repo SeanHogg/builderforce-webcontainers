@@ -24,6 +24,7 @@ function nodeHost(processes: Kernel, direct = true): NodeServiceHost {
     onServerListening: (listener) => processes.servers.onListening(listener),
     onPortChange: (listener) => processes.servers.onPortChange(listener),
     request: direct ? (port, request) => processes.request(port, { url: request.url }) : undefined,
+    listProcesses: () => [{ ports: processes.ports.ports() }],
   };
 }
 
@@ -124,6 +125,21 @@ describe('node provider', () => {
     await runtime.start();
     expect(runtime.getService('api')?.state).toBe('running');
     await runtime.stop();
+  }, 30_000);
+
+  it('fails at once, not after the readiness timeout, when another process still holds the port', async () => {
+    const processes = kernel(FILES);
+    const stale = processes.run('node', ['server.js'], { cwd: '/api', env: { PORT: '8000' } });
+    await until(() => processes.ports.has(8000));
+    const runtime = startApplicationRuntime(
+      { projectId: 'p', services: [{ ...SPEC.services[1]!, restartPolicy: 'never' }] },
+      { providers: [createNodeProvider(nodeHost(processes))], readinessTimeoutMs: 20_000 },
+    );
+    const began = Date.now();
+    await expect(runtime.start()).rejects.toMatchObject({ failures: [{ serviceId: 'api', phase: 'start', message: 'Port 8000 is already in use by another process.' }] });
+    expect(Date.now() - began).toBeLessThan(5_000);
+    stale.kill();
+    await stale.wait();
   }, 30_000);
 
   it('fails a service that exits before it is ready, with its exit code', async () => {

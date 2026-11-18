@@ -165,17 +165,22 @@ export function runArguments(args: string[] | ProcessOptions = [], options: Proc
 }
 
 export function toRuntimeProcess(child: ChildHandle, terminal: boolean): RuntimeProcess {
+  // False once the reader cancels or the process exits: a cancelled stream must not be closed again.
+  let open = true;
   const combinedOutput = new ReadableStream<string>({
     start(controller) {
-      let open = true;
       const push = (text: string | null) => text !== null && open && controller.enqueue(terminal ? toTerminal(text) : text);
       // One decoder per stream, so a character split across writes on one is not garbled by the other.
       child.onStdout(textChunks(push));
       child.onStderr(textChunks(push));
       void child.exit.then(() => {
+        if (!open) return;
         open = false;
         controller.close();
       });
+    },
+    cancel() {
+      open = false;
     },
   });
   const stdin = new WritableStream<string>({
