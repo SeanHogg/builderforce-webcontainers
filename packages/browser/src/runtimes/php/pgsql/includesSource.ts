@@ -128,8 +128,8 @@ final class Includes
             if ($loaded === null || $loaded[2] === false) {
                 return null;
             }
-            // The CLI skips a leading #! line; required, it would print. A newline keeps the line numbers.
-            self::$handoff[$path] = [preg_replace('/\A#![^\n]*/', '', $loaded[0]), $loaded[1]];
+            // The CLI skips a leading #! line; required, it would print. It becomes the open tag's line, so the line numbers hold.
+            self::$handoff[$path] = [preg_replace(['/\A#![^\n]*\n<\?php(?=\s)/', '/\A#![^\n]*/'], ["<?php\n", ''], $loaded[0], 1), $loaded[1]];
             return $path;
         }, false);
         return self::$primary !== null;
