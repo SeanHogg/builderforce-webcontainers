@@ -23,7 +23,8 @@ export type SpecIssue =
   | { code: 'invalid-timeout'; serviceId: string; timeoutMs: number }
   | { code: 'missing-health-path'; serviceId: string }
   | { code: 'missing-command'; serviceId: string }
-  | { code: 'missing-database'; serviceId: string };
+  | { code: 'missing-database'; serviceId: string }
+  | { code: 'training-port'; serviceId: string };
 
 export type SpecIssueCode = SpecIssue['code'];
 
@@ -58,6 +59,8 @@ export function describeIssue(issue: SpecIssue): string {
       return `Service "${issue.serviceId}" has no command to run.`;
     case 'missing-database':
       return `Database service "${issue.serviceId}" has no database settings (engine, provider, persistent).`;
+    case 'training-port':
+      return `Training service "${issue.serviceId}" has a port; a training service serves nothing.`;
   }
 }
 
@@ -93,6 +96,7 @@ export function validateSpec(spec: ApplicationSpec): SpecIssue[] {
     if (readiness.timeoutMs !== undefined && !(Number.isFinite(readiness.timeoutMs) && readiness.timeoutMs > 0)) issues.push({ code: 'invalid-timeout', serviceId: service.id, timeoutMs: readiness.timeoutMs });
     if (service.type !== 'database' && !service.command) issues.push({ code: 'missing-command', serviceId: service.id });
     if (service.type === 'database' && !service.database) issues.push({ code: 'missing-database', serviceId: service.id });
+    if (service.type === 'training' && service.port !== undefined) issues.push({ code: 'training-port', serviceId: service.id });
   }
 
   for (const [name, serviceIds] of envOwners) {

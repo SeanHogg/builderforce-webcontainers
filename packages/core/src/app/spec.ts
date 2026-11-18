@@ -24,7 +24,9 @@ export type ReadinessSpec =
   /** The database accepts a query. */
   | { kind: 'query'; timeoutMs?: number }
   /** The process exits with code 0 (a migration, a seed, a one-off build). */
-  | { kind: 'exit-zero'; timeoutMs?: number };
+  | { kind: 'exit-zero'; timeoutMs?: number }
+  /** The process started (a long-running job with no port: a `training` service). */
+  | { kind: 'started'; timeoutMs?: number };
 
 export type ReadinessKind = ReadinessSpec['kind'];
 
@@ -65,9 +67,9 @@ export interface ServiceSpec {
   port?: number;
   /** Services that must be ready before this one starts. */
   dependsOn?: string[];
-  /** Default `{ kind: 'port' }` when the service has a port, else `{ kind: 'exit-zero' }`. */
+  /** Default `{ kind: 'started' }` for a `training` service, else `{ kind: 'port' }` when it has a port, else `{ kind: 'exit-zero' }`. */
   readiness?: ReadinessSpec;
-  /** Default `on-failure`. */
+  /** Default `never` for a `training` service, else `on-failure`. */
   restartPolicy?: RestartPolicy;
   /** Required for `database` services. */
   database?: DatabaseSpec;
@@ -83,12 +85,14 @@ export interface ApplicationSpec {
 
 /** The readiness a service is held to, defaults applied. */
 export function readinessOf(service: ServiceSpec): ReadinessSpec {
-  return service.readiness ?? (service.port === undefined ? { kind: 'exit-zero' } : { kind: 'port' });
+  if (service.readiness) return service.readiness;
+  if (service.type === 'training') return { kind: 'started' };
+  return service.port === undefined ? { kind: 'exit-zero' } : { kind: 'port' };
 }
 
-/** The restart policy a service is held to, defaults applied. */
+/** The restart policy a service is held to, defaults applied (`never` for a `training` service). */
 export function restartPolicyOf(service: ServiceSpec): RestartPolicy {
-  return service.restartPolicy ?? 'on-failure';
+  return service.restartPolicy ?? (service.type === 'training' ? 'never' : 'on-failure');
 }
 
 /** The role a service is held to, defaults applied. */

@@ -7,6 +7,7 @@
  */
 import { readinessOf, type Acceptance, type ReadinessKind, type RuntimeProvider, type ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
 import { portHeld, untilHttpHealthy, type NodeServiceHost } from './nodeReadiness.js';
+import { requestCheckpoint } from './checkpointRequest.js';
 import type { RuntimeProcess, ServerAddress } from '@seanhogg/builderforce-webcontainers-core';
 
 /** Commands the browser runtime cannot host, by name, with the reason it gives. */
@@ -20,7 +21,7 @@ export const NODE_DECLINED_COMMANDS: Readonly<Record<string, string>> = {
 };
 
 /** Which readiness kinds a Node service can be held to. `query` belongs to database providers. */
-export const NODE_READINESS: Readonly<Record<ReadinessKind, boolean>> = { port: true, http: true, 'exit-zero': true, query: false };
+export const NODE_READINESS: Readonly<Record<ReadinessKind, boolean>> = { port: true, http: true, 'exit-zero': true, started: true, query: false };
 
 export interface NodeProviderOptions {
   /** Between `http` readiness probes. Default 250ms. */
@@ -101,6 +102,8 @@ export function createNodeProvider(host: NodeServiceHost, options: NodeProviderO
             return exit.then((code) => {
               if (code !== 0) throw new Error(`Exited with code ${code}.`);
             });
+          case 'started':
+            return Promise.resolve();
           case 'query':
             return Promise.reject(new Error('The node runtime cannot check "query" readiness.'));
         }
@@ -111,6 +114,7 @@ export function createNodeProvider(host: NodeServiceHost, options: NodeProviderO
         ready: () => (readiness$ ??= ready()),
         wait: () => exit,
         kill: (signal) => child.kill(signal),
+        checkpoint: service.type === 'training' ? () => requestCheckpoint(child) : undefined,
         url: () => url,
       };
     },
