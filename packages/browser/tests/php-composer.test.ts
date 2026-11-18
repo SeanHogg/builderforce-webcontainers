@@ -201,7 +201,7 @@ use Slim\Factory\AppFactory;
 require __DIR__ . '/../vendor/autoload.php';
 
 $url = parse_url(getenv('DATABASE_URL'));
-$pdo = new \Bfwc\Pgsql\PDO(sprintf('pgsql:host=%s;port=%d;dbname=postgres', $url['host'], $url['port']), 'postgres', null, [\PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC]);
+$pdo = new \Bfwc\Pgsql\PDO(sprintf('pgsql:host=%s;port=%d;dbname=postgres', $url['host'], $url['port']), urldecode($url['user'] ?? 'postgres'), isset($url['pass']) ? urldecode($url['pass']) : null, [\PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC]);
 $pdo->exec('CREATE TABLE IF NOT EXISTS notes (id serial PRIMARY KEY, body text NOT NULL)');
 
 $app = AppFactory::create();
