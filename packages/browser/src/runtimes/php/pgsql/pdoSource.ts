@@ -1,9 +1,9 @@
 /**
  * `Bfwc\Pgsql\PDO` and its statement: PDO's API for Postgres on the runtime's
- * wire client (wireSource.ts). php-wasm has no `pdo_pgsql`, so
- * `new PDO('pgsql:…')` fails with "could not find driver"; an app constructs
- * `new \Bfwc\Pgsql\PDO('pgsql:host=localhost;port=5432;dbname=app', $user,
- * $password)` instead. It *is* a `\PDO` (and its statements `\PDOStatement`s),
+ * wire client (wireSource.ts). php-wasm has no `pdo_pgsql`; an unmodified
+ * `new PDO('pgsql:…')` reaches this class through the include rewrite
+ * (includesSource.ts), and `new \Bfwc\Pgsql\PDO('pgsql:…')` works directly.
+ * It *is* a `\PDO` (and its statements `\PDOStatement`s),
  * so code that type-hints `PDO` — repositories, Slim/Laravel-lite containers —
  * takes it unchanged.
  *

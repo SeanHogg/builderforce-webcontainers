@@ -2,7 +2,8 @@
  * The PHP runtime (PRD 31 §W9 phase 6b): php-wasm in a process Worker, PHP's
  * CLI, `php -S` served request-driven on virtual ports, Composer installs of
  * pure-PHP packages, PHP sockets over virtual TCP, and Postgres through the
- * runtime's PDO (`Bfwc\Pgsql\PDO`). For the package's `./app` to re-export.
+ * runtime's PDO (`Bfwc\Pgsql\PDO`, reached by an unmodified `new PDO('pgsql:…')`)
+ * and `pg_*` functions. For the package's `./app` to re-export.
  */
 export { PHP_WASM_VERSION, PHP_WASM_RELEASES, DEFAULT_PHP_VERSION, SUPPORTED_PHP_VERSIONS, DEFAULT_PHP_WASM_BASE_URL, checkPhpVersion, loadPhpRuntime, phpWasmModuleUrls } from './phpLoader.js';
 export type { LoadedPhp, PhpLike, PhpLoadOptions, PhpModuleLike, PhpRunRequest, PhpStreamedResponse } from './phpLoader.js';

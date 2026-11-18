@@ -5,8 +5,8 @@
  * decline of a package needing a missing extension run without the network.
  * Online (skipped with the reason when Packagist or GitHub is unreachable or
  * rate-limited): `composer install` of Slim 4 + slim/psr7 from the real
- * Packagist, then a Slim app doing CRUD against the PGlite database through the
- * runtime's PDO — PRD 31 §W9 phase 6b's exit condition.
+ * Packagist, then an unmodified Slim app (`new PDO('pgsql:…')`) doing CRUD against
+ * the PGlite database through the runtime's PDO — PRD 31 §W9 phase 6b's exit condition.
  */
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -201,7 +201,7 @@ use Slim\Factory\AppFactory;
 require __DIR__ . '/../vendor/autoload.php';
 
 $url = parse_url(getenv('DATABASE_URL'));
-$pdo = new \Bfwc\Pgsql\PDO(sprintf('pgsql:host=%s;port=%d;dbname=postgres', $url['host'], $url['port']), urldecode($url['user'] ?? 'postgres'), isset($url['pass']) ? urldecode($url['pass']) : null, [\PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC]);
+$pdo = new PDO(sprintf('pgsql:host=%s;port=%d;dbname=postgres', $url['host'], $url['port']), urldecode($url['user'] ?? 'postgres'), isset($url['pass']) ? urldecode($url['pass']) : null, [PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
 $pdo->exec('CREATE TABLE IF NOT EXISTS notes (id serial PRIMARY KEY, body text NOT NULL)');
 
 $app = AppFactory::create();
@@ -227,11 +227,24 @@ $app->delete('/notes/{id}', function (Request $request, Response $response, arra
     $delete->execute([(int) $args['id']]);
     return $json($response, ['deleted' => $delete->rowCount()]);
 });
+$app->post('/transfer', function (Request $request, Response $response) use ($pdo, $json) {
+    // A transaction that fails part-way (a NOT NULL violation) rolls back.
+    $pdo->beginTransaction();
+    try {
+        $pdo->exec("INSERT INTO notes (body) VALUES ('in transaction')");
+        $pdo->exec('INSERT INTO notes (body) VALUES (NULL)');
+        $pdo->commit();
+        return $json($response, ['committed' => true]);
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        return $json($response, ['rolledBack' => true, 'sqlstate' => $e->getCode(), 'inTransaction' => $pdo->inTransaction()], 409);
+    }
+});
 $app->run();
 `;
 
 describe('composer + Slim 4 against PGlite (online)', () => {
-  it('installs Slim from Packagist, then a Slim app does CRUD against the shared database', { timeout: 600_000 }, async (context) => {
+  it('installs Slim from Packagist, then an unmodified Slim app (new PDO) does CRUD and a rolled-back transaction against the shared database', { timeout: 600_000 }, async (context) => {
     const offline = await online();
     if (offline) {
       console.info(`Skipped (network-dependent): ${offline}`);
@@ -264,6 +277,7 @@ describe('composer + Slim 4 against PGlite (online)', () => {
     expect(await call('POST', '/notes', { body: 'first' })).toEqual({ status: 201, body: { id: 1 } });
     expect(await call('POST', '/notes', { body: 'second' })).toEqual({ status: 201, body: { id: 2 } });
     expect(await call('PUT', '/notes/1', { body: 'first, edited' })).toEqual({ status: 200, body: { updated: 1 } });
+    expect(await call('POST', '/transfer')).toEqual({ status: 409, body: { rolledBack: true, sqlstate: '23502', inTransaction: false } });
     expect(await call('DELETE', '/notes/2')).toEqual({ status: 200, body: { deleted: 1 } });
     expect(await call('GET', '/notes')).toEqual({ status: 200, body: [{ id: 1, body: 'first, edited' }] });
     await app.dispose();

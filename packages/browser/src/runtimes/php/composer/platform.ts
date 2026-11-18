@@ -25,7 +25,7 @@ const PLATFORM_PACKAGE = /^(?:php(?:-64bit|-ipv6|-zts|-debug)?|hhvm|(?:ext|lib)-
 export const isPlatformPackage = (name: string) => PLATFORM_PACKAGE.test(name.toLowerCase());
 
 /** Why the image has no Postgres extension, and what to use instead. */
-export const PGSQL_REASON = "php-wasm's images have no pgsql/pdo_pgsql extension (and no libpq to build one); use \\Bfwc\\Pgsql\\PDO (a PDO subclass over the runtime's wire client) for Postgres";
+export const PGSQL_REASON = "php-wasm's images have no pgsql/pdo_pgsql extension (and no libpq to build one); new PDO('pgsql:…') and the pg_* functions still work, on the runtime's pure-PHP driver (\\Bfwc\\Pgsql\\PDO), but a package that requires the extension itself is declined";
 
 /** Extension names Composer uses that differ from `get_loaded_extensions()`'s. */
 const EXTENSION_ALIASES: Record<string, string> = { 'zend-opcache': 'zend opcache', opcache: 'zend opcache' };
