@@ -32,20 +32,39 @@ class PDO extends \PDO
     ];
     private array $error = ['00000', null, null];
 
+    /**
+     * $dsn as the pgsql: DSN it names, or null for another driver. Resolved as
+     * PDO resolves it (no trimming): an alias (no colon) through the
+     * pdo.dsn.<name> ini setting, and 'uri:<url>' through the first line read
+     * from that URL.
+     */
+    public static function pgsqlDsn(string $dsn): ?string
+    {
+        if (!str_contains($dsn, ':')) {
+            $dsn = (string) ini_get('pdo.dsn.' . $dsn);
+        } elseif (str_starts_with($dsn, 'uri:')) {
+            $handle = @fopen(substr($dsn, 4), 'rb');
+            $dsn = $handle ? rtrim((string) fgets($handle), "\r\n") : '';
+            $handle && fclose($handle);
+        }
+        return str_starts_with($dsn, 'pgsql:') ? $dsn : null;
+    }
+
     public function __construct(string $dsn, ?string $username = null, #[\SensitiveParameter] ?string $password = null, ?array $options = null)
     {
-        if (!str_starts_with($dsn, 'pgsql:')) {
+        $resolved = self::pgsqlDsn($dsn);
+        if ($resolved === null) {
             throw new \PDOException('Bfwc\Pgsql\PDO connects to pgsql: DSNs only; use \PDO for "' . strtok($dsn, ':') . '"');
         }
         $config = [];
-        foreach (preg_split('/[;\s]+/', substr($dsn, 6), -1, PREG_SPLIT_NO_EMPTY) as $pair) {
+        foreach (preg_split('/[;\s]+/', substr($resolved, 6), -1, PREG_SPLIT_NO_EMPTY) as $pair) {
             [$key, $value] = array_pad(explode('=', $pair, 2), 2, '');
             $config[strtolower(trim($key))] = trim($value, " '\"");
         }
         foreach ($options ?? [] as $attribute => $value) {
             $this->attributes[$attribute] = $value;
         }
-        $this->wire = new Wire($config['host'] ?? 'localhost', (int) ($config['port'] ?? 5432), $username ?? $config['user'] ?? 'postgres', $config['dbname'] ?? 'postgres', $password ?? $config['password'] ?? null, (float) ($config['connect_timeout'] ?? 30));
+        $this->wire = Wire::fromConfig($config, $username, $password);
     }
 
     /** @internal Run one statement; failures follow the error mode (null when not thrown). */

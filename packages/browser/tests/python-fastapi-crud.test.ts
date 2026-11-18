@@ -115,11 +115,6 @@ describe('FastAPI against the PGlite gateway (PRD 31 W9; skipped offline)', () =
     void (async () => {
       for await (const entry of app.logs('api')) logs.push(entry.text);
     })();
-    try {
-      await app.start();
-    } catch (error) {
-      throw new Error(`${(error as Error).message}\n${logs.join('')}`);
-    }
     const ports = processes.ports;
     const call = async (method: string, url: string, body?: unknown) => {
       const response = await request(ports, 8000, method, url, body === undefined ? undefined : JSON.stringify(body), { 'content-type': 'application/json' });
@@ -127,6 +122,7 @@ describe('FastAPI against the PGlite gateway (PRD 31 W9; skipped offline)', () =
     };
 
     try {
+      await app.start();
       expect(await call('POST', '/migrate')).toEqual({ status: 200, body: { migrated: true } });
       expect(await call('POST', '/items', { name: 'widget', qty: 3 })).toEqual({ status: 201, body: { id: 1 } });
       expect(await call('POST', '/items', { name: 'gadget' })).toEqual({ status: 201, body: { id: 2 } });
@@ -137,9 +133,9 @@ describe('FastAPI against the PGlite gateway (PRD 31 W9; skipped offline)', () =
       expect(await call('GET', '/items')).toEqual({ status: 200, body: [{ id: 2, name: 'gadget', qty: 7, active: false }] });
     } catch (error) {
       throw new Error(`${(error as Error).message}\n${logs.join('')}`);
+    } finally {
+      await app.dispose();
+      processes.dispose();
     }
-
-    await app.dispose();
-    processes.dispose();
   });
 });

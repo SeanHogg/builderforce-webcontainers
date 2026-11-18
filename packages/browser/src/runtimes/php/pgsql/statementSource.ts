@@ -125,13 +125,7 @@ class Statement extends \PDOStatement
         if ($value === null || $type === \PDO::PARAM_NULL) {
             return null;
         }
-        if (is_resource($value)) {
-            return stream_get_contents($value);
-        }
-        if (is_bool($value) || $type === \PDO::PARAM_BOOL) {
-            return $value ? 't' : 'f';
-        }
-        return (string) $value;
+        return Wire::text($type === \PDO::PARAM_BOOL && !is_resource($value) ? (bool) $value : $value);
     }
 
     public function bindValue(int|string $param, mixed $value, int $type = \PDO::PARAM_STR): bool
@@ -217,7 +211,8 @@ class Statement extends \PDOStatement
         };
     }
 
-    private static function instance(string $class, array $args, array $properties, bool $late): object
+    /** @internal An object of $class with $properties set before its constructor runs (after, when $late); pg_fetch_object shares it. */
+    public static function instance(string $class, array $args, array $properties, bool $late): object
     {
         $object = (new \ReflectionClass($class))->newInstanceWithoutConstructor();
         $assign = function () use ($object, $properties) {

@@ -3,9 +3,10 @@
  * (never synced to the page) and made available to every script without a
  * `require`: php-wasm's auto-prepended script registers an autoloader for the
  * `Bfwc\Pgsql\` classes (pgsql/: the Postgres wire client and the PDO on it),
- * installs the include rewrite that makes an unmodified `new PDO('pgsql:…')`
- * reach that PDO (pgsql/includesSource.ts), and defines the `pg_*` functions
- * when the `pgsql` extension is absent (pgsql/pgFunctionsSource.ts) — in
+ * installs the include rewrite (pgsql/includesSource.ts, rewriterSource.ts)
+ * that makes an unmodified `new PDO('pgsql:…')` reach that PDO, and defines
+ * the `pg_*` functions when the `pgsql` extension is absent
+ * (pgsql/pgFunctionsSource.ts) — in
  * `php script.php`, `php -S` requests and `\Bfwc\Pgsql\PDO` directly alike.
  */
 import { exists } from '../emscripten/projectMirror.js';
@@ -13,6 +14,7 @@ import type { WrappableEmscriptenFs } from '../emscripten/wrappedFsWrites.js';
 import { INCLUDES_SOURCE } from './pgsql/includesSource.js';
 import { PDO_SOURCE } from './pgsql/pdoSource.js';
 import { PG_FUNCTIONS_SOURCE } from './pgsql/pgFunctionsSource.js';
+import { REWRITER_SOURCE } from './pgsql/rewriterSource.js';
 import { STATEMENT_SOURCE } from './pgsql/statementSource.js';
 import { WIRE_SOURCE } from './pgsql/wireSource.js';
 
@@ -24,7 +26,7 @@ export const PHP_WASM_AUTO_PREPEND = '/internal/shared/auto_prepend_file.php';
 // Required at the top level of the auto-prepended script, so a CLI script it runs (rewritten) sees the global scope.
 const PREPEND = `<?php
 spl_autoload_register(static function (string $class): void {
-    static $files = ['Bfwc\\\\Pgsql\\\\Wire' => 'wire.php', 'Bfwc\\\\Pgsql\\\\Exception' => 'wire.php', 'Bfwc\\\\Pgsql\\\\PDO' => 'pdo.php', 'Bfwc\\\\Pgsql\\\\Statement' => 'statement.php'];
+    static $files = ['Bfwc\\\\Pgsql\\\\Wire' => 'wire.php', 'Bfwc\\\\Pgsql\\\\Exception' => 'wire.php', 'Bfwc\\\\Pgsql\\\\PDO' => 'pdo.php', 'Bfwc\\\\Pgsql\\\\Statement' => 'statement.php', 'Bfwc\\\\Pgsql\\\\Rewriter' => 'rewriter.php'];
     if (isset($files[$class])) {
         require_once '${RUNTIME_LIBRARY_ROOT}/pgsql/' . $files[$class];
     }
@@ -46,6 +48,7 @@ const FILES: Readonly<Record<string, string>> = {
   'pgsql/pdo.php': PDO_SOURCE,
   'pgsql/statement.php': STATEMENT_SOURCE,
   'pgsql/includes.php': INCLUDES_SOURCE,
+  'pgsql/rewriter.php': REWRITER_SOURCE,
   'pgsql/functions.php': PG_FUNCTIONS_SOURCE,
 };
 

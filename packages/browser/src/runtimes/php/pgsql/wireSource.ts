@@ -23,6 +23,8 @@ final class Wire
     private string $buffer = '';
     /** ReadyForQuery's status: I (idle), T (in a transaction), E (in a failed transaction). */
     public string $status = 'I';
+    /** The database connected to. */
+    public string $database;
     /** @var array<string, string> ParameterStatus values (server_version …). */
     public array $parameters = [];
     private string $endpoint;
@@ -34,6 +36,7 @@ final class Wire
     public function __construct(string $host, int $port, string $user, string $database, ?string $password, float $timeout)
     {
         $this->endpoint = '"' . $host . '", port ' . $port;
+        $this->database = $database;
         $socket = @stream_socket_client('tcp://' . $host . ':' . $port, $errno, $errstr, $timeout);
         if (!$socket) {
             throw Exception::fromState('08006', 'connection to server at "' . $host . '", port ' . $port . ' failed: ' . ($errstr ?: 'Connection refused'));
@@ -46,6 +49,32 @@ final class Wire
         $this->untilReady();
     }
 
+    /**
+     * Connect from libpq-style settings (host, port, dbname, user, password,
+     * connect_timeout), as a DSN or conninfo string gives them; explicit
+     * credentials win. The database defaults to the user, as libpq's does.
+     */
+    public static function fromConfig(array $config, ?string $user = null, #[\SensitiveParameter] ?string $password = null): self
+    {
+        $user ??= $config['user'] ?? 'postgres';
+        return new self($config['host'] ?? 'localhost', (int) ($config['port'] ?? 5432), $user, $config['dbname'] ?? $user, $password ?? $config['password'] ?? null, (float) ($config['connect_timeout'] ?? 30));
+    }
+
+    /** A PHP value as a text-format parameter: null stays null, a stream is read, booleans become $true / $false. */
+    public static function text(mixed $value, string $true = 't', string $false = 'f'): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (is_resource($value)) {
+            return stream_get_contents($value);
+        }
+        if (is_bool($value)) {
+            return $value ? $true : $false;
+        }
+        return (string) $value;
+    }
+
     public static function frame(string $type, string $body): string
     {
         return $type . pack('N', strlen($body) + 4) . $body;
@@ -55,7 +84,7 @@ final class Wire
     {
         $length = strlen($bytes);
         for ($offset = 0; $offset < $length; $offset += $written) {
-            $written = fwrite($this->socket, substr($bytes, $offset));
+            $written = @fwrite($this->socket, substr($bytes, $offset)); // a failure is reported below, as the extension reports it
             if ($written === false || $written === 0) {
                 throw Exception::fromState('08006', 'server closed the connection while the client was sending');
             }
@@ -175,17 +204,37 @@ final class Wire
 
     /**
      * One statement with $1… parameters (null or text), results as text.
-     * @return array{fields: list<array{name: string, type: int}>, rows: list<list<?string>>, affected: int}
+     * @return array{fields: list<array{name: string, type: int}>, rows: list<list<?string>>, affected: int, command: string}
      */
     public function execute(string $sql, array $params): array
     {
-        $bind = "\0\0" . pack('nn', 0, count($params));
+        $this->send(self::frame('P', "\0" . $sql . "\0" . pack('n', 0)) . self::bind('', $params));
+        return $this->results();
+    }
+
+    /** Parse $sql as the named prepared statement $name (pg_prepare). */
+    public function prepare(string $name, string $sql): array
+    {
+        $this->send(self::frame('P', $name . "\0" . $sql . "\0" . pack('n', 0)) . self::frame('S', ''));
+        return $this->results();
+    }
+
+    /** Run the named prepared statement $name with $params (pg_execute). */
+    public function executePrepared(string $name, array $params): array
+    {
+        $this->send(self::bind($name, $params));
+        return $this->results();
+    }
+
+    /** Bind, Describe, Execute and Sync for $statement ('' is the unnamed one). */
+    private static function bind(string $statement, array $params): string
+    {
+        $bind = "\0" . $statement . "\0" . pack('nn', 0, count($params));
         foreach ($params as $value) {
             $bind .= $value === null ? pack('N', -1) : pack('N', strlen($value)) . $value;
         }
         $bind .= pack('n', 0);
-        $this->send(self::frame('P', "\0" . $sql . "\0" . pack('n', 0)) . self::frame('B', $bind) . self::frame('D', "P\0") . self::frame('E', "\0" . pack('N', 0)) . self::frame('S', ''));
-        return $this->results();
+        return self::frame('B', $bind) . self::frame('D', "P\0") . self::frame('E', "\0" . pack('N', 0)) . self::frame('S', '');
     }
 
     /** Statements as one simple query (several allowed: a migration); the last result's rows. */
@@ -197,14 +246,15 @@ final class Wire
 
     private function results(): array
     {
-        $result = ['fields' => [], 'rows' => [], 'affected' => 0];
+        $result = ['fields' => [], 'rows' => [], 'affected' => 0, 'command' => ''];
         $this->untilReady(function (string $type, string $body) use (&$result) {
             if ($type === 'T') {
-                $result = ['fields' => self::fields($body), 'rows' => [], 'affected' => 0];
+                $result = ['fields' => self::fields($body), 'rows' => [], 'affected' => 0, 'command' => ''];
             } elseif ($type === 'D') {
                 $result['rows'][] = self::row($body);
             } elseif ($type === 'C') {
-                $tag = explode(' ', rtrim($body, "\0"));
+                $result['command'] = rtrim($body, "\0");
+                $tag = explode(' ', $result['command']);
                 $result['affected'] = is_numeric(end($tag)) ? (int) end($tag) : 0;
             }
         });
