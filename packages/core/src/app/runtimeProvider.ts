@@ -39,6 +39,11 @@ export interface ServiceHandle {
   wait(): Promise<number>;
   /** Default `SIGTERM`; `SIGKILL` cannot be caught. */
   kill(signal?: string): void;
+  /**
+   * Ask the service to save its progress and exit (a `training` service). A
+   * stop calls it before `SIGTERM`, waiting up to the stop timeout for the exit.
+   */
+  checkpoint?(): Promise<void>;
   /** Where a browser reaches the service, once it is listening. */
   url(): string | undefined;
   /** A database service's data operations (`ApplicationRuntime.database(id)`). */

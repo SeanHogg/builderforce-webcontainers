@@ -41,3 +41,5 @@ export type { PythonProviderOptions } from './pythonProvider.js';
 export { installVirtualSockets, pythonTcpModule, VIRTUAL_TCP_MODULE } from './virtualSocket.js';
 export type { VirtualTcpTransport } from './virtualSocket.js';
 export { SEND_HIGH_WATER_MARK, createChannelTransport, createDialTransport } from './dialTransport.js';
+export { TRAINING_ARTIFACT_DIR, createTrainingArtifactStore } from './trainingArtifacts.js';
+export type { TrainingArtifactStore, TrainingArtifactStoreOptions } from './trainingArtifacts.js';

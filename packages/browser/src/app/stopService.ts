@@ -26,8 +26,17 @@ export interface ServiceRun {
 /** The exit code, or undefined when the process has not exited within `ms`. */
 export const exitWithin = (handle: Pick<ServiceHandle, 'wait'>, ms: number): Promise<number | undefined> => within(handle.wait(), { ms, onTimeout: () => undefined });
 
-/** Ask (`SIGTERM`), then insist (`SIGKILL`) after `timeoutMs`. Undefined when even `SIGKILL` got no exit within another `timeoutMs`. */
-export async function stopProcess(handle: Pick<ServiceHandle, 'kill' | 'wait'>, timeoutMs: number): Promise<number | undefined> {
+/**
+ * Ask (`SIGTERM`), then insist (`SIGKILL`) after `timeoutMs`. A service that
+ * checkpoints (training) is first asked to save and exit, for up to `timeoutMs`.
+ * Undefined when even `SIGKILL` got no exit within another `timeoutMs`.
+ */
+export async function stopProcess(handle: Pick<ServiceHandle, 'kill' | 'wait' | 'checkpoint'>, timeoutMs: number): Promise<number | undefined> {
+  if (handle.checkpoint) {
+    await within(handle.checkpoint().catch(() => undefined), { ms: timeoutMs, onTimeout: () => undefined });
+    const saved = await exitWithin(handle, timeoutMs);
+    if (saved !== undefined) return saved;
+  }
   handle.kill('SIGTERM');
   const graceful = await exitWithin(handle, timeoutMs);
   if (graceful !== undefined) return graceful;

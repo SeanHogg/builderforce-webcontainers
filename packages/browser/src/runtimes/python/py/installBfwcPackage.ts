@@ -1,6 +1,6 @@
 /**
  * The runtime's own Python modules, written into Pyodide outside the project
- * mount and put first on `sys.path`: the `bfwc` package (run, serve, threads,
+ * mount and put first on `sys.path`: the `bfwc` package (run, serve, threads, training,
  * vsocket) and the `uvicorn`/`gunicorn` stand-ins (uvicornSource.ts).
  */
 import type { PyodideLike } from '../pyodideLoader.js';
@@ -8,6 +8,7 @@ import { RUN_SOURCE } from './runSource.js';
 import { SERVE_SOURCE } from './serveSource.js';
 import { SOCKET_SOURCE } from './socketSource.js';
 import { THREADS_SOURCE } from './threadsSource.js';
+import { TRAINING_SOURCE } from './trainingSource.js';
 import { GUNICORN_SOURCE, UVICORN_SOURCE, UVICORN_WORKERS_SOURCE } from './uvicornSource.js';
 
 export const BFWC_PACKAGE_ROOT = '/opt/bfwc';
@@ -17,6 +18,7 @@ const FILES: Readonly<Record<string, string>> = {
   'bfwc/run.py': RUN_SOURCE,
   'bfwc/serve.py': SERVE_SOURCE,
   'bfwc/threads.py': THREADS_SOURCE,
+  'bfwc/training.py': TRAINING_SOURCE,
   'bfwc/vsocket.py': SOCKET_SOURCE,
   'uvicorn/__init__.py': UVICORN_SOURCE,
   'uvicorn/workers.py': UVICORN_WORKERS_SOURCE,
