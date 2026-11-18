@@ -1,5 +1,8 @@
 import {
+  ATTRIBUTION_OFF_MARKER,
   DevServer,
+  attributionFromMarker,
+  dirname,
   PortCookieJars,
   VirtualFileSystem,
   baseToProject,
@@ -212,7 +215,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   let server: DevServer;
   try {
     const transformer = options.transformer ?? (await createEsbuildWasmTransformer());
-    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, styles, attribution: options.attribution, previewScripts, previewNonce: nonce, hot: options.hot });
+    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, styles, attribution: attributionFromMarker(files, options.attribution), previewScripts, previewNonce: nonce, hot: options.hot });
   } catch (error) {
     transport.dispose();
     throw error;
@@ -262,7 +265,9 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     root,
     server,
     writeTree: (files, at) => fs.writeTree(files, at),
-    exportZip: (zipOptions) => exportZip(fs, zipOptions),
+    // With the project at `/`, the hidden badge marker's directory is inside it: never ship it in a download.
+    exportZip: (zipOptions) =>
+      exportZip(fs, root === '/' ? { ...zipOptions, exclude: [...(zipOptions?.exclude ?? []), dirname(ATTRIBUTION_OFF_MARKER).slice(1)] } : zipOptions),
     importZip: (zip, at, limits) => importZip(fs, zip, at, limits),
     reload,
     profile: () => server.profile(),

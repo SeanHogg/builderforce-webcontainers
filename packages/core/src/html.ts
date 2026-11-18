@@ -11,7 +11,7 @@
  *     components or reloads — and, for React, the Fast Refresh runtime before the app;
  *   • the attribution badge is appended unless the host turned it off.
  */
-import { injectAttribution } from './attribution.js';
+import { attributionEnabled, injectAttribution, type AttributionSetting } from './attribution.js';
 import { previewSocketScript, scriptLiteral } from './previewBridge.js';
 import { hotUpdateScript } from './hot/client.js';
 import { refreshPreambleScript } from './hot/reactRefresh.js';
@@ -65,8 +65,8 @@ export interface HtmlOptions {
   base: string;
   /** Entry injected when the page has no module script. */
   entry?: string;
-  /** The "Built with Builderforce.ai" badge. On unless explicitly `false`. */
-  attribution?: boolean;
+  /** The "Built with Builderforce.ai" badge. On unless explicitly `false`; a predicate is asked per page. */
+  attribution?: AttributionSetting;
   /** Host scripts (JavaScript source) run in every preview page before the app. */
   scripts?: readonly string[];
   /** URL of `react-refresh/runtime`; installed before the app so components re-render in place on edits. */
@@ -89,7 +89,7 @@ export function transformHtml(html: string, options: HtmlOptions): string {
     const tag = `<script type="module" src="${base}${options.entry.slice(1)}"></script>`;
     out = /<\/body>/i.test(out) ? out.replace(/<\/body>/i, `${tag}\n</body>`) : out + tag;
   }
-  if (options.attribution !== false) out = injectAttribution(out);
+  if (attributionEnabled(options.attribution)) out = injectAttribution(out);
 
   const bridge = [
     errorBridgeScript(options.nonce),

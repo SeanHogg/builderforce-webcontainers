@@ -9,10 +9,27 @@
  * it by accident and the badge's styles can't leak into the app. It follows the
  * system light/dark preference and sits in the bottom-right corner, small enough
  * not to cover app UI on a phone-width screen.
+ *
+ * Maintainers: the browser host also hides it while {@link ATTRIBUTION_OFF_MARKER} exists (shell/hiddenCommands.ts).
  */
 
 export const ATTRIBUTION_URL = 'https://builderforce.ai/?utm_source=webcontainers&utm_medium=badge&utm_campaign=preview';
 export const ATTRIBUTION_LABEL = 'Built with Builderforce.ai';
+/** While this file exists in the container's whole-tree file system, the browser host serves pages without the badge. */
+export const ATTRIBUTION_OFF_MARKER = '/.bfwc/attribution-off';
+
+/** On/off, or a predicate asked on every page served (so a toggle applies on the next load). */
+export type AttributionSetting = boolean | (() => boolean);
+
+/** Whether a page served now gets the badge. On unless explicitly `false` (or a predicate says so). */
+export function attributionEnabled(setting: AttributionSetting | undefined): boolean {
+  return typeof setting === 'function' ? setting() : setting !== false;
+}
+
+/** The host's setting: off when the host said `false`, otherwise on while {@link ATTRIBUTION_OFF_MARKER} is absent from `fs`. */
+export function attributionFromMarker(fs: { isFile(path: string): boolean }, option?: boolean): AttributionSetting {
+  return option === false ? false : () => !fs.isFile(ATTRIBUTION_OFF_MARKER);
+}
 
 export interface AttributionOptions {
   href?: string;

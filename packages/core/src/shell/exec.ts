@@ -18,6 +18,7 @@ import type { Command as CommandNode, FunctionDefinition, Pipeline, Redirect, Sc
 import { parse, ShellSyntaxError } from './parse.js';
 import { expandWord, expandWords, type ExpandContext } from './expand.js';
 import { BUILTINS, COREUTILS, type BackgroundJob, type ShellState } from './builtins.js';
+import { HIDDEN_BUILTINS } from './hiddenCommands.js';
 import { resolvePath, type CommandContext } from './context.js';
 import { devServerHandoff, runDevServerHandoff } from './devHandoff.js';
 import { runCompound, type Flow, type ScriptRunner } from './compound.js';
@@ -316,6 +317,8 @@ export class Shell implements ShellState, ScriptRunner {
     };
     const builtin = BUILTINS[name];
     if (builtin) return builtin(ctx, this);
+    const hidden = HIDDEN_BUILTINS[name];
+    if (hidden) return hidden(ctx, this);
     const command = this.options.commands?.[name];
     if (command) return command(ctx, this, input);
     const handoff = devServerHandoff(ctx, argv);

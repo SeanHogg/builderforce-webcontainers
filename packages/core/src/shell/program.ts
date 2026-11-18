@@ -91,7 +91,8 @@ function displayCwd(cwd: string, home: string | undefined): string {
   return cwd;
 }
 
-function completer(shell: Shell) {
+/** Tab completion for the interactive shell (exported for tests). */
+export function completer(shell: Shell) {
   return (before: string, word: string): string[] => {
     const isCommand = !/\S\s/.test(before.trimStart()) && !word.includes('/');
     const fs = shell.system.fs;

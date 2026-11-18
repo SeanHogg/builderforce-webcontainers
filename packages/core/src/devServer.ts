@@ -8,6 +8,7 @@ import { detectProject, type ProjectProfile } from './detectProject.js';
 import { compileScript, isScriptPath, moduleUrl, type ImportQuery } from './compileScript.js';
 import { compileComponent } from './compileComponent.js';
 import { transformHtml } from './html.js';
+import { attributionEnabled, type AttributionSetting } from './attribution.js';
 import { jsonToModule, rawToModule, urlToModule } from './styleModules.js';
 import { packageStylesheetModule, previewCss, stylesheetModule, type DevStyleContext } from './devStyles.js';
 import { loaderFor } from './transformer.js';
@@ -41,8 +42,8 @@ export interface DevServerOptions {
   styles?: StyleCompilers;
   /** Where Sass/Less package imports are fetched from when not installed (default jsDelivr). */
   styleImports?: Pick<StyleImportHostOptions, 'fetchText' | 'packageFileUrl'>;
-  /** The "Built with Builderforce.ai" badge in served pages. Default true. */
-  attribution?: boolean;
+  /** The "Built with Builderforce.ai" badge in served pages. Default true; a predicate is asked per page served. */
+  attribution?: AttributionSetting;
   /** Host scripts (JavaScript source) run in every preview page before the app. */
   previewScripts?: readonly string[];
   /** The runtime's nonce, put in the bridge of every served page (the host accepts preview messages only with it). */
@@ -88,9 +89,14 @@ function parseQuery(search: string): ImportQuery | undefined {
   return undefined;
 }
 
+const isHtmlFile = (path: string): boolean => {
+  const ext = extname(path);
+  return ext === '.html' || ext === '.htm';
+};
+
 /** Adding or removing a file, or touching config or HTML, can change how OTHER files resolve. */
 function isStructuralChange(change: FsChange): boolean {
-  return change.type !== 'write' || change.created === true || isConfigFile(change.path) || extname(change.path) === '.html';
+  return change.type !== 'write' || change.created === true || isConfigFile(change.path) || isHtmlFile(change.path);
 }
 
 /**
@@ -132,7 +138,7 @@ export class DevServer {
   /** Replace the host scripts injected into preview pages; takes effect on the next page load. */
   setPreviewScripts(scripts: readonly string[]): void {
     this.previewScripts = [...scripts];
-    for (const key of [...this.cache.keys()]) if (/\.html?\?/.test(key)) this.cache.delete(key);
+    for (const key of [...this.cache.keys()]) if (isHtmlFile(key.slice(0, key.indexOf('?')))) this.cache.delete(key);
   }
 
   profile(): ProjectProfile {
@@ -157,7 +163,10 @@ export class DevServer {
       if (!extname(path) && !query) return this.serveDocument(profile);
       return query || isScriptPath(path) ? errorModule(`Cannot find module ${path}`) : reply(404, 'text/plain; charset=utf-8', `Not found: ${path}`);
     }
-    return this.cached(file, `${file}?${query ?? ''}`, fs.version(file) ?? 0, () => this.produce(file, query));
+    // A page's badge can be toggled at runtime, so it is part of the page's cache key.
+    const badge = isHtmlFile(file) ? attributionEnabled(this.options.attribution) : undefined;
+    const key = `${file}?${query ?? ''}${badge === false ? '#no-badge' : ''}`;
+    return this.cached(file, key, fs.version(file) ?? 0, () => this.produce(file, query, badge));
   }
 
   /**
@@ -205,7 +214,7 @@ export class DevServer {
     for (const key of [...this.cache.keys()]) if (key.startsWith(file + '?')) this.cache.delete(key);
   }
 
-  private async produce(file: string, query: ImportQuery | undefined): Promise<ServedFile> {
+  private async produce(file: string, query: ImportQuery | undefined, badge: boolean | undefined): Promise<ServedFile> {
     const { fs, base } = this.options;
     const ext = extname(file);
     const dependencies = new Set<string>();
@@ -221,8 +230,8 @@ export class DevServer {
       if (ext === '.json' && query === 'import') return reply(200, JS_MIME, jsonToModule(fs.readText(file) ?? ''));
       if (loaderFor(ext)) return reply(200, JS_MIME, await this.compileWithRefresh(ctx, file));
       if (isScriptPath(file)) return reply(200, JS_MIME, await compileComponent(ctx, file));
-      if (ext === '.html' || ext === '.htm') {
-        return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: this.options.attribution, scripts: this.previewScripts, nonce: this.options.previewNonce }));
+      if (isHtmlFile(file)) {
+        return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: badge, scripts: this.previewScripts, nonce: this.options.previewNonce }));
       }
       return reply(200, mimeFor(ext), fs.readFile(file) ?? '');
     } catch (error) {
