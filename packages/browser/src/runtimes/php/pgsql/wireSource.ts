@@ -56,7 +56,7 @@ final class Wire
      * connect_timeout), as a DSN or conninfo string gives them; explicit
      * credentials win. The database defaults to the user, as libpq's does.
      */
-    public static function fromConfig(array $config, ?string $user = null, #[\SensitiveParameter] ?string $password = null): self
+    public static function fromConfig(#[\SensitiveParameter] array $config, ?string $user = null, #[\SensitiveParameter] ?string $password = null): self
     {
         $user ??= $config['user'] ?? 'postgres';
         return new self($config['host'] ?? 'localhost', (int) ($config['port'] ?? 5432), $user, $config['dbname'] ?? $user, $password ?? $config['password'] ?? null, (float) ($config['connect_timeout'] ?? 30));

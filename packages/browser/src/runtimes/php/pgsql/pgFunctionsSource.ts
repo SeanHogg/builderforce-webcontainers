@@ -14,7 +14,9 @@
  * reads the next row; `pg_fetch_all` leaves the cursor; `PGSQL_BOTH` keys
  * interleave; a closed or missing connection throws the extension's `Error`,
  * a bad field a `ValueError`; a connection-class failure (SQLSTATE 08, 57P)
- * leaves the connection `PGSQL_CONNECTION_BAD`.
+ * leaves the connection `PGSQL_CONNECTION_BAD` — queries then warn "no
+ * connection to the server" and return false, and `pg_ping` /
+ * `pg_connection_reset` reconnect.
  *
  * Differences: failures warn with `E_USER_WARNING` (PHP code cannot raise
  * `E_WARNING`), with the extension's message; a failed query returns false, so
@@ -75,24 +77,25 @@ namespace {
     const PGSQL_DML_STRING = 2048;
     const PGSQL_DML_ESCAPE = 4096;
 
-    function pg_connect(string $connection_string, int $flags = 0): PgSql\Connection|false { return Pg::connect($connection_string, $flags); }
-    function pg_pconnect(string $connection_string, int $flags = 0): PgSql\Connection|false { return Pg::connect($connection_string, $flags); }
+    function pg_connect(#[\SensitiveParameter] string $connection_string, int $flags = 0): PgSql\Connection|false { return Pg::connect($connection_string, $flags); }
+    function pg_pconnect(#[\SensitiveParameter] string $connection_string, int $flags = 0): PgSql\Connection|false { return Pg::connect($connection_string, $flags); }
     function pg_close(?PgSql\Connection $connection = null): bool { Pg::close($connection); return true; }
     function pg_connection_reset(PgSql\Connection $connection): bool { return Pg::reset($connection); }
+    function pg_ping(?PgSql\Connection $connection = null): bool { return Pg::ping($connection); }
     function pg_query($connection, ?string $query = null): PgSql\Result|false { [$connection, $query] = Pg::split($connection, $query); return Pg::run($connection, 'pg_query', $query, null); }
     function pg_query_params($connection, $query, ?array $params = null): PgSql\Result|false
     {
-        [$connection, $query, $params] = $params === null ? [Pg::of(null), $connection, $query] : [Pg::of($connection), $query, $params];
+        [$connection, $query, $params] = Pg::split3($connection, $query, $params);
         return Pg::run($connection, 'pg_query_params', $query, $params);
     }
     function pg_prepare($connection, string $name, ?string $query = null): PgSql\Result|false
     {
-        [$connection, $name, $query] = $query === null ? [Pg::of(null), $connection, $name] : [Pg::of($connection), $name, $query];
+        [$connection, $name, $query] = Pg::split3($connection, $name, $query);
         return Pg::prepare($connection, $name, $query);
     }
     function pg_execute($connection, $name, ?array $params = null): PgSql\Result|false
     {
-        [$connection, $name, $params] = $params === null ? [Pg::of(null), $connection, $name] : [Pg::of($connection), $name, $params];
+        [$connection, $name, $params] = Pg::split3($connection, $name, $params);
         return Pg::run($connection, 'pg_execute', $name, $params, true);
     }
     function pg_fetch_assoc(PgSql\Result $result, ?int $row = null): array|false { return Pg::row($result, $row, PGSQL_ASSOC); }
@@ -108,24 +111,28 @@ namespace {
     }
     function pg_fetch_all(PgSql\Result $result, int $mode = PGSQL_ASSOC): array { return array_map(static fn (int $index) => Pg::row($result, $index, $mode, false), array_keys($result->rows)); }
     function pg_fetch_all_columns(PgSql\Result $result, int $field = 0): array { return array_column($result->rows, Pg::field($result, $field, 'pg_fetch_all_columns', 2)); }
-    function pg_fetch_result(PgSql\Result $result, $row, $field = null): string|false|null
-    {
-        return $field === null ? Pg::value($result, null, $row, 'pg_fetch_result') : Pg::value($result, $row, $field, 'pg_fetch_result');
-    }
+    function pg_fetch_result(PgSql\Result $result, $row, $field = null): string|false|null { return Pg::cell($result, $row, $field, 'pg_fetch_result'); }
     function pg_field_is_null(PgSql\Result $result, $row, $field = null): int|false
     {
-        $value = $field === null ? Pg::value($result, null, $row, 'pg_field_is_null') : Pg::value($result, $row, $field, 'pg_field_is_null');
+        $value = Pg::cell($result, $row, $field, 'pg_field_is_null');
         return $value === false ? false : (int) ($value === null);
     }
     function pg_field_prtlen(PgSql\Result $result, $row, $field = null): int|false
     {
-        $value = $field === null ? Pg::value($result, null, $row, 'pg_field_prtlen') : Pg::value($result, $row, $field, 'pg_field_prtlen');
+        $value = Pg::cell($result, $row, $field, 'pg_field_prtlen');
         return $value === false ? false : strlen((string) $value);
     }
     function pg_num_rows(PgSql\Result $result): int { return count($result->rows); }
     function pg_num_fields(PgSql\Result $result): int { return count($result->fields); }
     function pg_field_name(PgSql\Result $result, int $field): string { return $result->fields[Pg::field($result, $field, 'pg_field_name', 2)]['name']; }
-    function pg_field_num(PgSql\Result $result, string $field): int { $at = array_search($field, array_column($result->fields, 'name'), true); return $at === false ? -1 : $at; }
+    function pg_field_num(PgSql\Result $result, string $field): int
+    {
+        try {
+            return Pg::field($result, $field, 'pg_field_num', 2);
+        } catch (ValueError) {
+            return -1;
+        }
+    }
     function pg_field_type(PgSql\Result $result, int $field): string { return Pg::typeName($result->fields[Pg::field($result, $field, 'pg_field_type', 2)]['type']); }
     function pg_field_type_oid(PgSql\Result $result, int $field): string|int { return $result->fields[Pg::field($result, $field, 'pg_field_type_oid', 2)]['type']; }
     function pg_field_size(PgSql\Result $result, int $field): int { return $result->fields[Pg::field($result, $field, 'pg_field_size', 2)]['size']; }
@@ -152,12 +159,12 @@ namespace {
         $tag = explode(' ', $result->command);
         return $tag[0] === 'INSERT' && (int) ($tag[1] ?? 0) !== 0 ? (int) $tag[1] : false; // InvalidOid: false, as the extension returns
     }
-    function pg_last_error(?PgSql\Connection $connection = null): string { return Pg::state(Pg::of($connection))->lastError; }
-    function pg_dbname(?PgSql\Connection $connection = null): string { return Pg::wire($connection)->database; }
-    function pg_host(?PgSql\Connection $connection = null): string { return (string) (Pg::state(Pg::of($connection))->config['host'] ?? 'localhost'); }
-    function pg_port(?PgSql\Connection $connection = null): string { return (string) (Pg::state(Pg::of($connection))->config['port'] ?? '5432'); }
-    function pg_options(?PgSql\Connection $connection = null): string { return (string) (Pg::state(Pg::of($connection))->config['options'] ?? ''); }
-    function pg_get_pid(PgSql\Connection $connection): int { return Pg::wire($connection)->pid; }
+    function pg_last_error(?PgSql\Connection $connection = null): string { return Pg::live($connection)->lastError; }
+    function pg_dbname(?PgSql\Connection $connection = null): string { return Pg::live($connection)->dbname; }
+    function pg_host(?PgSql\Connection $connection = null): string { return (string) (Pg::live($connection)->config['host'] ?? 'localhost'); }
+    function pg_port(?PgSql\Connection $connection = null): string { return (string) (Pg::live($connection)->config['port'] ?? '5432'); }
+    function pg_options(?PgSql\Connection $connection = null): string { return (string) (Pg::live($connection)->config['options'] ?? ''); }
+    function pg_get_pid(PgSql\Connection $connection): int { return Pg::live($connection)->wire?->pid ?? 0; }
     function pg_set_error_verbosity($connection, ?int $verbosity = null): int
     {
         [$connection, $verbosity] = Pg::split($connection, $verbosity);
@@ -181,8 +188,8 @@ namespace {
         [$connection, $encoding] = Pg::split($connection, $encoding);
         return @Pg::run($connection, 'pg_set_client_encoding', 'SET client_encoding TO ' . Pg::quote($encoding, "'"), null) === false ? -1 : 0;
     }
-    function pg_client_encoding(?PgSql\Connection $connection = null): string { return Pg::wire($connection)->parameters['client_encoding'] ?? 'UTF8'; }
-    function pg_connection_status(PgSql\Connection $connection): int { return Pg::state($connection)->wire ? PGSQL_CONNECTION_OK : PGSQL_CONNECTION_BAD; }
+    function pg_client_encoding(?PgSql\Connection $connection = null): string { return Pg::live($connection)->wire?->parameters['client_encoding'] ?? 'UTF8'; }
+    function pg_connection_status(PgSql\Connection $connection): int { return Pg::live($connection)->wire ? PGSQL_CONNECTION_OK : PGSQL_CONNECTION_BAD; }
     function pg_connection_busy(PgSql\Connection $connection): bool { return false; }
     function pg_transaction_status(PgSql\Connection $connection): int
     {
@@ -191,12 +198,11 @@ namespace {
     function pg_parameter_status($connection, ?string $name = null): string|false
     {
         [$connection, $name] = Pg::split($connection, $name);
-        return Pg::state($connection)->wire->parameters[$name] ?? false;
+        return Pg::state($connection)->wire?->parameters[$name] ?? false;
     }
     function pg_version(?PgSql\Connection $connection = null): array
     {
-        return ['client' => 'bfwc-pgsql', 'protocol' => 3, 'server' => Pg::wire($connection)->parameters['server_version'] ?? ''];
+        return ['client' => 'bfwc-pgsql', 'protocol' => 3, 'server' => Pg::live($connection)->wire?->parameters['server_version'] ?? ''];
     }
-    function pg_ping(?PgSql\Connection $connection = null): bool { return Pg::state(Pg::of($connection))->wire !== null; }
 }
 `;
