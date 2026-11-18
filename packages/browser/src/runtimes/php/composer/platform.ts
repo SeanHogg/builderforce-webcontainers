@@ -19,7 +19,10 @@ export interface Platform {
 /** The Composer API versions the runtime's installer answers as. */
 const COMPOSER_APIS: Record<string, string> = { composer: '2.8.0', 'composer-plugin-api': '2.6.0', 'composer-runtime-api': '2.2.2' };
 
-export const isPlatformPackage = (name: string) => name === 'php' || name.startsWith('php-') || name.startsWith('ext-') || name.startsWith('lib-') || name in COMPOSER_APIS;
+/** Composer's platform-package pattern (`PlatformRepository::PLATFORM_PACKAGE_REGEX`): an exact name, never a prefix — `php-di/php-di` is a package. */
+const PLATFORM_PACKAGE = /^(?:php(?:-64bit|-ipv6|-zts|-debug)?|hhvm|(?:ext|lib)-[a-z0-9](?:[_.-]?[a-z0-9]+)*|composer(?:-(?:plugin|runtime)-api)?)$/;
+
+export const isPlatformPackage = (name: string) => PLATFORM_PACKAGE.test(name.toLowerCase());
 
 /** Why the image has no Postgres extension, and what to use instead. */
 export const PGSQL_REASON = "php-wasm's images have no pgsql/pdo_pgsql extension (and no libpq to build one); use \\Bfwc\\Pgsql\\PDO (a PDO subclass over the runtime's wire client) for Postgres";
@@ -36,10 +39,12 @@ export function platformShortfall(name: string, constraint: string, platform: Pl
   }
   if (lower === 'php-64bit') return 'php-64bit is not available (php-wasm is 32-bit).';
   if (lower === 'php-ipv6') return undefined;
-  if (lower in COMPOSER_APIS) return satisfies(COMPOSER_APIS[lower]!, constraint) ? undefined : `${name} ${constraint} is not provided (the runtime's installer answers as ${name} ${COMPOSER_APIS[lower]}).`;
+  if (!isPlatformPackage(lower)) return undefined;
+  if (lower === 'hhvm') return 'hhvm is not available (the runtime is PHP on php-wasm).';
+  if (Object.hasOwn(COMPOSER_APIS, lower)) return satisfies(COMPOSER_APIS[lower]!, constraint) ? undefined : `${name} ${constraint} is not provided (the runtime's installer answers as ${name} ${COMPOSER_APIS[lower]}).`;
   if (lower.startsWith('ext-')) {
     const extension = lower.slice(4);
-    if (platform.extensions.has(EXTENSION_ALIASES[extension] ?? extension)) return undefined;
+    if (platform.extensions.has(Object.hasOwn(EXTENSION_ALIASES, extension) ? EXTENSION_ALIASES[extension]! : extension)) return undefined;
     if (extension === 'pgsql' || extension === 'pdo_pgsql') return `ext-${extension}: ${PGSQL_REASON}.`;
     return `ext-${extension} is not in the php-wasm image (loaded: ${[...platform.extensions].sort().join(', ')}).`;
   }

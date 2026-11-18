@@ -29,7 +29,7 @@ export { createChannelPair, acceptConnection } from './byteChannel.js';
 export type { PushStream } from './httpStream.js';
 export { connectWebSocket } from './webSocketClient.js';
 export type { WebSocketConnection, WebSocketConnectOptions, WebSocketCloseInfo } from './webSocketClient.js';
-export { FrameDecoder, Opcode, encodeFrame, encodeClosePayload, decodeClosePayload, webSocketAccept, webSocketKey, WEBSOCKET_GUID } from './webSocketFrames.js';
+export { FrameDecoder, Opcode, encodeFrame, encodeClosePayload, decodeClosePayload, webSocketAccept, webSocketKey, WEBSOCKET_GUID, bytesToBase64 } from './webSocketFrames.js';
 export type { WebSocketFrame } from './webSocketFrames.js';
 export { CookieJar, PortCookieJars, parseSetCookie, defaultCookiePath, cookiePathMatches } from './cookieJar.js';
 export type { StoredCookie } from './cookieJar.js';

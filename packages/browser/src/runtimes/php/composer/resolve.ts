@@ -22,7 +22,7 @@
  * A failure reports the constraints that clash on the package that could not
  * be placed. The search is bounded (steps), never unbounded time.
  */
-import { checkPackageName } from './packageName.js';
+import { InvalidPackageName, checkPackageName } from './packageName.js';
 import type { PackageSource, PackageVersion } from './packagist.js';
 import { isPlatformPackage, platformShortfall, type Platform } from './platform.js';
 import { compareVersions, parseConstraint, parseVersion, stabilityAtLeast, type Constraint, type Stability, type Version } from './semver.js';
@@ -95,8 +95,15 @@ function parsedConstraints(name: string, requirements: readonly Requirement[]): 
 export async function resolvePackages(root: readonly Requirement[], source: PackageSource, options: ResolveOptions, rootLinks: RootLinks = {}): Promise<Resolution> {
   const rootStandsIn = new Set(linkNames(rootLinks));
   const budget = { steps: options.maxSteps ?? 20_000 };
-  /** The deepest failure seen, for the report. */
+  /** The failure seen deepest in the search (most packages placed), for the report. */
   let failure = '';
+  let failureDepth = -1;
+  const fail = (depth: number, why: string) => {
+    if (depth >= failureDepth) {
+      failure = why;
+      failureDepth = depth;
+    }
+  };
   const versions = new Map<string, PackageVersion[] | undefined>();
   const versionsOf = async (name: string) => {
     if (!versions.has(name)) versions.set(name, await source.versions(name));
@@ -106,10 +113,20 @@ export async function resolvePackages(root: readonly Requirement[], source: Pack
   const conflicts = (chosen: ReadonlyMap<string, PackageVersion>): string | undefined => {
     const rules = [{ from: 'root', conflict: rootLinks.conflict }, ...[...chosen.values()].map((pkg) => ({ from: pkg.name, conflict: pkg.conflict as Record<string, string> | undefined }))];
     for (const { from, conflict } of rules) {
-      for (const [name, constraint] of Object.entries(conflict ?? {})) {
-        const target = chosen.get(name.toLowerCase());
+      for (const [rawName, constraint] of Object.entries(conflict ?? {})) {
+        const name = rawName.toLowerCase();
+        const parsed = parseConstraint(constraint);
+        const target = chosen.get(name);
         const version = target && versionOf(target);
-        if (version && parseConstraint(constraint)?.test(version)) return `${from} conflicts with ${target!.name} ${constraint}`;
+        if (version && parsed?.test(version)) return `${from} conflicts with ${target!.name} ${constraint}`;
+        // A name only provided or replaced conflicts at the version the provider gives it (`self.version`: its own).
+        for (const pkg of chosen.values()) {
+          const links = { ...pkg.provide, ...pkg.replace };
+          const given = Object.entries(links).find(([key]) => key.toLowerCase() === name)?.[1];
+          if (given === undefined) continue;
+          const asVersion = parseVersion(given === 'self.version' ? (pkg.version_normalized ?? pkg.version) : given.replace(/^[=\s]+/, ''));
+          if (asVersion && parsed?.test(asVersion)) return `${from} conflicts with ${name} ${constraint} (${pkg.name} ${given === 'self.version' ? 'replaces/provides it' : `provides ${given}`})`;
+        }
       }
     }
     return undefined;
@@ -130,13 +147,13 @@ export async function resolvePackages(root: readonly Requirement[], source: Pack
       const parsed = parsedConstraints(name, requirements);
       const broken = requirements.find((_, index) => !parsed[index]!.test(version));
       if (broken) {
-        failure = `${name} ${pkg.version} was chosen, but ${broken.from} requires ${name} ${broken.constraint}.`;
+        fail(chosen.size, `${name} ${pkg.version} was chosen, but ${broken.from} requires ${name} ${broken.constraint}.`);
         return undefined;
       }
     }
     const conflict = conflicts(chosen);
     if (conflict) {
-      failure = `${conflict}.`;
+      fail(chosen.size, `${conflict}.`);
       return undefined;
     }
     const open = [...byName.keys()].filter((name) => !chosen.has(name) && !standing.has(name));
@@ -150,19 +167,27 @@ export async function resolvePackages(root: readonly Requirement[], source: Pack
     if (next === undefined) {
       if (!open.length) return chosen;
       const missing = open[0]!;
-      failure = `Package ${missing} (required by ${byName.get(missing)!.map((entry) => entry.from).join(', ')}) was not found in the repository, and no chosen package provides or replaces it.`;
+      fail(chosen.size, `Package ${missing} (required by ${byName.get(missing)!.map((entry) => entry.from).join(', ')}) was not found in the repository, and no chosen package provides or replaces it.`);
       return undefined;
     }
     const requirements = byName.get(next)!;
     const candidates = rankVersions((await versionsOf(next))!, parsedConstraints(next, requirements), options, options.preferred?.get(next));
     if (!candidates.length) {
-      failure = `No version of ${next} satisfies ${requirements.map((entry) => `${entry.constraint} (required by ${entry.from})`).join(' and ')} at minimum-stability ${options.minimumStability}.`;
+      fail(chosen.size, `No version of ${next} satisfies ${requirements.map((entry) => `${entry.constraint} (required by ${entry.from})`).join(' and ')} at minimum-stability ${options.minimumStability}.`);
       return undefined;
     }
     for (const candidate of candidates) {
       const shortfall = options.platform && Object.entries(candidate.require ?? {}).map(([name, constraint]) => (isPlatformPackage(name.toLowerCase()) ? platformShortfall(name, constraint, options.platform!) : undefined)).find(Boolean);
       if (shortfall) {
-        failure = `${candidate.name} ${candidate.version} is declined: ${shortfall}`;
+        fail(chosen.size, `${candidate.name} ${candidate.version} is declined: ${shortfall}`);
+        continue;
+      }
+      // A release whose metadata names an invalid package is skipped, not fatal to the whole search.
+      try {
+        requirementsOf(candidate);
+      } catch (error) {
+        if (!(error instanceof InvalidPackageName)) throw error;
+        fail(chosen.size, `${candidate.name} ${candidate.version} is skipped: ${error.message}`);
         continue;
       }
       const solved = await solve(new Map([...chosen, [next, candidate]]));

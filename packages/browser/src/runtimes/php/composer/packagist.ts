@@ -165,7 +165,23 @@ async function verifyShasum(bytes: Uint8Array<ArrayBuffer>, shasum: string | und
   if (hex !== shasum.toLowerCase()) throw new DistRefused(`${what}: checksum mismatch (sha1 ${hex}, metadata says ${shasum}).`);
 }
 
-const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+/**
+ * A dist URL the metadata gave: absolute `https:` only — or `http:` to a
+ * loopback host (a local mirror) — never a relative, `file:`, `data:` or
+ * plain-HTTP remote URL.
+ */
+export function checkDistUrl(url: string, what: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new DistRefused(`${what}: dist URL "${url}" is not an absolute URL.`);
+  }
+  const loopback = parsed.hostname === 'localhost' || parsed.hostname === '[::1]' || /^127\./.test(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) throw new DistRefused(`${what}: dist URL "${url}" is not https.`);
+}
+
+const SAFE_SEGMENT =/^[A-Za-z0-9._-]+$/;
 
 /** A GitHub repository at a commit, file by file from jsDelivr (which answers browsers), within {@link DIST_LIMITS}. */
 async function githubFiles(fetcher: typeof fetch, owner: string, repo: string, ref: string): Promise<Map<string, Uint8Array>> {
@@ -219,6 +235,7 @@ export function createPackageSource(options: PackageSourceOptions = {}): Package
       const ref = dist?.reference ?? version.source?.reference;
       const what = `${version.name} ${version.version}`;
       if (dist?.url && (dist.type ?? 'zip') === 'zip') {
+        checkDistUrl(dist.url, what);
         const url = options.distProxy ? `${options.distProxy}${encodeURIComponent(dist.url)}` : dist.url;
         let response: Response | undefined;
         try {

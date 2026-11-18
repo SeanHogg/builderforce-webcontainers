@@ -384,8 +384,12 @@ shebang names PHP (`./artisan`) all work. A `php` service uses
 `createPhpProvider(runtime)`:
 
 ```ts
+import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
 import { createPgliteProvider, createPhpProvider, startApplicationRuntime } from '@seanhogg/builderforce-webcontainers/app';
 
+// One options object: the runtime's PHP processes and the provider's checks read the same version.
+const phpOptions = { phpVersion: '8.3' };
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId, php: phpOptions });
 await runtime.run('composer', ['install', '--no-dev'], { cwd: '/api' }).wait();
 const app = startApplicationRuntime(
   {
@@ -456,7 +460,10 @@ const app = startApplicationRuntime(
   pinned release of `php.phpVersion`). composer.json `repositories` other than
   Packagist (`path`, `vcs`, `artifact`, `package`, custom Composer
   repositories, `"packagist.org": false`) are declined, naming their types.
-  Names are validated with Composer's own pattern; a dist whose metadata has a
+  Names are validated with Composer's own pattern (platform names exactly, so
+  `php-di/php-di` is a package); dist URLs must be absolute `https:` (`http:`
+  only to a loopback mirror); every package is downloaded before vendor/ is
+  touched, so a failed download changes nothing; a dist whose metadata has a
   `shasum` must match it; and every dist is held to size and entry limits
   whichever way it is fetched. A failed `require` or `update` leaves
   composer.json and composer.lock untouched. Composer scripts and plugins do

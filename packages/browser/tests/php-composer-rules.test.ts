@@ -10,7 +10,13 @@
 import { describe, expect, it } from 'vitest';
 import { VirtualFileSystem, exportZip } from '@seanhogg/builderforce-webcontainers-core';
 import {
+  DIST_LIMITS,
   DistRefused,
+  InvalidPackageName,
+  checkDistUrl,
+  checkPackageName,
+  isPlatformPackage,
+  platformShortfall,
   ResolveError,
   createPackageSource,
   dependencyOrder,
@@ -76,6 +82,24 @@ describe('resolution', () => {
     expect([...provided.packages.keys()]).toEqual(['app/needs-log']);
   });
 
+  it('resolves packages whose names start like platform names (php-http/…, php-di/…)', async () => {
+    const repo = repository({ 'php-http/discovery': [{ version: '1.19.0', require: { php: '>=7.1', 'php-di/php-di': '^7.0' } }], 'php-di/php-di': [{ version: '7.0.0' }] });
+    expect(versions(await resolvePackages(root({ 'php-http/discovery': '^1.0' }), repo, options))).toEqual({ 'php-http/discovery': '1.19.0', 'php-di/php-di': '7.0.0' });
+  });
+
+  it('applies conflict rules to names that are only provided or replaced', async () => {
+    const repo = repository({ 'impl/log': [{ version: '1.0.0', provide: { 'psr/log-implementation': '3.0.0' } }, { version: '0.9.0', provide: { 'psr/log-implementation': '1.0.0' } }] });
+    const solved = await resolvePackages(root({ 'impl/log': '*' }), repo, options, { conflict: { 'psr/log-implementation': '>=2.0' } });
+    expect(versions(solved)).toEqual({ 'impl/log': '0.9.0' });
+  });
+
+  it('skips a release whose metadata names an invalid package, and reports the deepest failure', async () => {
+    const repo = repository({ 'a/a': [{ version: '2.0.0', require: { '../evil': '*' } }, { version: '1.0.0' }] });
+    expect(versions(await resolvePackages(root({ 'a/a': '*' }), repo, options))).toEqual({ 'a/a': '1.0.0' });
+    const deep = repository({ 'a/a': [{ version: '1.0.0', require: { 'b/b': '*' } }], 'b/b': [{ version: '1.0.0', require: { 'c/c': '^9' } }], 'c/c': [{ version: '1.0.0' }] });
+    await expect(resolvePackages(root({ 'a/a': '*' }), deep, options)).rejects.toThrow(/No version of c\/c satisfies \^9 \(required by b\/b\)/);
+  });
+
   it('a partial update keeps the other locked versions unless they must move', async () => {
     const repo = repository({ 'a/a': [{ version: '1.2.0' }, { version: '1.1.0' }], 'b/b': [{ version: '3.1.0' }, { version: '3.0.0' }] });
     const solved = await resolvePackages(root({ 'a/a': '^1.0', 'b/b': '^3.0' }), repo, { ...options, preferred: new Map([['b/b', '3.0.0']]) });
@@ -95,7 +119,13 @@ describe('resolution', () => {
 describe('package names, arguments and repositories', () => {
   it("validates names with Composer's pattern", () => {
     for (const name of ['slim/slim', 'symfony/polyfill-php80', 'a.b/c_d', 'vendor/x--y']) expect(validPackageName(name)).toBe(true);
-    for (const name of ['../etc/passwd', 'slim', 'Slim/Slim', 'a/b/c', 'a/../b', 'a/b?x=1', '-a/b']) expect(validPackageName(name)).toBe(false);
+    for (const name of ['../etc/passwd', 'slim', 'Slim/Slim', 'a/b/c', 'a/../b', 'a/b?x=1', '-a/b', 'php-x/../y', 'ext-a/../../b']) expect(validPackageName(name)).toBe(false);
+    // Platform names are exact (Composer's pattern), never a prefix that lets a path through.
+    for (const name of ['php-x/../y', 'ext-a/../../b', 'lib-a/../../c', 'constructor', '__proto__']) expect(() => checkPackageName(name, 'a test')).toThrow(InvalidPackageName);
+    for (const name of ['php', 'php-64bit', 'ext-pdo_pgsql', 'lib-icu', 'composer-runtime-api', 'php-di/php-di']) expect(checkPackageName(name, 'a test')).toBe(name);
+    expect(isPlatformPackage('php-http/discovery')).toBe(false);
+    expect(platformShortfall('constructor', '*', { phpVersion: '8.3.36', extensions: new Set() })).toBeUndefined();
+    expect(() => encodePackageName('a/..')).toThrow(InvalidPackageName);
     expect(encodePackageName('a.b/c_d')).toBe('a.b/c_d');
   });
 
@@ -157,6 +187,34 @@ describe('dist limits', () => {
     const source = createPackageSource({ fetch: async () => new Response(zip) });
     await expect(source.files(pkg({ type: 'zip', url: 'https://x.test/a.zip', shasum: '0'.repeat(40) }))).rejects.toThrow(/checksum mismatch/);
     expect([...(await source.files(pkg({ type: 'zip', url: 'https://x.test/a.zip', shasum: sha1 }))).keys()]).toEqual(['src/A.php']);
+  });
+
+  it('refuses dist URLs that are not absolute https (http only to a loopback mirror)', async () => {
+    const source = createPackageSource({ fetch: async () => new Response('') });
+    for (const url of ['file:///etc/passwd', 'http://example.com/a.zip', '/relative.zip', 'data:application/zip;base64,AA==']) {
+      await expect(source.files({ name: 'a/a', version: '1.0.0', dist: { type: 'zip', url } })).rejects.toBeInstanceOf(DistRefused);
+    }
+    expect(() => checkDistUrl('http://127.0.0.1:8080/a.zip', 'a/a')).not.toThrow();
+  });
+
+  it("holds jsDelivr's files to the entry and byte limits", async () => {
+    const tooMany = createPackageSource({
+      fetch: async (url) => {
+        const href = String(url);
+        if (href.startsWith('https://api.github.com/')) throw new TypeError('Failed to fetch (CORS)');
+        return Response.json({ files: Array.from({ length: DIST_LIMITS.maxEntries + 1 }, (_, i) => ({ name: `/f${i}.php` })) });
+      },
+    });
+    await expect(tooMany.files(pkg({ type: 'zip', url: 'https://api.github.com/repos/a/a/zipball/abc123', reference: 'abc123' }))).rejects.toThrow(/entry limit/);
+    const tooBig = createPackageSource({
+      fetch: async (url) => {
+        const href = String(url);
+        if (href.startsWith('https://api.github.com/')) throw new TypeError('Failed to fetch (CORS)');
+        if (href.startsWith('https://data.jsdelivr.com/')) return Response.json({ files: [{ name: '/huge.bin' }] });
+        return new Response('x', { headers: { 'content-length': String(DIST_LIMITS.maxEntryBytes + 1) } });
+      },
+    });
+    await expect(tooBig.files(pkg({ type: 'zip', url: 'https://api.github.com/repos/a/a/zipball/abc123', reference: 'abc123' }))).rejects.toThrow(/byte limit/);
   });
 
   it('falls back to jsDelivr only when the zip cannot be fetched, and holds the files to the same limits', async () => {

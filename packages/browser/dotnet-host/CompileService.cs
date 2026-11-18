@@ -30,7 +30,8 @@ internal sealed record BuildPlan(
     string[] Defines,
     bool Optimize,
     bool WarningsAsErrors,
-    string[] NoWarn);
+    string[] NoWarn,
+    bool Quiet);
 
 internal static class CompileService
 {
@@ -53,6 +54,8 @@ internal static class CompileService
         {
             Directory.CreateDirectory(Path.GetDirectoryName(plan.OutputPath)!);
             File.WriteAllBytes(plan.OutputPath, image.ToArray());
+            // `dotnet run` shows only the diagnostics of the build it does.
+            if (plan.Quiet) return Task.FromResult(0);
             Console.WriteLine($"  {plan.AssemblyName} -> {plan.OutputPath}");
             Console.WriteLine();
             Console.WriteLine("Build succeeded.");

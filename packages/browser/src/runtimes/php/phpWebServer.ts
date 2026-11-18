@@ -21,6 +21,7 @@
  */
 import { bytesStream, extname, join, mimeFor, normalizePath, textResponse, type HttpHandler, type HttpRequestData, type HttpStreamResponse } from '@seanhogg/builderforce-webcontainers-core';
 import type { PhpServerSpec } from './phpCommand.js';
+import { phpString } from './phpLiteral.js';
 import type { PhpLike, PhpStreamedResponse } from './phpLoader.js';
 import { byteStream, drainText } from './phpStreams.js';
 
@@ -49,7 +50,6 @@ export interface PhpWebServerContext {
   phpVersion: string;
 }
 
-const phpString = (value: string) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 
 /** The front script: `-d` settings, then the target (its path in `SCRIPT_FILENAME`), noticing a router's `return false`. */
 export function frontScript(ini: Readonly<Record<string, string>>): string {

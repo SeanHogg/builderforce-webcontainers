@@ -3,7 +3,7 @@
  * PHP: PHP's own CLI on the arguments (to its exit code), `php -S` served
  * request-driven (phpWebServer.ts), or Composer (composer/composerInstall.ts).
  */
-import { dirname, join, normalizePath } from '@seanhogg/builderforce-webcontainers-core';
+import { bytesToBase64, dirname, join, normalizePath } from '@seanhogg/builderforce-webcontainers-core';
 import type { ComposerFiles } from './composer/autoload.js';
 import { runComposer } from './composer/composerInstall.js';
 import { createPackageSource } from './composer/packagist.js';
@@ -11,6 +11,7 @@ import type { PhpInvocation } from './phpCommand.js';
 import type { LoadedPhp, PhpEmscriptenFs } from './phpLoader.js';
 import type { ComposerSourceOptions } from './phpStartOptions.js';
 import { drainBytes, drainText } from './phpStreams.js';
+import { childrenOf, isDirectory, isFile, removeTree } from '../emscripten/projectMirror.js';
 import type { InterpreterOutcome } from '../interpreterProcess.js';
 import type { Platform } from './composer/platform.js';
 import { startPhpWebServer } from './phpWebServer.js';
@@ -28,22 +29,12 @@ export interface PhpProgramContext {
 
 const resolve = (cwd: string, path: string) => (path.startsWith('/') ? normalizePath(path) : join(cwd, path));
 
-const exists = (FS: PhpEmscriptenFs, path: string) => FS.analyzePath(path).exists;
-const isDir = (FS: PhpEmscriptenFs, path: string) => exists(FS, path) && FS.isDir(FS.stat(path).mode);
-const isFile = (FS: PhpEmscriptenFs, path: string) => exists(FS, path) && !FS.isDir(FS.stat(path).mode);
+const isDir = isDirectory;
 
 /** The installer's file calls on php-wasm's FS (its writes are tracked like PHP's own). */
 export function composerFiles(FS: PhpEmscriptenFs): ComposerFiles {
-  const list = (dir: string): string[] =>
-    FS.readdir(dir)
-      .filter((name) => name !== '.' && name !== '..')
-      .flatMap((name) => (isDir(FS, join(dir, name)) ? list(join(dir, name)) : [join(dir, name)]));
-  const remove = (path: string): void => {
-    if (!exists(FS, path)) return;
-    if (!isDir(FS, path)) return FS.unlink(path);
-    for (const name of FS.readdir(path)) if (name !== '.' && name !== '..') remove(join(path, name));
-    FS.rmdir(path);
-  };
+  const list = (dir: string): string[] => childrenOf(FS, dir).flatMap((name) => (isDir(FS, join(dir, name)) ? list(join(dir, name)) : [join(dir, name)]));
+  const remove = (path: string) => removeTree(FS, path);
   return {
     read: (path) => (isFile(FS, path) ? new TextDecoder().decode(FS.readFile(path)) : undefined),
     write(path, content) {
@@ -65,7 +56,7 @@ async function evaluate(loaded: LoadedPhp, code: string): Promise<string> {
 
 /** Composer's lock `content-hash`: md5 of the relevant composer.json keys, sorted, as `json_encode` writes them. */
 const CONTENT_HASH = (json: string) => `<?php
-$c = json_decode(base64_decode('${btoa(String.fromCharCode(...new TextEncoder().encode(json)))}'), true) ?: [];
+$c = json_decode(base64_decode('${bytesToBase64(new TextEncoder().encode(json))}'), true) ?: [];
 $keys = ['name', 'version', 'require', 'require-dev', 'conflict', 'replace', 'provide', 'minimum-stability', 'prefer-stable', 'repositories', 'extra'];
 $r = array_intersect_key($c, array_flip($keys));
 if (isset($c['config']['platform'])) { $r['config']['platform'] = $c['config']['platform']; }

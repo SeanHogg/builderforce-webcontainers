@@ -15,6 +15,8 @@ class Statement extends \PDOStatement
     private array $bound = [];
     private array $fields = [];
     private array $rows = [];
+    /** The next row to fetch (a cursor: fetchAll stays linear). */
+    private int $cursor = 0;
     private int $affected = 0;
     private array $fetchArgs = [];
     private array $error = ['00000', null, null];
@@ -178,6 +180,7 @@ class Statement extends \PDOStatement
         $this->error = ['00000', null, null];
         $this->fields = $result['fields'];
         $this->rows = $result['rows'];
+        $this->cursor = 0;
         $this->affected = $result['affected'];
         return true;
     }
@@ -239,9 +242,14 @@ class Statement extends \PDOStatement
         return $mode === \PDO::FETCH_DEFAULT ? $this->fetchMode : $mode;
     }
 
+    private function next(): ?array
+    {
+        return $this->cursor < count($this->rows) ? $this->rows[$this->cursor++] : null;
+    }
+
     public function fetch(int $mode = \PDO::FETCH_DEFAULT, int $cursorOrientation = \PDO::FETCH_ORI_NEXT, int $cursorOffset = 0): mixed
     {
-        $row = array_shift($this->rows);
+        $row = $this->next();
         if ($row === null) {
             return false;
         }
@@ -254,7 +262,7 @@ class Statement extends \PDOStatement
         $mode = $this->mode($mode);
         $args = $args ?: $this->fetchArgs;
         $out = [];
-        while (($row = array_shift($this->rows)) !== null) {
+        while (($row = $this->next()) !== null) {
             if ($mode === \PDO::FETCH_KEY_PAIR) {
                 $out[$this->value($row[0], $this->fields[0]['type'])] = $this->value($row[1], $this->fields[1]['type']);
             } else {
@@ -266,13 +274,13 @@ class Statement extends \PDOStatement
 
     public function fetchColumn(int $column = 0): mixed
     {
-        $row = array_shift($this->rows);
+        $row = $this->next();
         return $row === null ? false : $this->value($row[$column] ?? null, $this->fields[$column]['type'] ?? 25);
     }
 
     public function fetchObject(?string $class = 'stdClass', array $constructorArgs = []): object|false
     {
-        $row = array_shift($this->rows);
+        $row = $this->next();
         return $row === null ? false : $this->shape($row, \PDO::FETCH_CLASS, [$class ?? \stdClass::class, $constructorArgs]);
     }
 
@@ -302,6 +310,7 @@ class Statement extends \PDOStatement
     public function closeCursor(): bool
     {
         $this->rows = [];
+        $this->cursor = 0;
         return true;
     }
 

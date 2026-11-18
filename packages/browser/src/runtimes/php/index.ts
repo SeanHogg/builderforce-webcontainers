@@ -26,7 +26,7 @@ export { InvalidPackageName, checkPackageName, encodePackageName, validPackageNa
 export { lockText, requireArguments, runtimePackages, unsupportedRepositories } from './composer/lockFile.js';
 export type { ComposerJson, LockFile } from './composer/lockFile.js';
 export type { ComposerContext } from './composer/composerInstall.js';
-export { DIST_LIMITS, DistRefused, MAX_RESPONSE_BYTES, createPackageSource, expandMinified, githubRepository, readCapped, unpackDist, versionsOf, DEFAULT_REPOSITORY_URL } from './composer/packagist.js';
+export { DIST_LIMITS, DistRefused, MAX_RESPONSE_BYTES, checkDistUrl, createPackageSource, expandMinified, githubRepository, readCapped, unpackDist, versionsOf, DEFAULT_REPOSITORY_URL } from './composer/packagist.js';
 export type { Autoload, PackageSource, PackageSourceOptions, PackageVersion } from './composer/packagist.js';
 export { PGSQL_REASON, isPlatformPackage, platformShortfall } from './composer/platform.js';
 export type { Platform } from './composer/platform.js';
@@ -34,5 +34,6 @@ export { ResolveError, pickVersion, rankVersions, resolvePackages, rootRequireme
 export type { Requirement as ComposerRequirement, ResolveOptions, RootLinks } from './composer/resolve.js';
 export { compareVersions, parseConstraint, parseVersion, satisfies } from './composer/semver.js';
 export type { Constraint, Stability, Version } from './composer/semver.js';
-export { declaredClasses, dependencyOrder, phpLiteral, writeAutoloader } from './composer/autoload.js';
+export { declaredClasses, dependencyOrder, writeAutoloader } from './composer/autoload.js';
+export { phpLiteral, phpString } from './phpLiteral.js';
 export type { ComposerFiles } from './composer/autoload.js';

@@ -7,6 +7,7 @@
  * built from `__DIR__`, so the project works wherever it is mounted.
  */
 import { join } from '@seanhogg/builderforce-webcontainers-core';
+import { phpLiteral } from '../phpLiteral.js';
 import { AUTOLOAD_SOURCE, CLASS_LOADER_SOURCE, INSTALLED_VERSIONS_SOURCE } from './autoloadSource.js';
 import type { Autoload, PackageVersion } from './packagist.js';
 
@@ -18,15 +19,6 @@ export interface ComposerFiles {
   /** Every file under `dir`, recursively, as absolute paths. */
   list(dir: string): string[];
   remove(path: string): void;
-}
-
-/** A PHP literal for JSON-shaped data. */
-export function phpLiteral(value: unknown, expression?: (text: string) => string | undefined): string {
-  if (value === null || value === undefined) return 'null';
-  if (typeof value === 'boolean' || typeof value === 'number') return JSON.stringify(value);
-  if (typeof value === 'string') return expression?.(value) ?? `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-  if (Array.isArray(value)) return `[${value.map((item) => phpLiteral(item, expression)).join(', ')}]`;
-  return `[${Object.entries(value as Record<string, unknown>).map(([key, item]) => `${phpLiteral(key)} => ${phpLiteral(item, expression)}`).join(', ')}]`;
 }
 
 const DECLARATION = /^\s*(?:(?:abstract|final|readonly)\s+)*(class|interface|trait|enum)\s+([A-Za-z_\x80-￿][A-Za-z0-9_\x80-￿]*)/gm;

@@ -163,6 +163,9 @@ final class Wire
         $fields = [];
         for ($i = 0, $n = strlen($body); $i < $n && $body[$i] !== "\0"; $i = $end + 1) {
             $end = strpos($body, "\0", $i + 1);
+            if ($end === false) {
+                break; // a truncated field: keep what was read
+            }
             $fields[$body[$i]] = substr($body, $i + 1, $end - $i - 1);
         }
         $severity = $fields['V'] ?? $fields['S'] ?? 'ERROR';
@@ -214,6 +217,9 @@ final class Wire
         $fields = [];
         for ($i = 0, $at = 2; $i < $count; $i++) {
             $end = strpos($body, "\0", $at);
+            if ($end === false) {
+                throw Exception::fromState('08P01', 'malformed RowDescription from the server');
+            }
             $name = substr($body, $at, $end - $at);
             $meta = unpack('Ntable/ncolumn/Ntype/nsize/Nmod/nformat', substr($body, $end + 1, 18));
             $fields[] = ['name' => $name, 'type' => $meta['type']];

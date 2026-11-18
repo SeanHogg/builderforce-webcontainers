@@ -73,12 +73,14 @@ function contentOf(bytes: Uint8Array): string | Uint8Array {
   }
 }
 
-const exists = (FS: EmscriptenFsCore, path: string) => FS.analyzePath(path).exists;
-const isDirectory = (FS: EmscriptenFsCore, path: string) => exists(FS, path) && FS.isDir(FS.stat(path).mode);
-const childrenOf = (FS: EmscriptenFsCore, path: string) => FS.readdir(path).filter((name) => name !== '.' && name !== '..');
+/** The FS helpers every Emscripten runtime shares (the PHP installer's file calls use them too). */
+export const exists = (FS: EmscriptenFsCore, path: string) => FS.analyzePath(path).exists;
+export const isDirectory = (FS: EmscriptenFsCore, path: string) => exists(FS, path) && FS.isDir(FS.stat(path).mode);
+export const isFile = (FS: EmscriptenFsCore, path: string) => exists(FS, path) && !FS.isDir(FS.stat(path).mode);
+export const childrenOf = (FS: EmscriptenFsCore, path: string) => FS.readdir(path).filter((name) => name !== '.' && name !== '..');
 
 /** Remove a file or a directory tree. */
-function removeTree(FS: EmscriptenFsCore, path: string): void {
+export function removeTree(FS: EmscriptenFsCore, path: string): void {
   if (!exists(FS, path)) return;
   if (!isDirectory(FS, path)) return FS.unlink(path);
   for (const name of childrenOf(FS, path)) removeTree(FS, `${path}/${name}`);

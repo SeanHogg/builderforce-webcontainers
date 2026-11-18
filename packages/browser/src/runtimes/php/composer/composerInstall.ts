@@ -27,7 +27,7 @@ import { join } from '@seanhogg/builderforce-webcontainers-core';
 import type { ComposerRequest } from '../phpCommand.js';
 import { writeAutoloader, type ComposerFiles } from './autoload.js';
 import { lockText, requireArguments, runtimePackages, unsupportedRepositories, type ComposerJson, type LockFile } from './lockFile.js';
-import { InvalidPackageName, checkPackageName } from './packageName.js';
+import { InvalidPackageName, checkInstallableName, checkPackageName, vendorPath } from './packageName.js';
 import type { PackageSource, PackageVersion } from './packagist.js';
 import { isPlatformPackage, platformShortfall, type Platform } from './platform.js';
 import { ResolveError, pickVersion, resolvePackages, rootRequirements } from './resolve.js';
@@ -87,11 +87,15 @@ export async function runComposer(request: ComposerRequest, context: ComposerCon
       const data = files.read(installedPath);
       if (data === undefined) return { packages: [], devNames: [] };
       const parsed = parseJson<{ packages?: PackageVersion[]; 'dev-package-names'?: string[] }>(data, installedPath);
-      return { packages: (parsed.packages ?? []).filter((pkg) => checkPackageName(pkg.name, installedPath)), devNames: parsed['dev-package-names'] ?? [] };
+      // Every name here may become a vendor/ path to remove: only installable package names pass.
+      for (const pkg of parsed.packages ?? []) checkInstallableName(pkg.name, installedPath);
+      return { packages: parsed.packages ?? [], devNames: parsed['dev-package-names'] ?? [] };
     };
 
+    // Read (and validated) before anything is written: its names become vendor/ paths to remove.
+    const current = installed();
     if (request.command === 'dump-autoload') {
-      const { packages, devNames } = installed();
+      const { packages, devNames } = current;
       const devPackages = new Set(devNames);
       writeAutoloader(files, projectDir, composer, dev ? packages : packages.filter((pkg) => !devPackages.has(pkg.name)), { dev, devPackages: dev ? devPackages : new Set() });
       context.out('Generating autoload files\nGenerated autoload files\n');
@@ -104,7 +108,8 @@ export async function runComposer(request: ComposerRequest, context: ComposerCon
       for (const { name, constraint: written } of requireArguments(request.packages)) {
         let constraint = written;
         if (!constraint) {
-          const versions = await context.source.versions(name);
+          // The newest release the running PHP can run (unless platform requirements are ignored).
+          const versions = (await context.source.versions(name))?.filter((pkg) => request.ignorePlatformReqs || !platformDeclines({}, [pkg], false, context.platform).length);
           const best = versions && pickVersion(versions, [], options);
           const parsed = best && parseVersion(best.version_normalized ?? best.version);
           if (!parsed || parsed.branch) throw new ResolveError(`Could not find a stable version of package ${name}.`);
@@ -120,7 +125,7 @@ export async function runComposer(request: ComposerRequest, context: ComposerCon
     let writeLock = false;
     if (lock) {
       context.err('Installing dependencies from lock file' + (dev ? ' (including require-dev)' : '') + '\n');
-      for (const pkg of [...(lock.packages ?? []), ...(lock['packages-dev'] ?? [])]) checkPackageName(pkg.name, lockPath);
+      for (const pkg of [...(lock.packages ?? []), ...(lock['packages-dev'] ?? [])]) checkInstallableName(pkg.name, lockPath);
       if (lock['content-hash'] && lock['content-hash'] !== (await context.contentHash(originalJson ?? json))) context.err('Warning: The lock file is not up to date with the latest changes in composer.json. Run `composer update`.\n');
     } else {
       context.err(request.command === 'install' ? 'No composer.lock file present. Updating dependencies to latest instead of installing from lock file.\n' : 'Updating dependencies\n');
@@ -147,19 +152,28 @@ export async function runComposer(request: ComposerRequest, context: ComposerCon
       files.write(lockPath, lockText(lock, options));
       context.err('Writing lock file\n');
     }
-    const before = new Map(installed().packages.map((pkg) => [pkg.name, pkg]));
-    const sameVersion = (a: PackageVersion | undefined, b: PackageVersion) => !!a && a.version === b.version && (a.dist?.reference ?? null) === (b.dist?.reference ?? null);
+    const before = new Map(current.packages.map((pkg) => [pkg.name, pkg]));
+    // Installed means recorded AND on disk: a vendor/ directory removed by hand (or never written) is installed again.
+    const sameVersion = (a: PackageVersion | undefined, b: PackageVersion) =>
+      !!a && a.version === b.version && (a.dist?.reference ?? null) === (b.dist?.reference ?? null) && files.isDir(vendorPath(projectDir, b.name));
     const changes = wanted.filter((pkg) => !sameVersion(before.get(pkg.name), pkg));
     const removals = [...before.keys()].filter((name) => !wanted.some((pkg) => pkg.name === name));
     context.err(`Package operations: ${changes.length} install${changes.length === 1 ? '' : 's'}, 0 updates, ${removals.length} removal${removals.length === 1 ? '' : 's'}\n`);
+    // Every package's files are fetched before vendor/ is touched: a fetch that fails leaves vendor/ and installed.json as they were.
+    const fetched: Array<[PackageVersion, Map<string, Uint8Array>]> = [];
+    for (const pkg of changes) {
+      context.err(`  - Downloading ${pkg.name} (${pkg.version})\n`);
+      const contents = await context.source.files(pkg);
+      for (const path of contents.keys()) if (path.split('/').some((segment) => segment === '..' || segment === '.' || segment === '')) throw new Declined(`${pkg.name} ${pkg.version} holds a file outside its directory ("${path}").`);
+      fetched.push([pkg, contents]);
+    }
     for (const name of removals) {
-      files.remove(join(projectDir, 'vendor', name));
+      files.remove(vendorPath(projectDir, name));
       context.err(`  - Removing ${name}\n`);
     }
-    for (const pkg of changes) {
-      const target = join(projectDir, 'vendor', pkg.name);
+    for (const [pkg, contents] of fetched) {
+      const target = vendorPath(projectDir, pkg.name);
       context.err(`  - Installing ${pkg.name} (${pkg.version})\n`);
-      const contents = await context.source.files(pkg);
       files.remove(target);
       for (const [path, bytes] of contents) files.write(join(target, path), bytes);
       if (pkg.type === 'composer-plugin') context.err(`    ${pkg.name} is a Composer plugin; plugins do not run in the PHP runtime.\n`);

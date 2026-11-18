@@ -23,7 +23,6 @@ export { PHP_KIND };
 /** Host-only settings for PHP processes: a program's environment can change none of them. */
 export type PhpHostOptions = PhpStartOptions;
 
-
 /** The running PHP as PHP processes last reported it. */
 export interface PhpPlatformRecord {
   current(): Platform | undefined;

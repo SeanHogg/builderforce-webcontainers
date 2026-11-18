@@ -1,5 +1,5 @@
 // Console.Out and Console.Error to the Worker's stdout/stderr messages, a line at a time (and on Flush).
-// Standard input reads end of file: the browser runtime cannot block waiting for more.
+// Standard input is not forwarded (browser-wasm's Console has no input).
 using System.Text;
 
 namespace Bfwc.Host;
@@ -15,7 +15,6 @@ internal static class JsConsole
         stderr ??= new LineWriter(Js.Stderr);
         Console.SetOut(stdout);
         Console.SetError(stderr);
-        Console.SetIn(TextReader.Null);
     }
 
     internal static void Flush()
