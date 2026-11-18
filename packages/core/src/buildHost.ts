@@ -3,9 +3,13 @@ import type { ProjectConfig } from './projectConfig.js';
 import type { PackageCdn } from './packageCdn.js';
 import type { BundleHost, BundleLoad, ResolveKind } from './bundler.js';
 import type { ComponentCompilers } from './components.js';
-import { componentExtension } from './components.js';
+import type { ProjectProfile } from './detectProject.js';
+import { componentKindFor } from './components.js';
+import { componentResources } from './componentResources.js';
+import { withPreludes } from './preludes.js';
+import { resolveStaticFile } from './staticDirs.js';
 import { loaderFor } from './transformer.js';
-import { basename, dirname, extname, join } from './paths.js';
+import { basename, dirname, extname } from './paths.js';
 import { isBareSpecifier, resolveAlias, resolveLocal, resolvePackage } from './resolve.js';
 import { contentHash } from './hash.js';
 import { compileStylesheet, preprocessStyleBlock, type StylesheetContext } from './styles/compile.js';
@@ -31,7 +35,8 @@ export interface BuildHostOptions {
   components: ComponentCompilers;
   /** Sass / Less, and where their imports are found. */
   styles: StylesheetContext;
-  publicDir: string;
+  /** Static folders (root-absolute source URLs resolve into them), the entry and its preludes. */
+  profile: Pick<ProjectProfile, 'staticDirs' | 'entry' | 'preludes'>;
   /** The URL the site is served under: `./` (relative) or absolute, ending in `/`. */
   base: string;
 }
@@ -56,7 +61,7 @@ function isRelativeBase(base: string): boolean {
 }
 
 export function createBuildHost(options: BuildHostOptions): BuildHost {
-  const { fs, config, cdn, publicDir, base } = options;
+  const { fs, config, cdn, profile, base } = options;
   const assets = new Map<string, Uint8Array>();
   const componentCss = new Map<string, string>();
 
@@ -92,7 +97,7 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
     const local = resolveLocal(fs, fromDir, path);
     if (local) return local;
     // `/vite.svg` in source names `public/vite.svg`, served from the site root.
-    if (path.startsWith('/')) return resolveLocal(fs, '/', join(publicDir, path));
+    if (path.startsWith('/')) return resolveStaticFile(fs, profile.staticDirs, path);
     // CSS `url(bg.png)` is relative even without `./`.
     if (kind === 'css-url' || kind === 'css-import') return resolveLocal(fs, fromDir, `./${path}`);
     return undefined;
@@ -146,21 +151,24 @@ export function createBuildHost(options: BuildHostOptions): BuildHost {
 
       const ext = extname(path);
       if (query === 'url') return { contents: assetModule(path), loader: 'js' };
-      const loader = loaderFor(ext);
-      if (loader) return { contents: fs.readFile(path) ?? '', loader };
-      if (isStylesheet(path)) return { contents: (await compileStylesheet(options.styles, path)).css, loader: isCssModule(path) ? 'local-css' : 'css' };
-      if (ext === '.json') return { contents: fs.readFile(path) ?? '', loader: 'json' };
-
-      const extension = componentExtension(ext);
-      if (extension) {
-        const compiler = await options.components(extension, config.dependencies);
+      // Before plain scripts: an Angular project's `.ts` is a component too.
+      const kind = componentKindFor(path, config.dependencies);
+      if (kind) {
+        const compiler = await options.components(kind, config.dependencies);
         const preprocessStyle = (lang: string, source: string) => preprocessStyleBlock(options.styles, lang, source, path);
-        const compiled = await compiler.compile(fs.readText(path) ?? '', { path, dev: false, preprocessStyle });
-        if (!compiled.css) return { contents: compiled.code, loader: compiled.loader };
+        const resources = componentResources({ fs, path, styles: options.styles });
+        const compiled = await compiler.compile(fs.readText(path) ?? '', { path, dev: false, preprocessStyle, ...resources });
+        const code = withPreludes(compiled.code, path, profile);
+        const typescript = compiled.typescript ? { typescript: { ...config.typescript, ...compiled.typescript } } : {};
+        if (!compiled.css) return { contents: code, loader: compiled.loader, ...typescript };
         componentCss.set(path, compiled.css);
         // Importing its own CSS puts the component's styles in the entry's CSS bundle.
-        return { contents: `${compiled.code}\nimport ${JSON.stringify(`${path}?${COMPONENT_CSS}`)};`, loader: compiled.loader };
+        return { contents: `${code}\nimport ${JSON.stringify(`${path}?${COMPONENT_CSS}`)};`, loader: compiled.loader, ...typescript };
       }
+      const loader = loaderFor(ext);
+      if (loader) return { contents: withPreludes(fs.readText(path) ?? '', path, profile), loader };
+      if (isStylesheet(path)) return { contents: (await compileStylesheet(options.styles, path)).css, loader: isCssModule(path) ? 'local-css' : 'css' };
+      if (ext === '.json') return { contents: fs.readFile(path) ?? '', loader: 'json' };
       return { contents: assetModule(path), loader: 'js' };
     },
   };

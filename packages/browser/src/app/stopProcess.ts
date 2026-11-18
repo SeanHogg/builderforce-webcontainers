@@ -13,6 +13,21 @@ export async function stopProcess(handle: Pick<ServiceHandle, 'kill' | 'wait'>, 
   return exitWithin(handle, timeoutMs);
 }
 
+/**
+ * Read a process's output to its end and drop it. Cancelling the stream instead
+ * would leave the runtime closing an already-cancelled stream when the process exits.
+ */
+export function discardOutput(output: ReadableStream<string>): void {
+  void (async () => {
+    const reader = output.getReader();
+    try {
+      while (!(await reader.read()).done);
+    } catch {
+      // the process went away; nothing to read
+    }
+  })();
+}
+
 /** The exit code, or undefined when the process has not exited within `ms`. */
 export function exitWithin(handle: Pick<ServiceHandle, 'wait'>, ms: number): Promise<number | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;

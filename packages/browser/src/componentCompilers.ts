@@ -1,4 +1,6 @@
 import {
+  ANGULAR_MAJORS,
+  angularCompilerFor,
   createSvelteCompiler,
   createVueCompiler,
   type ComponentCompiler,
@@ -13,6 +15,8 @@ import { memoizedLoader, nativeImport, rangeOf, type ImportModule } from './cdnM
  * needs one, pinned to the project's own framework range. (Svelte's compiled
  * output calls internal runtime functions that change between minors; the
  * runtime is served by esm.sh from the same range, so the compiler is too.)
+ * Angular (17–20) needs no download here: its JIT source transforms live in
+ * the core.
  */
 export interface CdnComponentCompilerOptions {
   /** The ES module URL of `@vue/compiler-sfc`'s browser build for a `vue` range. */
@@ -31,8 +35,17 @@ export const defaultSvelteCompilerUrl = (range: string) => `https://esm.sh/svelt
 
 export function createCdnComponentCompilers(options: CdnComponentCompilerOptions = {}): ComponentCompilers {
   const load = memoizedLoader<ComponentCompiler>(options.importModule ?? nativeImport);
-  return (extension, dependencies) => {
-    if (extension === '.vue') {
+  return (kind, dependencies) => {
+    // Angular's JIT transforms are the core's own; the compiler that turns its
+    // templates into code is `@angular/compiler`, served to the page by esm.sh.
+    if (kind === 'angular') {
+      try {
+        return Promise.resolve(angularCompilerFor({ ...dependencies, '@angular/core': rangeOf(dependencies, '@angular/core', String(ANGULAR_MAJORS.max)) }));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    if (kind === '.vue') {
       const url = (options.vueCompilerUrl ?? defaultVueCompilerUrl)(rangeOf(dependencies, 'vue', '3'));
       return load(url, (module) => createVueCompiler(module as VueCompilerSfcLike));
     }

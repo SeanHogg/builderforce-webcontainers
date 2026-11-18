@@ -16,7 +16,9 @@
  *   clone    — structuredClone of the start message (page serialize + worker deserialize).
  *   mount    — the worker's handling of `start` (file system ready + program lookup).
  * Scenarios: the first spawn of a project, a repeat spawn with nothing changed,
- * and a spawn right after one file was edited.
+ * and a spawn right after one file was edited. Spawns are 5 ms apart.
+ * `BENCH_WARM=0` turns the primed spare Worker off (every spawn cold); the
+ * script also runs against hosts that predate that option (it is ignored).
  */
 import { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from '../src/node/processHost.js';
@@ -25,6 +27,8 @@ import type { HostToWorker } from '../src/node/protocol.js';
 
 const SIZES = [100, 1_000, 10_000];
 const RUNS = 7;
+/** `BENCH_WARM=0` measures cold spawns only (no primed spare Worker). */
+const WARM = process.env.BENCH_WARM !== '0';
 
 interface Sample {
   host: number;
@@ -53,6 +57,9 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)]!;
 }
 
+/** Clone time of each spare's `prime` (between spawns, never inside one). */
+const primes: number[] = [];
+
 function benchHost(fs: VirtualFileSystem) {
   let last: Sample = { host: 0, clone: 0, mount: 0 };
   const createWorker = (): WorkerLike => {
@@ -68,7 +75,10 @@ function benchHost(fs: VirtualFileSystem) {
           last.clone = t1 - t0;
           proc.receive(copy);
           last.mount = performance.now() - t1;
-        } else queueMicrotask(() => alive && proc.receive(copy));
+          return;
+        }
+        if (copy.type === 'prime') primes.push(t1 - t0);
+        queueMicrotask(() => alive && proc.receive(copy));
       },
       terminate() {
         alive = false;
@@ -80,13 +90,15 @@ function benchHost(fs: VirtualFileSystem) {
     });
     return worker;
   };
-  const host = new ProcessHost({ fs, createWorker, previewOrigin: 'https://bench.test', previewBase: '/__bfwc/b/', packageCache: false });
+  const host = new ProcessHost({ fs, createWorker, previewOrigin: 'https://bench.test', previewBase: '/__bfwc/b/', packageCache: false, warmWorker: WARM });
   const spawn = async (): Promise<Sample> => {
     last = { host: 0, clone: 0, mount: 0 };
     const t0 = performance.now();
     const child = host.spawnChild('bench-no-such-command');
     const hostMs = performance.now() - t0;
     await child.exit;
+    // Time between spawns, as in real use: a warm host primes its spare here.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     return { ...last, host: hostMs };
   };
   return { host, spawn };
@@ -95,9 +107,10 @@ function benchHost(fs: VirtualFileSystem) {
 const fmt = (n: number) => n.toFixed(2).padStart(8);
 
 async function main(): Promise<void> {
-  console.log(`node ${process.version}; median of ${RUNS} runs; ms`);
+  console.log(`node ${process.version}; median of ${RUNS} runs; ms; warm spare ${WARM ? 'on' : 'off'}`);
   console.log('files  | scenario       |    total | snapshot |    clone |    mount');
   for (const size of SIZES) {
+    primes.length = 0;
     const scenarios: Record<string, Sample[]> = { 'first spawn': [], 'repeat spawn': [], 'after 1 edit': [] };
     for (let run = 0; run < RUNS; run++) {
       const fs = project(size);
@@ -114,6 +127,7 @@ async function main(): Promise<void> {
         `${String(size).padStart(6)} | ${name.padEnd(14)} | ${fmt(median(samples.map((s) => s.host)))} | ${fmt(median(samples.map((s) => s.host - s.clone - s.mount)))} | ${fmt(median(samples.map((s) => s.clone)))} | ${fmt(median(samples.map((s) => s.mount)))}`,
       );
     }
+    if (primes.length) console.log(`${String(size).padStart(6)} | spare prime clone, between spawns: ${fmt(median(primes))}`);
   }
 }
 

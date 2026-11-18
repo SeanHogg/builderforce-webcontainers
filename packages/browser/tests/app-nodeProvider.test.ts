@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { Kernel, defaultPrograms } from '@seanhogg/builderforce-webcontainers-core';
 import { acceptsNodeService, createNodeProvider, startApplicationRuntime, type ApplicationSpec, type NodeServiceHost, type ServiceLogEntry } from '../src/app.js';
+import type { PreviewRuntime } from '../src/host.js';
 import { until } from './app-fakeProvider.js';
 
 function kernel(files: Record<string, string>): Kernel {
@@ -13,6 +14,9 @@ function kernel(files: Record<string, string>): Kernel {
   k.fs.writeTree(files);
   return k;
 }
+
+// Compile-time: a preview runtime IS a Node service host (`createNodeProvider(runtime)`).
+export const previewRuntimeIsAHost = (runtime: PreviewRuntime): NodeServiceHost => runtime;
 
 function nodeHost(processes: Kernel, direct = true): NodeServiceHost {
   return {

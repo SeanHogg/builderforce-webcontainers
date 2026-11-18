@@ -8,7 +8,8 @@
  * adapter below is the only esbuild-specific code, and a fork could put Rollup
  * behind the same port without re-implementing resolution.
  */
-import type { Loader } from './transformer.js';
+import type { EsbuildLike, EsbuildTypeScriptOptions, Loader, TypeScriptOptions } from './transformer.js';
+import { createEsbuildTransformer, esbuildTypeScriptOptions } from './transformer.js';
 
 export type BundleLoader = Loader | 'css' | 'local-css' | 'json' | 'text';
 
@@ -21,6 +22,11 @@ export type BundleResolution = { path: string; query?: string } | { external: st
 export interface BundleLoad {
   contents: string | Uint8Array;
   loader: BundleLoader;
+  /**
+   * TypeScript options for this module alone, over the build's (a component
+   * compiler's needs: Angular's legacy decorators). A TS/JS module only.
+   */
+  typescript?: TypeScriptOptions;
 }
 
 export interface BundleHost {
@@ -37,6 +43,8 @@ export interface BundleRequest {
   define: Record<string, string>;
   jsx: { runtime: 'automatic' | 'classic'; importSource: string };
   minify: boolean;
+  /** The project's tsconfig options, for every module (a module's own {@link BundleLoad.typescript} wins). */
+  typescript?: TypeScriptOptions;
 }
 
 export interface BundleOutputFile {
@@ -84,9 +92,15 @@ interface EsbuildPluginBuild {
   ): void;
 }
 
-/** The subset of esbuild's (and esbuild-wasm's) `build` API the adapter uses. */
+/**
+ * The subset of esbuild's (and esbuild-wasm's) `build` API the adapter uses.
+ * `transform` is needed only when a module carries its own TypeScript options
+ * (esbuild's tsconfig is per build, so such a module is compiled on its own
+ * first); esbuild and esbuild-wasm both have it.
+ */
 export interface EsbuildBuildLike {
-  build(options: {
+  transform?: EsbuildLike['transform'];
+  build(options: EsbuildTypeScriptOptions & {
     entryPoints: string[];
     bundle: true;
     write: false;
@@ -131,17 +145,39 @@ function relativeOutput(path: string): string {
 
 /** Adapt esbuild or esbuild-wasm's `build` to {@link Bundler}. */
 export function createEsbuildBundler(esbuild: EsbuildBuildLike): Bundler {
+  const transformer = esbuild.transform ? createEsbuildTransformer({ transform: esbuild.transform.bind(esbuild) }) : undefined;
   return {
     async bundle(request) {
       const { host } = request;
+      const target = request.typescript?.target ?? 'es2022';
+
+      /** A module with its own TypeScript options, compiled to JS on its own (see {@link EsbuildBuildLike}). */
+      async function load(path: string, query: string | undefined): Promise<{ contents: string | Uint8Array; loader: BundleLoader }> {
+        const loaded = await host.load(path, query);
+        if (!loaded.typescript) return { contents: loaded.contents, loader: loaded.loader };
+        const { loader } = loaded;
+        if (loader !== 'ts' && loader !== 'tsx' && loader !== 'js' && loader !== 'jsx') throw new Error(`${path}: TypeScript options apply to scripts only.`);
+        if (!transformer) throw new Error(`${path}: this esbuild has no transform(), which per-module TypeScript options need.`);
+        const contents = typeof loaded.contents === 'string' ? loaded.contents : new TextDecoder().decode(loaded.contents);
+        const { code } = await transformer.transform(contents, {
+          loader,
+          sourcefile: path,
+          define: request.define,
+          jsx: request.jsx,
+          typescript: { target, ...request.typescript, ...loaded.typescript },
+        });
+        return { contents: code, loader: 'js' };
+      }
+
       const result = await esbuild.build({
+        ...esbuildTypeScriptOptions(request.typescript),
         entryPoints: request.entryPoints,
         bundle: true,
         write: false,
         metafile: true,
         format: 'esm',
         splitting: true,
-        target: 'es2022',
+        target,
         outdir: OUT_DIR,
         entryNames: 'assets/[name]-[hash]',
         chunkNames: 'assets/[name]-[hash]',
@@ -165,7 +201,7 @@ export function createEsbuildBundler(esbuild: EsbuildBuildLike): Bundler {
               });
               build.onLoad({ filter: /.*/, namespace: NAMESPACE }, async (args) => {
                 const query = args.suffix?.startsWith('?') ? args.suffix.slice(1) : undefined;
-                return host.load(args.path, query);
+                return load(args.path, query);
               });
             },
           },

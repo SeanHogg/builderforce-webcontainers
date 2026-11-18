@@ -29,6 +29,8 @@ export interface NodeRuntimeOptions {
   env?: Record<string, string>;
   /** Grace period before a killed process's worker is terminated. Default 2000ms. */
   killGraceMs?: number;
+  /** Keep one spare process Worker primed with the file system, so a spawn sends only the changes since. Default true. */
+  warmWorker?: boolean;
 }
 
 export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions }): ProcessHost {
@@ -47,5 +49,6 @@ export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; b
     packageCache: options.packageCache,
     env: options.env,
     killGraceMs: options.killGraceMs,
+    warmWorker: options.warmWorker,
   });
 }

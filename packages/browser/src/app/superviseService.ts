@@ -18,7 +18,7 @@ import {
   type ServiceSpec,
   type StateChange,
 } from '@seanhogg/builderforce-webcontainers-core/app';
-import { exitWithin, stopProcess } from './stopProcess.js';
+import { discardOutput, exitWithin, stopProcess } from './stopProcess.js';
 import type { ServiceLogs } from './serviceLogs.js';
 import type { ServiceError, ServiceErrorPhase, ServiceSnapshot } from './types.js';
 
@@ -152,7 +152,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
     if (active !== run) {
       // Stopped while the provider was starting it.
       handle.kill('SIGKILL');
-      void handle.output.cancel().catch(() => undefined);
+      discardOutput(handle.output);
       return;
     }
     run.handle = handle;

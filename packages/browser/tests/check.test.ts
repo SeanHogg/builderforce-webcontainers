@@ -54,6 +54,10 @@ describe('createChecker', () => {
     expect(isCheckInput('/src/a.vue')).toBe(false);
     expect(checkInputs({ 'a.d.ts': 'declare const a: 1;' })).toEqual({ 'a.d.ts': 'declare const a: 1;' });
   });
+
+  it('sends HTML to the worker, so Angular templateUrl templates are scanned', () => {
+    expect(checkInputs({ 'src/app/app.html': '<p>{{ x }}</p>', 'node_modules/a/b.html': '', 'logo.png': '' })).toEqual({ 'src/app/app.html': '<p>{{ x }}</p>' });
+  });
 });
 
 describe('createCachedFetch', () => {

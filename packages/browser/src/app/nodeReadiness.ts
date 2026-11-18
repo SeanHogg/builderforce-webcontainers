@@ -4,7 +4,7 @@
  * the runtime's in-runtime localhost — never the page's network.
  */
 import type { PortChange, ProcessOptions, RuntimeProcess, ServerAddress } from '@seanhogg/builderforce-webcontainers-core';
-import { exitWithin } from './stopProcess.js';
+import { discardOutput, exitWithin } from './stopProcess.js';
 
 /** The slice of a runtime (`startPreviewRuntime()`'s, or the core `Kernel` adapted) the Node provider uses. */
 export interface NodeServiceHost {
@@ -24,9 +24,17 @@ export interface NodeServiceHost {
 /** 2xx and 3xx count as answering. */
 export const isHealthy = (status: number) => status >= 200 && status < 400;
 
-/** A program the runtime's Node runs: exits 0 when `GET url` is healthy, 1 otherwise. */
+/**
+ * A program the runtime's Node runs: exits 0 when `GET url` is healthy, 1
+ * otherwise. It sets `process.exitCode` and lets the event loop drain rather
+ * than calling `process.exit()` inside a promise callback.
+ */
 export function httpProbeScript(url: string): string {
-  return `fetch(${JSON.stringify(url)}).then((r) => process.exit(r.status >= 200 && r.status < 400 ? 0 : 1), () => process.exit(1));`;
+  return (
+    `fetch(${JSON.stringify(url)}).then(` +
+    `(r) => { process.exitCode = r.status >= 200 && r.status < 400 ? 0 : 1; return r.body && r.body.cancel(); }, ` +
+    `() => { process.exitCode = 1; });`
+  );
 }
 
 /** Ask once whether `http://localhost:<port><path>` is healthy, from inside the runtime. */
@@ -37,7 +45,7 @@ export async function probeHttp(host: NodeServiceHost, port: number, path: strin
     return response !== undefined && isHealthy(response.status);
   }
   const probe = host.run('node', ['-e', httpProbeScript(`http://localhost:${port}${url}`)]);
-  void probe.combinedOutput.cancel().catch(() => undefined);
+  discardOutput(probe.combinedOutput);
   const code = await exitWithin(probe, timeoutMs);
   if (code === undefined) probe.kill('SIGKILL');
   return code === 0;

@@ -121,7 +121,8 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
   }
 
   function start(message: StartMessage): void {
-    quietly(() => mountSnapshot(fs, message.snapshot));
+    const { snapshot } = message;
+    quietly(() => (snapshot.pack ? mountSnapshot(fs, snapshot) : applyOps(fs, snapshot.ops)));
     for (const port of message.ports) knownPorts.add(port);
 
     const system: System = {
@@ -199,6 +200,8 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
   return {
     receive(message) {
       switch (message.type) {
+        case 'prime':
+          return quietly(() => mountSnapshot(fs, message.snapshot));
         case 'start':
           return start(message);
         case 'stdin':

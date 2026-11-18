@@ -3,8 +3,13 @@
  * absolute and normalised (`/src/App.tsx`), so comparisons are plain string equality.
  */
 
+/** Anything normalising would change: no leading slash, `//`, `.`/`..` segments, a trailing slash, backslashes. */
+const UNNORMALISED = /^(?:[^/]|$)|\/\/|\/\.\.?(?:\/|$)|.\/$|\\/;
+
 /** Absolute, normalised: resolves `.`/`..`, collapses slashes, accepts backslashes. */
 export function normalizePath(path: string): string {
+  // The common case — a path the runtime stored — is already normal: one regex test, no split/join.
+  if (!UNNORMALISED.test(path)) return path;
   const parts: string[] = [];
   for (const segment of path.replace(/\\/g, '/').split('/')) {
     if (!segment || segment === '.') continue;

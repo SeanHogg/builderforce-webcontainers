@@ -55,3 +55,57 @@ for await (const { token } of client.generate([{ role: 'user', content: 'hi' }],
 The client starts the self-contained worker bundle that ships beside it. If your
 bundler does not copy it, serve `@seanhogg/builderforce-webcontainers/ml/worker.js`
 yourself and pass `createWorker: () => new Worker(url)`.
+
+## Applications (the `./app` subpath)
+
+`startApplicationRuntime` runs several services (a frontend, an API, a one-off
+migration) as one application on top of a preview runtime. You describe them in
+a plain `ApplicationSpec`:
+
+```ts
+import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
+import { startApplicationRuntime, createNodeProvider } from '@seanhogg/builderforce-webcontainers/app';
+
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+runtime.writeTree(files);
+
+const app = startApplicationRuntime(
+  {
+    projectId,
+    services: [
+      { id: 'api', type: 'application', runtime: 'node', root: '/api', command: 'node', args: ['server.js'],
+        port: 8000, readiness: { kind: 'http', path: '/health' }, restartPolicy: 'on-failure' },
+      { id: 'web', type: 'application', runtime: 'node', role: 'frontend', root: '/web', command: 'npm', args: ['run', 'dev'],
+        port: 3000, dependsOn: ['api'] },
+    ],
+  },
+  { providers: [createNodeProvider(runtime)] },
+);
+app.onStateChange(({ serviceId, to }) => console.log(serviceId, to));
+await app.start();            // api first; web once api's /health answers
+iframe.src = app.getUrl('web')!;
+```
+
+- **Order.** A service starts once everything in its `dependsOn` is ready.
+  `stop()` stops dependents first: `SIGTERM`, then `SIGKILL` after `stopTimeoutMs`.
+- **Readiness.** `port` (the port opens; the default with a port), `http` (a
+  health path answers 2xx/3xx over the runtime's own localhost), `exit-zero` (the
+  default without a port: a one-off command finished). `query` is for databases.
+- **Restart policy.** `never`, `on-failure` (the default) or `always`, with
+  backoff and a limit (`restart: { maxRestarts, backoffMs }`). A failed service
+  never stops the others; a running frontend keeps running while its API restarts.
+- **Environment.** Every service gets `<ID>_URL=http://localhost:<port>` for each
+  application service (`API_URL` for `api`), `PORT`, `BUILDERFORCE_SERVICE` and
+  `BUILDERFORCE_PROJECT_ID`. Backends get `DATABASE_URL` for the databases they
+  depend on; a `frontend` never does.
+- **Logs.** `app.logs()` is a `ReadableStream` of lines from every service
+  (`app.logs('api')` for one), history first, then live.
+- **Errors.** `start()` rejects with `ApplicationStartError` naming the services
+  that failed for good; `onError` reports every failure as it happens, with
+  whether it will restart.
+
+Runtimes plug in as `RuntimeProvider`s (`{ id, accepts(service), start(service, ctx) }`).
+A service whose runtime has no provider, or whose provider declines it (the
+`node` provider declines databases, `wrangler dev` and Docker), fails with the
+reason instead of half-running. `validateSpec`, `serviceGraph`, `serviceEnv` and
+the lifecycle state machine are exported too, as pure functions.

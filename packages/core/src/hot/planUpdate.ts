@@ -49,6 +49,9 @@ export function planUpdate({ changed, graph, refresh, hooksChanged }: PlanInput)
         // A partial's edit reaches the stylesheets that pulled it in — never the JS
         // importing a stylesheet, which a swap leaves untouched.
         for (const importer of graph.importers(path)) if (isStylesheet(importer)) queue.push(importer);
+        // Never served itself but read by a script: its CSS is inlined there (an
+        // Angular `styleUrl`), so that script has to re-run.
+        if (!graph.isServed(path)) for (const importer of graph.importers(path)) if (!isStylesheet(importer)) queue.push(importer);
         continue;
       }
 

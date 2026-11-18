@@ -10,7 +10,9 @@
  *
  * A process mounts a snapshot into its own file system: the pack's index is
  * seeded (contents read on first open), then the ops replayed in order — the
- * same replay that keeps a running process in sync.
+ * same replay that keeps a running process in sync. A process host may mount a
+ * snapshot into a Worker ahead of time (a warm worker) and later start it with
+ * only the `delta` since then.
  */
 import type { VirtualFileSystem } from '../vfs.js';
 import { VfsJournal, applyOps, type JournalOptions, type VfsOp } from './journal.js';
@@ -19,6 +21,12 @@ import { packFileSystem, readPack } from './pack.js';
 /** What a new process starts from: the pack and the changes made after it. */
 export interface VfsSnapshot {
   pack: ArrayBuffer;
+  ops: VfsOp[];
+}
+
+/** What a process that already mounted a snapshot (a warm worker) starts from: only the ops since. */
+export interface VfsDelta {
+  pack?: undefined;
   ops: VfsOp[];
 }
 
@@ -50,6 +58,16 @@ export class VfsSnapshots {
     return this.journal.seq;
   }
 
+  /**
+   * The ops that bring a mirror current at sequence `seq` up to now — for a
+   * process that already mounted a snapshot (a warm worker). Undefined when the
+   * journal no longer holds them or they outgrew the pack: start from a snapshot.
+   */
+  delta(seq: number): VfsOp[] | undefined {
+    const ops = this.journal.since(seq);
+    return ops && !this.outgrown(this.current?.buffer, seq, ops) ? ops : undefined;
+  }
+
   /** The file system as it is now, as a cached pack plus the ops since it. */
   snapshot(): VfsSnapshot {
     const pack = this.current;
@@ -67,9 +85,9 @@ export class VfsSnapshots {
     this.current = undefined;
   }
 
-  private outgrown(buffer: ArrayBuffer, seq: number, ops: VfsOp[]): boolean {
+  private outgrown(buffer: ArrayBuffer | undefined, seq: number, ops: VfsOp[]): boolean {
     if (ops.length > this.maxDeltaOps) return true;
-    return this.journal.bytesSince(seq) > Math.max(MIN_DELTA_BYTES, buffer.byteLength * this.maxDeltaRatio);
+    return this.journal.bytesSince(seq) > Math.max(MIN_DELTA_BYTES, (buffer?.byteLength ?? 0) * this.maxDeltaRatio);
   }
 }
 

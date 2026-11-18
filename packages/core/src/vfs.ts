@@ -136,7 +136,7 @@ export class VirtualFileSystem {
   /**
    * Load a snapshot without change events: explicit directories, then files. A
    * function is a file's contents, called on its first read (copy-on-read).
-   * Paths are absolute; an existing file at a path is replaced.
+   * An existing file at a path is replaced. Built for tens of thousands of files.
    */
   seed(files: Iterable<readonly [string, SeedContent]>, dirs: Iterable<string> = []): void {
     for (const dir of dirs) {
@@ -150,7 +150,12 @@ export class VirtualFileSystem {
     for (const [path, contents] of files) {
       const key = normalizePath(path);
       if (key === '/' || this.children.has(key)) throw new Error(`EISDIR: illegal operation on a directory, open '${key}'`);
-      if (!this.files.has(key)) this.link(key);
+      if (!this.files.has(key)) {
+        const cut = key.lastIndexOf('/');
+        const parent = cut === 0 ? '/' : key.slice(0, cut);
+        this.ensureDir(parent);
+        this.children.get(parent)!.add(key.slice(cut + 1));
+      }
       this.files.set(key, contents);
       this.versions.set(key, ++this.clock);
       this.mtimes.set(key, now);

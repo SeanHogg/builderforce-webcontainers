@@ -7,6 +7,7 @@ import { detectProject, type ProjectProfile } from './detectProject.js';
 import { readProjectConfig } from './projectConfig.js';
 import { buildDefine } from './compileScript.js';
 import { createBuildHost } from './buildHost.js';
+import { listStaticFiles } from './staticDirs.js';
 import { findHtmlEntries, rewriteBuiltHtml } from './buildHtml.js';
 import { noStyleCompilers, type StyleCompilers } from './styles/compilers.js';
 import { createStyleImportHost, type StyleImportHostOptions } from './styles/imports.js';
@@ -90,7 +91,7 @@ export async function buildProject(options: BuildOptions): Promise<BuildResult> 
     styles: options.styles ?? noStyleCompilers,
     imports: createStyleImportHost({ fs, dependencies: config.dependencies, ...options.styleImports }),
   };
-  const host = createBuildHost({ fs, config, cdn, components: options.components ?? noComponentCompilers, styles, publicDir: profile.publicDir, base });
+  const host = createBuildHost({ fs, config, cdn, components: options.components ?? noComponentCompilers, styles, profile, base });
   const bundled: BundleOutput = entryPoints.length
     ? await options.bundler.bundle({
       entryPoints,
@@ -98,14 +99,14 @@ export async function buildProject(options: BuildOptions): Promise<BuildResult> 
       define: buildDefine(config, base, 'production'),
       jsx: config.jsx,
       minify: options.minify ?? true,
+      typescript: config.typescript,
     })
     : { files: [], entries: {} };
 
   const out = new Map<string, Uint8Array>();
-  // public/ first, so a generated file of the same name wins.
-  const publicPrefix = `${profile.publicDir}/`;
-  for (const path of fs.list()) {
-    if (path.startsWith(publicPrefix) && path !== profile.htmlPath) out.set(path.slice(publicPrefix.length), toBytes(fs.readFile(path) ?? ''));
+  // Static files (public/, Angular assets) first, so a generated file of the same name wins.
+  for (const [output, path] of listStaticFiles(fs, profile.staticDirs)) {
+    if (path !== profile.htmlPath) out.set(output, toBytes(fs.readFile(path) ?? ''));
   }
   for (const [path, data] of host.assets) out.set(path, data);
   for (const file of bundled.files) out.set(file.path, file.contents);

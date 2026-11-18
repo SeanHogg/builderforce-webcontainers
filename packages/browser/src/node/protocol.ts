@@ -15,7 +15,7 @@
  * process and the page (its parent's side), and `child-ipc` /
  * `child-ipc-disconnect` between a parent process and the page (its child's side).
  */
-import type { HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo, VfsOp, VfsSnapshot } from '@seanhogg/builderforce-webcontainers-core';
+import type { HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo, VfsDelta, VfsOp, VfsSnapshot } from '@seanhogg/builderforce-webcontainers-core';
 
 /** One file-system change, either way (the core journal's op). */
 export type FsOp = VfsOp;
@@ -31,8 +31,12 @@ export interface StartMessage {
   /** A message channel to the parent is open (`process.send`, a thread's `parentPort`). */
   ipc?: boolean;
   thread?: ThreadInfo;
-  /** The file system: the host's cached pack (one ArrayBuffer, shared by every spawn until it is rebuilt) plus the changes since it. */
-  snapshot: VfsSnapshot;
+  /**
+   * The file system: the host's cached pack (one ArrayBuffer, shared by every
+   * spawn until it is rebuilt) plus the changes since it — or, for a warm worker
+   * that a `prime` already mounted, only the changes since that.
+   */
+  snapshot: VfsSnapshot | VfsDelta;
   /** Ports already listening anywhere in the runtime (so `listen` can fail fast with EADDRINUSE). */
   ports: number[];
   /** `/__bfwc/<id>/` on the preview origin, for `serverUrl`. */
@@ -62,6 +66,8 @@ export type IpcMessage =
 
 /** page → worker */
 export type HostToWorker =
+  /** A warm worker: mount the file system now, ahead of the `start` that will name the program. */
+  | { type: 'prime'; snapshot: VfsSnapshot }
   | StartMessage
   | { type: 'stdin'; data: StdioChunk | null }
   | { type: 'kill'; signal: string }

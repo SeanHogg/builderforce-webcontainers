@@ -2,7 +2,8 @@ import type { FsChange, VirtualFileSystem } from './vfs.js';
 import type { Transformer } from './transformer.js';
 import type { PackageCdn, PackageCdnFactory } from './packageCdn.js';
 import { esmShCdnFactory } from './packageCdn.js';
-import { noComponentCompilers, type ComponentCompilers } from './components.js';
+import { componentKindFor, noComponentCompilers, type ComponentCompilers } from './components.js';
+import { resolveStaticFile } from './staticDirs.js';
 import { isConfigFile, readProjectConfig, type ProjectConfig } from './projectConfig.js';
 import { detectProject, type ProjectProfile } from './detectProject.js';
 import { compileScript, isScriptPath, moduleUrl, type ImportQuery } from './compileScript.js';
@@ -12,7 +13,7 @@ import { attributionEnabled, type AttributionSetting } from './attribution.js';
 import { jsonToModule, rawToModule, urlToModule } from './styleModules.js';
 import { packageStylesheetModule, previewCss, stylesheetModule, type DevStyleContext } from './devStyles.js';
 import { loaderFor } from './transformer.js';
-import { extname, join, normalizePath } from './paths.js';
+import { extname, normalizePath } from './paths.js';
 import { JS_MIME, mimeFor } from './mime.js';
 import { noStyleCompilers, type StyleCompilers } from './styles/compilers.js';
 import { createStyleImportHost, type StyleImportHost, type StyleImportHostOptions } from './styles/imports.js';
@@ -36,7 +37,7 @@ export interface DevServerOptions {
   base: string;
   /** Package CDN factory, given the project's dependency ranges. Default: esm.sh. */
   cdn?: PackageCdnFactory;
-  /** `.vue` / `.svelte` compilers. Without them, requesting a component is an error. */
+  /** `.vue` / `.svelte` / Angular compilers. Without them, requesting a component is an error. */
   components?: ComponentCompilers;
   /** Sass / Less compilers. Without them, requesting a `.scss` or `.less` file is an error. */
   styles?: StyleCompilers;
@@ -156,8 +157,7 @@ export class DevServer {
     const specifier = packageStyleSpecifier(path);
     if (specifier !== undefined) return this.cached(path, `${path}?`, 0, () => this.producePackageStyle(specifier));
 
-    const publicPath = join(profile.publicDir, path);
-    const file = fs.isFile(path) ? path : fs.isFile(publicPath) ? publicPath : undefined;
+    const file = fs.isFile(path) ? path : resolveStaticFile(fs, profile.staticDirs, path);
     if (!file) {
       // An extension-less path is a client-side route: serve the app (SPA fallback).
       if (!extname(path) && !query) return this.serveDocument(profile);
@@ -228,8 +228,9 @@ export class DevServer {
         return reply(200, query === 'import' ? JS_MIME : CSS_MIME, style.body);
       }
       if (ext === '.json' && query === 'import') return reply(200, JS_MIME, jsonToModule(fs.readText(file) ?? ''));
+      // Before plain scripts: an Angular project's `.ts` is a component too (and never takes React Refresh).
+      if (componentKindFor(file, ctx.config.dependencies)) return reply(200, JS_MIME, await compileComponent(ctx, file));
       if (loaderFor(ext)) return reply(200, JS_MIME, await this.compileWithRefresh(ctx, file));
-      if (isScriptPath(file)) return reply(200, JS_MIME, await compileComponent(ctx, file));
       if (isHtmlFile(file)) {
         return reply(200, mimeFor(ext), transformHtml(fs.readText(file) ?? '', { base, attribution: badge, scripts: this.previewScripts, nonce: this.options.previewNonce }));
       }
@@ -299,6 +300,7 @@ export class DevServer {
       transformer,
       base,
       components: this.options.components ?? noComponentCompilers,
+      profile: this.profile(),
       styles: { fs, dependencies: config.dependencies, styles: this.options.styles ?? noStyleCompilers, imports: this.styleImports },
       track: (path) => dependencies.add(path),
       stampOf: (path) => this.graph.stampOf(path),

@@ -40,6 +40,7 @@ import type { FsOp, HostToWorker, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
 import { ResponseReceiver, sendResponse } from './responseWire.js';
 import { ChildRelay, isChildMessage } from './childRelay.js';
+import { WorkerSupply } from './workerSupply.js';
 
 /** The part of `Worker` the host uses — a real Worker, or an in-thread fake in tests. */
 export interface WorkerLike {
@@ -65,6 +66,8 @@ export interface ProcessHostOptions {
   env?: Record<string, string>;
   /** How long a killed process may take to exit before its worker is terminated. Default 2000ms. */
   killGraceMs?: number;
+  /** After a spawn, keep one spare Worker primed with the file system, so the next spawn sends only the changes since. Default true. */
+  warmWorker?: boolean;
 }
 
 /** A running process, as `listProcesses()` reports it. */
@@ -116,9 +119,12 @@ export class ProcessHost {
   private readonly stopPorts: () => void;
   /** What each new process starts from: one pack reused until the project outgrows it, plus the ops since. */
   readonly snapshots: VfsSnapshots;
+  /** New processes' Workers: a primed spare when there is one, else a new Worker and the snapshot. */
+  readonly workers: WorkerSupply;
 
   constructor(private readonly options: ProcessHostOptions) {
     this.snapshots = new VfsSnapshots(options.fs);
+    this.workers = new WorkerSupply(() => options.createWorker(), this.snapshots, options.warmWorker !== false);
     this.unwatch = options.fs.watch((change) => this.onFsChange(change));
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
@@ -142,7 +148,7 @@ export class ProcessHost {
   spawnChild(command: string, args: string[] = [], options: ProcessOptions = {}): ChildHandle {
     const pid = allocatePid();
     const cwd = options.cwd ?? this.options.cwd ?? '/';
-    const worker = this.options.createWorker();
+    const { worker, snapshot } = this.workers.take();
     let resolveExit!: (code: number) => void;
     const exit = new Promise<number>((resolve) => (resolveExit = resolve));
     const proc: Proc = {
@@ -185,7 +191,7 @@ export class ProcessHost {
       terminal: options.terminal,
       ipc: options.ipc,
       thread: options.thread,
-      snapshot: this.snapshots.snapshot(),
+      snapshot,
       ports: this.ports.ports(),
       previewOrigin: this.options.previewOrigin,
       previewBase: this.options.previewBase,
@@ -231,6 +237,7 @@ export class ProcessHost {
     for (const proc of [...this.procs]) this.terminate(proc, signalExitCode('SIGKILL'));
     this.unwatch();
     this.stopPorts();
+    this.workers.dispose();
     this.snapshots.dispose();
   }
 

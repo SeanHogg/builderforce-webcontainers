@@ -21,8 +21,10 @@ export interface CompileContext {
   transformer: Transformer;
   /** Preview base URL, ending in `/`. */
   base: string;
-  /** `.vue` / `.svelte` compilers. */
+  /** `.vue` / `.svelte` / Angular compilers. */
   components: ComponentCompilers;
+  /** The project's entry and the preludes imported ahead of it (see preludes.ts). */
+  profile?: PreludeProfile;
   /** Sass/Less, for `<style lang>` blocks in components. */
   styles?: StylesheetContext;
   /** Told about every local file a module imports — the hot-update graph's edges. */
@@ -117,13 +119,18 @@ export function buildDefine(config: ProjectConfig, base: string, mode: BuildMode
   return define;
 }
 
-/** Compile module source (TS/JSX or plain JS) and point its imports at preview and CDN URLs. */
-export async function compileModule(ctx: CompileContext, path: string, source: string, loader: Loader): Promise<string> {
-  const { code } = await ctx.transformer.transform(source, {
+/**
+ * Compile module source (TS/JSX or plain JS) and point its imports at preview and
+ * CDN URLs. `typescript` (a component compiler's needs) overrides the project's
+ * tsconfig options; the entry module gets the profile's preludes.
+ */
+export async function compileModule(ctx: CompileContext, path: string, source: string, loader: Loader, typescript?: TypeScriptOptions): Promise<string> {
+  const { code } = await ctx.transformer.transform(withPreludes(source, path, ctx.profile), {
     loader,
     sourcefile: path,
     define: buildDefine(ctx.config, ctx.base),
     jsx: ctx.config.jsx,
+    typescript: { ...ctx.config.typescript, ...typescript },
   });
   const fromDir = dirname(path);
   return rewriteImports(code, (specifier) => mapSpecifier(ctx, fromDir, specifier));
