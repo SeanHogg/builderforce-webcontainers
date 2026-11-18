@@ -14,8 +14,12 @@
  * unbounded work; and the next batch runs only while the client has consumed
  * the replies to within {@link REPLY_WINDOW}, so a slow reader is not flooded.
  *
- * Any database name is accepted: the engine has one database (`postgres`), and
- * every connection reaches it.
+ * Trust here is safe because nothing reaches this gateway unauthenticated: the
+ * database Worker is on the host origin and only the page's database host
+ * relays to it, after admitting each connection on the page
+ * (pgAuthentication.ts: generated per-service logins, the caller's page-side
+ * identity, the one database name the spec owns). The engine has one database
+ * (`postgres`), and every admitted connection reaches it.
  */
 import type { ByteChannel } from '@seanhogg/builderforce-webcontainers-core';
 import type { EngineScheduler } from './engineScheduler.js';

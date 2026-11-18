@@ -11,7 +11,7 @@ import { Writable } from './stream/writable.js';
 import type { EventLoop } from './loop.js';
 import type { ProgramIO } from '../system/types.js';
 import type { VirtualFileSystem } from '../vfs.js';
-import { join, normalizePath } from '../paths.js';
+import { normalizePath, resolveFrom } from '../paths.js';
 import { fsError } from './fs/stats.js';
 import { format } from './inspect.js';
 import { ProcessExit, queueCallback } from './processExit.js';
@@ -236,7 +236,7 @@ export function createProcess(options: ProcessOptions): NodeProcess {
     stdin: new StdinStream(io, loop),
     cwd: () => cwd,
     chdir(dir: string) {
-      const target = dir.startsWith('/') ? normalizePath(dir) : join(cwd, dir);
+      const target = resolveFrom(cwd, dir);
       if (!fs.isDirectory(target)) throw fsError(fs.isFile(target) ? 'ENOTDIR' : 'ENOENT', 'chdir', target);
       cwd = target;
     },

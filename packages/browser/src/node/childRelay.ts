@@ -7,6 +7,11 @@
  * Children are sibling Workers, so terminating the spawner's Worker does not
  * stop them: whoever ends the spawner calls `killAll` (a child's own end does
  * the same for ITS children, so the whole tree goes).
+ *
+ * A child's identity is never decided here: the spawn callback starts it as its
+ * parent's (processIdentity.ts), whatever the Worker's message says. A
+ * `detached` child outlives its parent but not its application: it stays
+ * attributed, and `ProcessHost.killApplication` ends it.
  */
 import type { ChildHandle, ProcessOptions } from '@seanhogg/builderforce-webcontainers-core';
 import type { HostToWorker, WorkerToHost } from './protocol.js';

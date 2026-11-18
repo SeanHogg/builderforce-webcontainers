@@ -1,5 +1,5 @@
 import type { VirtualFileSystem } from '../vfs.js';
-import { dirname, join, normalizePath } from '../paths.js';
+import { dirname, join, normalizePath, resolveFrom } from '../paths.js';
 import { isRegistryRange } from '../packageCdn.js';
 import { splitPackageSpecifier } from '../resolve.js';
 import { styleLanguageOf, type StyleLanguage } from './languages.js';
@@ -109,7 +109,7 @@ export function createStyleImportHost(options: StyleImportHostOptions): StyleImp
       const relative = spec.startsWith('./') || spec.startsWith('../') || spec.startsWith('/');
       // Preprocessors look beside the importing file first, even for `@use 'vars'`.
       if (!specifier.startsWith('~')) {
-        const near = !from ? normalizePath(spec) : isUrl(from) ? new URL(spec, from).href : spec.startsWith('/') ? normalizePath(spec) : join(dirname(from), spec);
+        const near = !from ? normalizePath(spec) : isUrl(from) ? new URL(spec, from).href : resolveFrom(dirname(from), spec);
         const hit = await firstExisting(candidates(near));
         if (hit || relative) return hit;
       }

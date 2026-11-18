@@ -1,6 +1,6 @@
 import type { VirtualFileSystem } from './vfs.js';
 import type { PathAlias } from './projectConfig.js';
-import { extname, join, normalizePath } from './paths.js';
+import { extname, join, normalizePath, resolveFrom } from './paths.js';
 
 /** Extensions probed, in order, for an extension-less import — Vite's default order. */
 export const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.cjs', '.json', '.css'] as const;
@@ -48,7 +48,7 @@ function probe(fs: VirtualFileSystem, base: string): string | undefined {
 
 /** Resolve a relative or absolute specifier against the importing file's directory. */
 export function resolveLocal(fs: VirtualFileSystem, fromDir: string, specifier: string): string | undefined {
-  const base = specifier.startsWith('/') ? normalizePath(specifier) : join(fromDir, specifier);
+  const base = resolveFrom(fromDir, specifier);
   return probe(fs, base);
 }
 

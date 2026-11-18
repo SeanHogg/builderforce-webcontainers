@@ -5,7 +5,7 @@
  * runtime's PDO (`Bfwc\Pgsql\PDO`). For the package's `./app` to re-export.
  */
 export { PHP_WASM_VERSION, PHP_WASM_RELEASES, DEFAULT_PHP_VERSION, SUPPORTED_PHP_VERSIONS, DEFAULT_PHP_WASM_BASE_URL, checkPhpVersion, loadPhpRuntime, phpWasmModuleUrls } from './phpLoader.js';
-export type { LoadedPhp, PhpEmscriptenFs, PhpLike, PhpLoadOptions, PhpModuleLike, PhpRunRequest, PhpStreamedResponse } from './phpLoader.js';
+export type { LoadedPhp, PhpLike, PhpLoadOptions, PhpModuleLike, PhpRunRequest, PhpStreamedResponse } from './phpLoader.js';
 export { PHP_COMMAND_PATTERN, isPhpCommand, mapInvocationPaths as mapPhpInvocationPaths, parsePhpCommand } from './phpCommand.js';
 export type { ComposerCommand, ComposerRequest, PhpCommandParse, PhpInvocation, PhpServerSpec } from './phpCommand.js';
 export { PHP_KIND, createPhpProcessKind } from './phpProcessKind.js';
@@ -17,7 +17,11 @@ export { FRONT_SCRIPT, frontScript, routeRequest, startPhpWebServer } from './ph
 export type { PhpWebServer, PhpWebServerContext } from './phpWebServer.js';
 export { dialSocketClass, installPhpSockets, isLocalAddress } from './phpSockets.js';
 export type { Dial } from './phpSockets.js';
-export { fromPhpPath, toPhpPath, trackPhpWrites } from './phpFs.js';
+export { fromPhpPath, toPhpPath } from './phpFs.js';
+/** @deprecated Published in 2026.11.3; the tracker is shared by every Emscripten runtime without hooks — use `trackWrappedFsWrites`. */
+export { trackWrappedFsWrites as trackPhpWrites } from '../emscripten/wrappedFsWrites.js';
+/** @deprecated Published in 2026.11.3 — use `WrappableEmscriptenFs`. */
+export type { WrappableEmscriptenFs as PhpEmscriptenFs } from '../emscripten/wrappedFsWrites.js';
 export { RUNTIME_LIBRARY_ROOT, installRuntimeLibrary } from './phpRuntimeLibrary.js';
 export { PHP_WASM_EXTENSIONS, acceptsPhpService, createPhpProvider, expectedPlatform } from './phpProvider.js';
 export type { PhpProviderOptions } from './phpProvider.js';

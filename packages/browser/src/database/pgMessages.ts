@@ -14,6 +14,7 @@ export const CANCEL_REQUEST = 80877102;
 
 /** Typed frontend messages the gateway acts on itself. */
 export const TERMINATE = 0x58; // 'X'
+export const PASSWORD_MESSAGE = 0x70; // 'p'
 const READY_FOR_QUERY = 0x5a; // 'Z'
 
 /** The transaction status a `ReadyForQuery` reports: idle, in a transaction, in a failed transaction. */
@@ -45,6 +46,8 @@ function backend(type: string, ...parts: Array<Uint8Array | string | number>): U
 }
 
 export const authenticationOk = () => backend('R', 0);
+/** Ask for the password in clear (over the runtime's in-memory virtual socket, never a network). */
+export const authenticationCleartextPassword = () => backend('R', 3);
 export const parameterStatus = (name: string, value: string) => backend('S', name, value);
 export const backendKeyData = (processId: number, secretKey: number) => backend('K', processId, secretKey);
 export const readyForQuery = (status: TransactionStatus) => backend('Z', encoder.encode(status));

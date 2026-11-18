@@ -5,6 +5,11 @@ throws in its type initializer, and RawOpen dials a Socket. This adds a public N
 hook: when set, a physical connection is the Stream it returns (the runtime's virtual TCP), the ALPN value
 is made lazily, and the buffers skip socket timeouts when there is no socket.
 
+The socket's other consumers were checked: socket options (keepalive) are set only on the socket path,
+disposal is null-safe, and cancellation opens its own connection through RawOpen. The one endpoint consumer,
+NpgsqlActivitySource.Enrich (tracing), switches on the endpoint's type: under the transport the endpoint is
+the runtime's loopback (an IPEndPoint), and Enrich takes a missing endpoint without throwing.
+
 diff --git a/src/Npgsql/Internal/NpgsqlConnector.cs b/src/Npgsql/Internal/NpgsqlConnector.cs
 index d30edff..7d0a2a3 100644
 --- a/src/Npgsql/Internal/NpgsqlConnector.cs
@@ -28,7 +33,7 @@ index d30edff..7d0a2a3 100644
  
  #pragma warning disable CA1859
      // We're casting to IDisposable to not explicitly reference X509Certificate2 for NativeAOT
-@@ -757,12 +758,19 @@ async Task RawOpen(SslMode sslMode, NpgsqlTimeout timeout, bool async, Cancellat
+@@ -757,12 +758,21 @@ async Task RawOpen(SslMode sslMode, NpgsqlTimeout timeout, bool async, Cancellat
      {
          try
          {
@@ -36,8 +41,10 @@ index d30edff..7d0a2a3 100644
 -                await ConnectAsync(timeout, cancellationToken).ConfigureAwait(false);
 +            if (NpgsqlStreamTransport.Connect is { } transport)
 +            {
-+                // A host-provided transport (a virtual TCP stream in a browser runtime): no socket.
++                // A host-provided transport (a virtual TCP stream in a browser runtime): no socket. Its peer is the
++                // runtime's loopback (only localhost is reachable), recorded so endpoint consumers (tracing) see one.
 +                _baseStream = await transport(Host, Port, cancellationToken).ConfigureAwait(false);
++                ConnectedEndPoint = new IPEndPoint(IPAddress.Loopback, Port);
 +            }
              else
 -                Connect(timeout);
@@ -93,6 +100,24 @@ index 821bb7e..1a33038 100644
                      _timeoutCts.Timeout = InfiniteTimeSpan;
                  }
              }
+diff --git a/src/Npgsql/NpgsqlActivitySource.cs b/src/Npgsql/NpgsqlActivitySource.cs
+--- a/src/Npgsql/NpgsqlActivitySource.cs
++++ b/src/Npgsql/NpgsqlActivitySource.cs
+@@ -76,8 +76,13 @@ internal static void Enrich(Activity activity, NpgsqlConnector connector)
+
+         var endPoint = connector.ConnectedEndPoint;
+-        Debug.Assert(endPoint is not null);
+         switch (endPoint)
+         {
++        case null:
++            // A host-provided transport (NpgsqlStreamTransport) may leave no endpoint: tag what is known.
++            activity.SetTag("net.transport", "ip_tcp");
++            activity.SetTag("net.peer.name", connector.Host);
++            break;
++
+         case IPEndPoint ipEndPoint:
+             activity.SetTag("net.transport", "ip_tcp");
+             activity.SetTag("net.peer.ip", ipEndPoint.Address.ToString());
 diff --git a/src/Npgsql/NpgsqlStreamTransport.cs b/src/Npgsql/NpgsqlStreamTransport.cs
 new file mode 100644
 index 0000000..7ba0412

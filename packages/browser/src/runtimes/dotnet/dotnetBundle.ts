@@ -17,18 +17,21 @@ export interface BundledPackage {
   readonly version: string;
   /** Where its source is built from (patched for browser-wasm). */
   readonly repository: string;
+  /** The release tag `commit` is (for people; the build fetches the commit, never the tag, which can be moved). */
   readonly tag: string;
+  /** The exact commit built, checked after the fetch (`git rev-parse HEAD`). */
+  readonly commit: string;
 }
 
 export const DOTNET_BUNDLE = {
-  /** The manifest format the loader reads. */
-  format: 1,
+  /** The manifest format the loader reads (2: every file's SHA-256, per packed reference too). */
+  format: 2,
   /** What every build targets, whatever the project says (net8.0 and net9.0 projects compile against it). */
   targetFramework: 'net10.0',
   /** The host program's assembly (dotnet-host/BfwcDotnetHost.csproj), whose exports the Worker calls. */
   hostAssembly: 'Bfwc.DotnetHost',
   /** Lower-cased package id → package. */
   packages: {
-    npgsql: { name: 'Npgsql', version: '9.0.3', repository: 'https://github.com/npgsql/npgsql.git', tag: 'v9.0.3' },
+    npgsql: { name: 'Npgsql', version: '9.0.3', repository: 'https://github.com/npgsql/npgsql.git', tag: 'v9.0.3', commit: '97dc1739c6cf5890acf450f20f04e64c14c7ffd5' },
   } as Readonly<Record<string, BundledPackage>>,
 } as const;

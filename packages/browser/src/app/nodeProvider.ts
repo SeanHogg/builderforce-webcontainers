@@ -64,9 +64,11 @@ export function createNodeProvider(host: NodeServiceHost, options: NodeProviderO
         host.onServerListening(onOpen),
         host.onPortChange((change) => (change.type === 'open' ? onOpen(change) : change.port === port && (url = undefined))),
       ];
+      // The process is the service's minted identity, rooted at its directory (its file-system view).
+      const as = { identity: context.security, cwd: service.root ?? '/' };
       let child: RuntimeProcess;
       try {
-        child = host.run(service.command!, service.args ?? [], { cwd: service.root ?? '/', env: context.env });
+        child = host.run(service.command!, service.args ?? [], { ...as, env: context.env });
       } catch (error) {
         unsubscribe.forEach((stop) => stop());
         throw error;
@@ -94,7 +96,7 @@ export function createNodeProvider(host: NodeServiceHost, options: NodeProviderO
           case 'port':
             return Promise.race([portOpen, exitsBefore(`opening port ${port}`)]);
           case 'http':
-            return Promise.race([portOpen.then(() => untilHttpHealthy(host, port!, readiness.path, probeIntervalMs, probing.signal)), exitsBefore(`answering ${readiness.path}`)]);
+            return Promise.race([portOpen.then(() => untilHttpHealthy(host, port!, readiness.path, probeIntervalMs, probing.signal, as)), exitsBefore(`answering ${readiness.path}`)]);
           case 'exit-zero':
             return exit.then((code) => {
               if (code !== 0) throw new Error(`Exited with code ${code}.`);

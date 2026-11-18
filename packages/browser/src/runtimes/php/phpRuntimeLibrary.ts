@@ -6,7 +6,8 @@
  * so `new \Bfwc\Pgsql\PDO('pgsql:…')` works in `php script.php`, `php -r` and
  * every `php -S` request, and costs nothing until used.
  */
-import type { PhpEmscriptenFs } from './phpLoader.js';
+import { exists } from '../emscripten/projectMirror.js';
+import type { WrappableEmscriptenFs } from '../emscripten/wrappedFsWrites.js';
 import { PDO_SOURCE } from './pgsql/pdoSource.js';
 import { STATEMENT_SOURCE } from './pgsql/statementSource.js';
 import { WIRE_SOURCE } from './pgsql/wireSource.js';
@@ -32,10 +33,8 @@ const FILES: Readonly<Record<string, string>> = {
   'pgsql/statement.php': STATEMENT_SOURCE,
 };
 
-const exists = (FS: PhpEmscriptenFs, path: string) => FS.analyzePath(path).exists;
-
 /** Write the library and hook it into php-wasm's auto-prepended script (before the project is tracked). */
-export function installRuntimeLibrary(FS: PhpEmscriptenFs): void {
+export function installRuntimeLibrary(FS: WrappableEmscriptenFs): void {
   for (const [path, source] of Object.entries(FILES)) {
     const target = `${RUNTIME_LIBRARY_ROOT}/${path}`;
     FS.mkdirTree(target.slice(0, target.lastIndexOf('/')));

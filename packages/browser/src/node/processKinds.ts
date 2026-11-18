@@ -2,9 +2,10 @@
  * The seam through which other process kinds plug into the process host,
  * without the host knowing them: which Worker kind runs a command (and the
  * command line it gets), what that kind's start message carries, and the
- * messages only that kind sends. The Python and PHP runtimes implement it
- * (runtimes/python/pythonProcessKind.ts, runtimes/php/phpProcessKind.ts — the
- * PHP policy chains to the Python one); with no policy every process is Node.
+ * messages only that kind sends. The Python, PHP and .NET runtimes implement it
+ * (runtimes/python/pythonProcessKind.ts, runtimes/php/phpProcessKind.ts,
+ * runtimes/dotnet/dotnetProcessKind.ts — the .NET policy chains to the PHP one,
+ * the PHP policy to the Python one); with no policy every process is Node.
  */
 import type { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import type { StartMessage, WorkerKind } from './protocol.js';
@@ -19,11 +20,17 @@ export interface ProcessKindPolicy {
   /** The Worker kind that runs `command` (a script's shebang may decide), and the command line it is given. */
   route(command: string, args: string[], context: { fs: VirtualFileSystem; cwd: string; env: Record<string, string> }): ProcessRoute;
   /** What a `kind` process's start message carries beyond the common fields. */
-  startOptions(kind: WorkerKind): Pick<StartMessage, 'python' | 'php'>;
+  startOptions(kind: WorkerKind): Pick<StartMessage, 'python' | 'php' | 'dotnet'>;
   /** A message the host does not handle itself, from a process of `kind`; true when taken. */
   receive(kind: WorkerKind, message: unknown): boolean;
   /** Commands Node processes must hand to the page rather than resolve (a RegExp source over the base name). */
   readonly foreignCommands?: string;
+}
+
+/** Several policies' `foreignCommands` as one RegExp source (a chained policy's own and its `next`'s); undefined when none has any. */
+export function unionCommandPatterns(...patterns: Array<string | undefined>): string | undefined {
+  const present = patterns.filter((pattern): pattern is string => !!pattern);
+  return present.length ? present.map((pattern) => `(?:${pattern})`).join('|') : undefined;
 }
 
 /** Every process is a Node process. */

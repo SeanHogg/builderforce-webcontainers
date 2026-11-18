@@ -7,7 +7,7 @@
  * Distinct from ../resolve.ts, which resolves the way Vite does for the preview.
  */
 import type { VirtualFileSystem } from '../vfs.js';
-import { dirname, join, normalizePath } from '../paths.js';
+import { dirname, join, normalizePath, resolveFrom } from '../paths.js';
 import { splitPackageSpecifier } from '../resolve.js';
 
 /** Conditions `require()` matches; `import` swaps `require` for `import`. */
@@ -177,7 +177,7 @@ export function resolveNodeModule(fs: VirtualFileSystem, request: string, fromDi
   }
 
   if (request === '.' || request === '..' || request.startsWith('./') || request.startsWith('../') || request.startsWith('/')) {
-    const base = request.startsWith('/') ? normalizePath(request) : join(fromDir, request);
+    const base = resolveFrom(fromDir, request);
     const hit = request.endsWith('/') ? loadAsDirectory(fs, base) : loadPath(fs, base);
     if (!hit) throw moduleNotFound(request, from);
     return { path: hit };

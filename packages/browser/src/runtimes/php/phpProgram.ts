@@ -3,12 +3,13 @@
  * PHP: PHP's own CLI on the arguments (to its exit code), `php -S` served
  * request-driven (phpWebServer.ts), or Composer (composer/composerInstall.ts).
  */
-import { bytesToBase64, dirname, join, normalizePath } from '@seanhogg/builderforce-webcontainers-core';
+import { bytesToBase64, dirname, join, resolveFrom } from '@seanhogg/builderforce-webcontainers-core';
 import type { ComposerFiles } from './composer/autoload.js';
 import { runComposer } from './composer/composerInstall.js';
 import { createPackageSource } from './composer/packagist.js';
 import type { PhpInvocation } from './phpCommand.js';
-import type { LoadedPhp, PhpEmscriptenFs } from './phpLoader.js';
+import type { LoadedPhp } from './phpLoader.js';
+import type { WrappableEmscriptenFs } from '../emscripten/wrappedFsWrites.js';
 import type { ComposerSourceOptions } from './phpStartOptions.js';
 import { drainBytes, drainText } from './phpStreams.js';
 import { childrenOf, isDirectory, isFile, removeTree } from '../emscripten/projectMirror.js';
@@ -27,12 +28,10 @@ export interface PhpProgramContext {
   platformKnown?(platform: Platform): void;
 }
 
-const resolve = (cwd: string, path: string) => (path.startsWith('/') ? normalizePath(path) : join(cwd, path));
-
 const isDir = isDirectory;
 
 /** The installer's file calls on php-wasm's FS (its writes are tracked like PHP's own). */
-export function composerFiles(FS: PhpEmscriptenFs): ComposerFiles {
+export function composerFiles(FS: WrappableEmscriptenFs): ComposerFiles {
   const list = (dir: string): string[] => childrenOf(FS, dir).flatMap((name) => (isDir(FS, join(dir, name)) ? list(join(dir, name)) : [join(dir, name)]));
   const remove = (path: string) => removeTree(FS, path);
   return {
@@ -73,7 +72,7 @@ async function platformOf(loaded: LoadedPhp, context: PhpProgramContext): Promis
 
 async function composer(loaded: LoadedPhp, invocation: Extract<PhpInvocation, { kind: 'composer' }>, context: PhpProgramContext): Promise<number> {
   const platform = await platformOf(loaded, context);
-  const projectDir = invocation.workingDir ? resolve(context.cwd, invocation.workingDir) : context.cwd;
+  const projectDir = invocation.workingDir ? resolveFrom(context.cwd, invocation.workingDir) : context.cwd;
   return runComposer(invocation, {
     files: composerFiles(loaded.module.FS),
     source: createPackageSource({ ...context.composer, fetch: context.fetch }),
@@ -93,12 +92,12 @@ export async function runPhpInvocation(loaded: LoadedPhp, invocation: PhpInvocat
     // `PHP_SAPI === 'cli-server'`, as under `php -S`; settable only before PHP's first run.
     await php.setSapiName('cli-server');
     const version = (await platformOf(loaded, context)).phpVersion;
-    const docroot = invocation.server.docroot ? resolve(context.cwd, invocation.server.docroot) : context.cwd;
+    const docroot = invocation.server.docroot ? resolveFrom(context.cwd, invocation.server.docroot) : context.cwd;
     if (!isDir(module.FS, docroot)) {
       context.io.stderr(`Directory ${invocation.server.docroot} does not exist.\n`);
       return { kind: 'exited', code: 1 };
     }
-    const router = invocation.server.router ? resolve(context.cwd, invocation.server.router) : undefined;
+    const router = invocation.server.router ? resolveFrom(context.cwd, invocation.server.router) : undefined;
     if (router && !isFile(module.FS, router)) {
       context.io.stderr(`Could not open input file: ${invocation.server.router}\n`);
       return { kind: 'exited', code: 1 };

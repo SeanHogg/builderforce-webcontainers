@@ -25,9 +25,10 @@ import { messageOf, within } from './asyncHelpers.js';
 import { ServiceFailure, untilReady, type ReadinessSource } from './awaitReadiness.js';
 import { createListeners } from './listeners.js';
 import { createRestartScheduler } from './restartScheduler.js';
-import { abandonProcess, exitWithin, stopRun, type ServiceRun } from './stopService.js';
+import { abandonProcess, endAttributed, exitWithin, stopRun, type ServiceRun } from './stopService.js';
 import type { ServiceLogs } from './serviceLogs.js';
-import type { ServiceError, ServiceErrorPhase, ServiceSnapshot } from './types.js';
+import type { AttributedProcesses, ServiceError, ServiceErrorPhase, ServiceSnapshot } from './types.js';
+import type { SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 
 export interface SuperviseOptions {
   spec: ServiceSpec;
@@ -43,6 +44,10 @@ export interface SuperviseOptions {
   stopTimeoutMs: number;
   restart: RestartLimits;
   stableAfterMs: number;
+  /** The service's identity, minted by the application runtime: its provider spawns with it. */
+  security: SecurityContext;
+  /** Ends what outlived the service's process (detached children) when it stops or fails. */
+  processes?: AttributedProcesses;
 }
 
 export interface SupervisedService extends ReadinessSource {
@@ -118,7 +123,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
     lifecycle.transition('starting');
     let handle: ServiceHandle;
     try {
-      run.handlePromise = Promise.resolve(resolution.provider.start(spec, { env: options.env, signal: run.controller.signal }));
+      run.handlePromise = Promise.resolve(resolution.provider.start(spec, { env: options.env, signal: run.controller.signal, security: options.security }));
       handle = await run.handlePromise;
     } catch (error) {
       return end(run, { phase: 'start', message: messageOf(error) });
@@ -191,6 +196,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
     active = undefined;
     run.controller.abort();
     if (run.handle && run.exitCode === undefined) run.handle.kill('SIGKILL');
+    endAttributed(options.processes, options.security); // before a restart: nothing of this run holds its ports
     if (run.readyAt !== undefined && Date.now() - run.readyAt >= options.stableAfterMs) attempt = 0;
 
     const terminal = outcome.phase === 'declined' || outcome.phase === 'dependency';
@@ -225,6 +231,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
       lifecycle.transition('stopping');
       const stopped = run ? await stopRun(run, options.stopTimeoutMs) : undefined;
       if (stopped) lastExit = stopped.wait();
+      endAttributed(options.processes, options.security);
       lifecycle.transition('stopped');
     } else if (lifecycle.state === 'failed') lifecycle.transition('stopped');
     else changes.emit(); // a finished one-off is no longer ready

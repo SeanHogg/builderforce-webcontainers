@@ -22,7 +22,6 @@ export {
   planRequirements,
   readProjectRequirements,
   readRequirementFile,
-  resolveFrom,
 } from './requirements.js';
 export type { DeclinedPackage, Requirement, RequirementPlan } from './requirements.js';
 export { tomlStringArray, tomlTable } from './tomlScan.js';

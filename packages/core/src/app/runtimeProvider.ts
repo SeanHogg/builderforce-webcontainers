@@ -5,7 +5,9 @@
  * no provider accepts is declined with a reason, so a host can send the whole
  * application to another target instead of half-running it.
  */
+import type { SecurityContext } from '../system/securityContext.js';
 import type { ServiceSpec } from './spec.js';
+import type { DatabaseCredential } from './serviceEnv.js';
 
 export type Acceptance = { ok: true } | { ok: false; reason: string };
 
@@ -14,6 +16,14 @@ export interface ServiceStartContext {
   env: Record<string, string>;
   /** Aborted when the application stops this service before it is ready. */
   signal: AbortSignal;
+  /**
+   * Who the service's processes are: `(applicationId, serviceId)`, minted by
+   * the application runtime — never read from the spec, its env or the app.
+   * A provider spawns with it (and probes readiness with it), so every
+   * page-side decision about the service's processes, ports and files is
+   * taken against it.
+   */
+  readonly security: SecurityContext;
 }
 
 /** A started service, as the orchestrator drives it. */
@@ -52,6 +62,12 @@ export interface RuntimeProvider {
   /** Whether this provider can run the service, and why not. */
   accepts(service: ServiceSpec): Acceptance;
   start(service: ServiceSpec, context: ServiceStartContext): ServiceHandle | Promise<ServiceHandle>;
+  /**
+   * For a database this provider runs: the credentials `client` connects with
+   * (generated and held by the provider, on the page side), or undefined when
+   * `client` may not connect. `serviceEnv` puts them in the client's URL.
+   */
+  databaseCredentials?(database: ServiceSpec, client: ServiceSpec): DatabaseCredential | undefined;
 }
 
 export type ProviderResolution = { ok: true; provider: RuntimeProvider } | { ok: false; reason: string };

@@ -14,7 +14,6 @@ import {
   addressInUseError,
   applyOps,
   basename,
-  changeToOp,
   commandNotFound,
   createIpcEndpoint,
   defaultPrograms,
@@ -23,7 +22,6 @@ import {
   runProgram,
   type ChildHandle,
   type ConnectionHandler,
-  type FsChange,
   type HttpHandler,
   type PackageCache,
   type ProcessOptions,
@@ -31,11 +29,12 @@ import {
   type System,
   type UpgradeHandler,
 } from '@seanhogg/builderforce-webcontainers-core';
-import type { FsOp, HostToWorker, StartMessage, WorkerToHost } from './protocol.js';
+import type { HostToWorker, StartMessage, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
 import { ResponseReceiver } from './responseWire.js';
 import { createServedPorts } from './servedPorts.js';
 import { createWorkerConnections, isWorkerConnectionMessage } from './workerConnections.js';
+import { forwardVfsChanges } from './vfsForwarding.js';
 
 export interface WorkerProcessDeps {
   post(message: WorkerToHost): void;
@@ -80,39 +79,11 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
   const connections = createWorkerConnections(deps.post);
   let nextChild = 1;
   let nextReq = 1;
-  let applying = false;
-  let pending: FsOp[] = [];
-  let flushScheduled = false;
   let process: ChildHandle | undefined;
   const programs = defaultPrograms();
 
-  const flush = () => {
-    flushScheduled = false;
-    if (!pending.length) return;
-    const ops = pending;
-    pending = [];
-    deps.post({ type: 'fs', ops });
-  };
-
-  fs.watch((change: FsChange) => {
-    if (applying) return;
-    pending.push(changeToOp(fs, change));
-    if (!flushScheduled) {
-      flushScheduled = true;
-      queueMicrotask(flush);
-    }
-  }, { promotions: true }); // a directory made explicit here must outlive its files on the page too
-
-  /** Apply the page's changes (or mount the start snapshot) without echoing them back. */
-  const quietly = (load: () => void) => {
-    applying = true;
-    try {
-      load();
-    } finally {
-      applying = false;
-    }
-  };
-  const apply = (ops: FsOp[]) => quietly(() => applyOps(fs, ops));
+  /** This process's writes go to the page; the page's changes (and the start snapshot) apply without echoing back. */
+  const { flush, quietly, apply } = forwardVfsChanges(fs, (ops) => deps.post({ type: 'fs', ops }));
 
   function remoteChild(command: string, args: string[], options: ProcessOptions = {}): ChildHandle {
     flush(); // the child must see every write made so far

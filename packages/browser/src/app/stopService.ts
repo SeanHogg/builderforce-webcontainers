@@ -4,7 +4,9 @@
  * `SIGKILL` after a timeout) or abandoning it (`SIGKILL`, output dropped).
  */
 import type { ServiceHandle } from '@seanhogg/builderforce-webcontainers-core/app';
+import type { SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import { within } from './asyncHelpers.js';
+import type { AttributedProcesses } from './types.js';
 
 /** One attempt at running a service's process. */
 export interface ServiceRun {
@@ -31,6 +33,15 @@ export async function stopProcess(handle: Pick<ServiceHandle, 'kill' | 'wait'>, 
   if (graceful !== undefined) return graceful;
   handle.kill('SIGKILL');
   return exitWithin(handle, timeoutMs);
+}
+
+/**
+ * End every process still attributed to `security` — what outlived the
+ * service's own process (`detached` children, orphans): its service's, or with
+ * `wholeApplication` every service's.
+ */
+export function endAttributed(processes: AttributedProcesses | undefined, security: SecurityContext, wholeApplication = false): void {
+  processes?.killApplication(security.applicationId, wholeApplication ? undefined : security.serviceId);
 }
 
 /** Kill without waiting and drop its output; returns its exit, for the next launch to wait on. */

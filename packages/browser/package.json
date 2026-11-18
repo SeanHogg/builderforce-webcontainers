@@ -35,7 +35,11 @@
     "./python-worker.js": "./dist/python-worker.js",
     "./runtimes/python/worker.js": "./dist/runtimes/python/worker.js",
     "./php-worker.js": "./dist/php-worker.js",
-    "./runtimes/php/worker.js": "./dist/runtimes/php/worker.js"
+    "./runtimes/php/worker.js": "./dist/runtimes/php/worker.js",
+    "./dotnet-worker.js": "./dist/dotnet-worker.js",
+    "./runtimes/dotnet/worker.js": "./dist/runtimes/dotnet/worker.js",
+    "./rust-worker.js": "./dist/rust-worker.js",
+    "./runtimes/rust/worker.js": "./dist/runtimes/rust/worker.js"
   },
   "type": "module",
   "sideEffects": false,
@@ -43,10 +47,14 @@
     "dist",
     "src",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "rust-fixtures/bfwc-wasi/Cargo.toml",
+    "rust-fixtures/bfwc-wasi/src"
   ],
   "scripts": {
     "build": "node ./node_modules/typescript-7/bin/tsc -p tsconfig.build.json && node scripts/build-sw.mjs",
+    "build:dotnet": "node scripts/build-dotnet-runtime.mjs",
+    "build:rust-fixtures": "node scripts/build-rust-fixtures.mjs",
     "typecheck": "node ./node_modules/typescript-7/bin/tsc --noEmit",
     "test": "vitest run",
     "prepublishOnly": "npm run build"

@@ -36,3 +36,115 @@ jobs:
 
       - name: ${{ matrix.script }}
         run: pnpm ${{ matrix.script }}
+
+  # The .NET runtime bundle (PRD 31 §W9 phase 6c) is a host-served artifact, not part of the npm package:
+  # build it with the .NET 10 SDK, prove it against its real-runtime tests, and keep it as an artifact.
+  # A separate job, so the SDK install and the bundle build never slow the main legs.
+  dotnet-runtime:
+    name: dotnet runtime bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # The real-runtime tests skip when no bundle exists: name it explicitly, so tests/dotnet-helpers.ts fails
+      # instead of skipping when it is missing.
+      BFWC_DOTNET_BUNDLE: ${{ github.workspace }}/packages/browser/dotnet-host/out
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+    steps:
+      - uses: actions/checkout@v7
+
+      # Version is read from the `packageManager` field in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      # Exactly the SDK dotnet-host/global.json pins (it carries the ASP.NET Core shared framework the host
+      # program references); the build script builds Npgsql with the same pin.
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: packages/browser/dotnet-host/global.json
+
+      # NuGet packages and the patched Npgsql clone, keyed by everything that decides them: the SDK pin, the
+      # host's lock file, the patch, and the pinned Npgsql commit (dotnetBundle.ts). The build script re-fetches
+      # a clone whose marker does not match, so a stale cache is never built.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            packages/browser/dotnet-host/.work/npgsql-*
+          key: dotnet-bundle-${{ runner.os }}-${{ hashFiles('packages/browser/dotnet-host/global.json', 'packages/browser/dotnet-host/packages.lock.json', 'packages/browser/dotnet-host/patches/**', 'packages/browser/src/runtimes/dotnet/dotnetBundle.ts') }}
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The tests resolve core through core's built dist.
+      - name: Build (core then browser)
+        run: pnpm build
+
+      - name: Build the .NET runtime bundle
+        run: pnpm -C packages/browser build:dotnet
+
+      - name: Check the bundle exists
+        run: test -f "$BFWC_DOTNET_BUNDLE/manifest.json"
+
+      # Every .NET test file: the real-bundle ones (one Mono process per file) and the fast ones beside them.
+      - name: Real-runtime tests
+        working-directory: packages/browser
+        run: pnpm exec vitest run tests/dotnet-
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dotnet-runtime-bundle
+          path: packages/browser/dotnet-host/out
+          if-no-files-found: error
+
+  # The Rust runtime's fixtures (PRD 31 §W9 phase 6d) are prebuilt wasm32-wasip1 modules, not part of the npm
+  # package: build them with the pinned toolchain (rust-fixtures/rust-toolchain.toml) and prove the runtime on them.
+  rust-runtime:
+    name: rust runtime fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The real-module tests skip when no fixtures exist: name them explicitly, so tests/rust-helpers.ts fails
+      # instead of skipping when they are missing.
+      BFWC_RUST_FIXTURES: ${{ github.workspace }}/packages/browser/rust-fixtures/out
+    steps:
+      - uses: actions/checkout@v7
+
+      # Version is read from the `packageManager` field in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95.0'
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/browser/rust-fixtures
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The tests resolve core through core's built dist.
+      - name: Build (core then browser)
+        run: pnpm build
+
+      - name: Build the Rust fixtures
+        run: pnpm -C packages/browser build:rust-fixtures
+
+      - name: Check the fixtures exist
+        run: test -f "$BFWC_RUST_FIXTURES/todo_service.wasm" && test -f "$BFWC_RUST_FIXTURES/hello.wasm"
+
+      - name: Real-module tests
+        working-directory: packages/browser
+        run: pnpm exec vitest run tests/rust-runtime tests/rust-command

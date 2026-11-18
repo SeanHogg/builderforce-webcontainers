@@ -1,0 +1,5 @@
+# The toolchain the fixtures were built and measured with (PRD 31 §W9 phase 6d).
+[toolchain]
+channel = "1.95.0"
+targets = ["wasm32-wasip1"]
+profile = "minimal"

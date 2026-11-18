@@ -37,20 +37,30 @@ export interface WasiDeps {
   exit(code: number): void;
 }
 
-interface WasiInstance {
+export interface WasiInstance {
   exports: Record<string, unknown> & { memory?: WebAssembly.Memory; _start?: () => void; _initialize?: () => void };
 }
 
+/** The `WASI` class `createWasiModule` answers, typed for hosts that drive modules themselves (the Rust runtime). */
+export interface WasiHost {
+  readonly wasiImport: Record<string, (...args: any[]) => number | void>;
+  getImportObject(): Record<string, unknown>;
+  start(instance: WasiInstance): number | undefined;
+  initialize(instance: WasiInstance): void;
+}
+
+export type WasiHostConstructor = new (options?: WasiOptions) => WasiHost;
+
 const knownClock = (id: number) => id === CLOCK.REALTIME || id === CLOCK.MONOTONIC || id === CLOCK.PROCESS_CPUTIME || id === CLOCK.THREAD_CPUTIME;
 
-/** `proc_exit`: unwinds the module's stack back to `start()`. */
-class WasiExit extends Error {
+/** `proc_exit`: unwinds the module's stack back to `start()` — or, from a reactor's export, to whoever called it. */
+export class WasiExit extends Error {
   constructor(readonly code: number) {
     super(`WASI exit ${code}`);
   }
 }
 
-export function createWasiModule(deps: WasiDeps): Record<string, unknown> {
+export function createWasiModule(deps: WasiDeps): { WASI: WasiHostConstructor } & Record<string, unknown> {
   class WASI {
     readonly wasiImport: Record<string, (...args: any[]) => number | void>;
     private memory?: WebAssembly.Memory;

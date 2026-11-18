@@ -1,6 +1,6 @@
 /**
- * The .NET process Worker (to be bundled to dist/runtimes/dotnet/worker.js,
- * and to dist/dotnet-worker.js for the relay): one .NET process per Worker —
+ * The .NET process Worker (bundled to dist/runtimes/dotnet/worker.js, and to
+ * dist/dotnet-worker.js for the relay): one .NET process per Worker —
  * Mono's runtime is a singleton of its realm. The runtime bundle loads when
  * the process needs it, from the URL the host's start message gives; outbound
  * TCP dials through the page (the process protocol's `dial` messages).

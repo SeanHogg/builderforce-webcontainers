@@ -1,0 +1,13 @@
+[package]
+name = "bfwc-wasi"
+version = "0.1.0"
+edition = "2021"
+description = "The guest side of the BuilderForce WebContainers Rust ABI: an axum Router served on a virtual port, a host-driven executor, and virtual TCP for tokio-postgres."
+license = "MIT"
+# Shipped in the npm package (rust-fixtures/bfwc-wasi), not on crates.io: depend on it by path.
+publish = false
+
+[dependencies]
+axum = { version = "0.8", default-features = false }
+tokio = { version = "1", default-features = false }
+tower = { version = "0.5", default-features = false, features = ["util"] }

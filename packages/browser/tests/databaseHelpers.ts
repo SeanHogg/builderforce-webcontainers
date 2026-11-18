@@ -16,6 +16,7 @@ import { deletePgliteStorage, type OpenPGlite, type PGliteLike } from '../src/da
 import type { ToDatabase } from '../src/database/databaseProtocol.js';
 import type { LockManagerLike } from '../src/database/databaseLeadership.js';
 import type { DatabaseServiceHost } from '../src/app/pgliteProvider.js';
+import type { ConnectionAuthenticator } from '../src/database/pgAuthentication.js';
 import { host } from './helpers.js';
 
 export { collect } from './helpers.js';
@@ -50,11 +51,18 @@ export function fakeDatabaseWorker(): WorkerLike {
   return worker;
 }
 
+/**
+ * Test setup only: admit every connection without a password, for tests of the
+ * gateway's protocol and lifecycle (startDatabaseHost requires an authenticator;
+ * the pglite provider always passes its real one — see db-auth.test.ts).
+ */
+export const trustConnections: ConnectionAuthenticator = () => ({ allow: true });
+
 /** A runtime of process Workers plus what the pglite provider needs from it (`createWorker`: see `host`). */
 export function appHost(files: Record<string, string> = {}, createWorker?: Parameters<typeof host>[2], kinds?: Parameters<typeof host>[3]) {
   const runtime = host(files, 2000, createWorker, kinds);
   const databases: DatabaseServiceHost = {
-    listenTcp: (port, accept) => runtime.processes.ports.listen(port, async () => ({ status: 502, headers: {}, body: new ReadableStream() }), undefined, accept),
+    listenTcp: (port, accept, owner) => runtime.processes.ports.listen(port, async () => ({ status: 502, headers: {}, body: new ReadableStream() }), undefined, accept, owner),
     createDatabaseWorker: fakeDatabaseWorker,
   };
   return { ...runtime, databases };

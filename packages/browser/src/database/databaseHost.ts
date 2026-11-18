@@ -11,9 +11,12 @@
  *   own it see their connections close, and reconnect.
  *
  * It does no database work itself: PGlite, the wire protocol and the
- * scheduling all run in the Worker.
+ * scheduling all run in the Worker. What it does decide is who gets in: each
+ * connection is authenticated here, against this tab's logins and the caller
+ * the port registry names, before it is relayed (pgAuthentication.ts).
  */
-import type { ByteChannel, ConnectionHandler } from '@seanhogg/builderforce-webcontainers-core';
+import type { ByteChannel, ConnectionHandler, SecurityContext, ShieldReasonCode } from '@seanhogg/builderforce-webcontainers-core';
+import { authenticateConnection, type ConnectionAuthenticator } from './pgAuthentication.js';
 import type { DatabaseControl } from '@seanhogg/builderforce-webcontainers-core/app';
 import type { WorkerLike } from '../node/processHost.js';
 import { RelayedChannels } from '../node/relayedChannels.js';
@@ -25,9 +28,19 @@ import { followerLink, newTabId, serveFollowerTabs, type ChannelFactory } from '
 export interface DatabaseHostOptions {
   /** The database Worker, started on the host origin (`PreviewRuntime.createDatabaseWorker`). */
   createWorker(): WorkerLike;
-  /** Put a raw-TCP listener on the runtime's virtual network (`PreviewRuntime.listenTcp`); throws `EADDRINUSE`. */
-  listen(port: number, accept: ConnectionHandler): { port: number; close(): void };
+  /** Put a raw-TCP listener on the runtime's virtual network (`PreviewRuntime.listenTcp`), owned by `owner`; throws `EADDRINUSE`. */
+  listen(port: number, accept: ConnectionHandler, owner?: SecurityContext): { port: number; close(): void };
   port: number;
+  /** Who owns the database's port: the (application, database service) the runtime minted. Omitted, the platform. */
+  owner?: SecurityContext;
+  /**
+   * Admits each client connection, on this page, before any of it reaches the
+   * database (pgAuthentication.ts): the pglite provider's generated logins and
+   * service graph (`databaseAuthenticator`). Required: there is no trust mode.
+   */
+  authenticate: ConnectionAuthenticator;
+  /** A connection was refused (telemetry; never changes the outcome). */
+  onRefused?(reason: ShieldReasonCode, caller: SecurityContext | undefined): void;
   /** `idb://<key>` (persistent, shared by the origin's tabs) or `memory://`. */
   dataDir: string;
   /** Default `navigator.locks`. Required for a persistent database. */
@@ -84,15 +97,41 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
   const bootedPromise = new Promise<void>((resolve, reject) => (booted = { resolve, reject }));
   bootedPromise.catch(() => undefined);
 
-  const accept = (socket: ByteChannel) => {
+  /** Connections still authenticating: not yet relayed, but hung up on with the rest. */
+  const authenticating = new Set<{ cancel(): void }>();
+  const accept = (socket: ByteChannel, caller?: SecurityContext) => {
     if (ended) return socket.close();
-    const connId = nextConn++;
-    clients.add(connId, socket);
-    link?.post({ type: 'db-conn-open', connId });
+    const pending = authenticateConnection({
+      socket,
+      caller,
+      authenticate: options.authenticate,
+      refused: (reason) => {
+        authenticating.delete(pending);
+        try {
+          options.onRefused?.(reason, caller);
+        } catch {
+          // telemetry fails open
+        }
+      },
+      accepted: (forward) => {
+        authenticating.delete(pending);
+        if (ended) return socket.close();
+        const connId = nextConn++;
+        clients.add(connId, socket);
+        link?.post({ type: 'db-conn-open', connId });
+        link?.post({ type: 'db-conn-data', connId, data: forward });
+      },
+    });
+    authenticating.add(pending);
+    socket.onClose(() => authenticating.delete(pending));
+  };
+  const hangUpAuthenticating = () => {
+    for (const pending of [...authenticating]) pending.cancel();
+    authenticating.clear();
   };
   let registration: { port: number; close(): void };
   try {
-    registration = options.listen(options.port, accept);
+    registration = options.listen(options.port, accept, options.owner);
   } catch (error) {
     ownership?.release();
     throw error;
@@ -155,6 +194,7 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
     if (ended) return;
     ended = true;
     registration.close();
+    hangUpAuthenticating();
     dropAll(reason);
     booted.reject(new Error(reason));
     tabs?.close(); // followers hear the owner went; the next in line takes over
@@ -197,6 +237,7 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
       if (ended) return;
       registration.close(); // stop taking connections first
       clients.closeAll(true); // and hang up on the open ones, so transactions they hold roll back and free the engine
+      hangUpAuthenticating();
       if (role === 'owner') {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const flushed = call({ op: 'close' }).then(() => true, () => true);

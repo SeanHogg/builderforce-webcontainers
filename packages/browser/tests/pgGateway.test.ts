@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startDatabaseHost, type DatabaseHost, type DatabaseHostOptions } from '../src/database/databaseHost.js';
 import { pgliteDataDir } from '../src/app/pgliteProvider.js';
-import { appHost, collect, fakeDatabaseWorker, fakeLocks, installedPackage } from './databaseHelpers.js';
+import { appHost, collect, fakeDatabaseWorker, fakeLocks, installedPackage, trustConnections } from './databaseHelpers.js';
 
 type Runtime = ReturnType<typeof appHost>;
 const encoder = new TextEncoder();
@@ -17,7 +17,7 @@ const decoder = new TextDecoder();
 const PACKAGES = { ...installedPackage('pg'), ...installedPackage('drizzle-orm', { include: /\.(cjs|json)$/ }) };
 
 function startDatabase(runtime: Runtime, port: number, extra: Partial<DatabaseHostOptions> = {}): Promise<DatabaseHost> {
-  return startDatabaseHost({ createWorker: fakeDatabaseWorker, listen: runtime.databases.listenTcp, port, dataDir: 'memory://', ...extra });
+  return startDatabaseHost({ createWorker: fakeDatabaseWorker, listen: runtime.databases.listenTcp, port, dataDir: 'memory://', authenticate: trustConnections, ...extra });
 }
 
 /** Run `script` as main.js with DATABASE_URL pointing at `port`. */

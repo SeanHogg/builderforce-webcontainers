@@ -92,14 +92,7 @@ export function phpHost(files: Record<string, string> = {}, env: Record<string, 
   return { fs, ports: processes.ports, processes };
 }
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-export async function request(ports: ProcessHost['ports'], port: number, method: string, url: string, body?: string, headers: Record<string, string> = {}) {
-  const response = await ports.requestBuffered(port, { method, url, headers, body: body === undefined ? null : encoder.encode(body) });
-  if (!response) throw new Error(`Nothing listens on ${port}`);
-  return { status: response.status, headers: response.headers, text: decoder.decode(response.body) };
-}
+export { request } from './httpHelpers.js';
 
 /** A response body as JSON; anything else (a PHP warning page) fails with the body itself. */
 export function jsonOf(text: string): unknown {

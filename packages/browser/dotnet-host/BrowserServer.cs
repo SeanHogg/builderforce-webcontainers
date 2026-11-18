@@ -42,28 +42,39 @@ public sealed partial class BrowserServer : IServer
         return match.Groups["scheme"].Value.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80;
     }
 
+    /// <summary>
+    /// Claim every configured URL's port. Any failure — a URL that does not parse (ASPNETCORE_URLS without a
+    /// scheme), port 0, a port another process holds — releases what was claimed, leaves no URL behind in
+    /// <see cref="IServerAddressesFeature"/>, and is reported to <see cref="HostCapture"/> so a program blocked
+    /// in <c>app.Run()</c> ends instead of waiting on a host that never started.
+    /// </summary>
     public Task StartAsync<TContext>(IHttpApplication<TContext> application, CancellationToken cancellationToken) where TContext : notnull
     {
-        var urls = addresses.Addresses.Count > 0 ? addresses.Addresses.ToList() : [DefaultUrl];
-        addresses.Addresses.Clear();
-        foreach (var url in urls.SelectMany(url => url.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)))
+        try
         {
-            var port = PortOf(url);
-            if (ports.Contains(port)) continue;
-            if (servers.ContainsKey(port) || !Js.Listen(port))
+            var urls = addresses.Addresses.Count > 0 ? addresses.Addresses.ToList() : [DefaultUrl];
+            addresses.Addresses.Clear();
+            foreach (var url in urls.SelectMany(url => url.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)))
             {
-                Release();
-                var error = new IOException($"Failed to bind to address {url}: address already in use.");
-                HostCapture.StartFailed(error);
-                throw error;
+                var port = PortOf(url);
+                if (port == 0) throw new InvalidOperationException($"Dynamic port binding is not supported by the browser runtime: {url} names port 0. Use a fixed port.");
+                if (ports.Contains(port)) continue;
+                if (servers.ContainsKey(port) || !Js.Listen(port)) throw new IOException($"Failed to bind to address {url}: address already in use.");
+                servers[port] = this;
+                ports.Add(port);
+                if (url.StartsWith("https:", StringComparison.OrdinalIgnoreCase)) Console.Error.WriteLine($"warn: {url} is served as plain HTTP: the browser runtime has no TLS.");
+                addresses.Addresses.Add(url);
             }
-            servers[port] = this;
-            ports.Add(port);
-            if (url.StartsWith("https:", StringComparison.OrdinalIgnoreCase)) Console.Error.WriteLine($"warn: {url} is served as plain HTTP: the browser runtime has no TLS.");
-            addresses.Addresses.Add(url);
+            process = (reqId, features, response) => ProcessAsync(application, reqId, features, response);
+            return Task.CompletedTask;
         }
-        process = (reqId, features, response) => ProcessAsync(application, reqId, features, response);
-        return Task.CompletedTask;
+        catch (Exception error)
+        {
+            Release();
+            addresses.Addresses.Clear();
+            HostCapture.StartFailed(error);
+            throw;
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
@@ -137,7 +148,7 @@ public sealed partial class BrowserServer : IServer
             Scheme = "http",
             Method = method,
             PathBase = "",
-            Path = Uri.UnescapeDataString(path.Length == 0 ? "/" : path),
+            Path = DecodePath(path.Length == 0 ? "/" : path),
             QueryString = queryAt < 0 ? "" : url[queryAt..],
             RawTarget = url,
             Body = new MemoryStream(body, writable: false),
@@ -164,6 +175,68 @@ public sealed partial class BrowserServer : IServer
             RemotePort = 49152 + (nextConnection++ % 16384),
         });
         return features;
+    }
+
+    /// <summary>
+    /// A request target's path as Kestrel gives it to the pipeline: percent-escapes decoded as UTF-8 except
+    /// <c>%2F</c> (an encoded slash stays <c>%2F</c>, so it never splits a segment), then dot segments removed
+    /// (RFC 3986 §5.2.4) — after decoding, so <c>%2e%2e</c> cannot climb out either. Bytes that are not
+    /// UTF-8 keep their escapes.
+    /// </summary>
+    internal static string DecodePath(string raw)
+    {
+        var bytes = new List<byte>(raw.Length);
+        var i = 0;
+        while (i < raw.Length)
+        {
+            if (raw[i] == '%' && i + 2 < raw.Length && Uri.IsHexDigit(raw[i + 1]) && Uri.IsHexDigit(raw[i + 2]))
+            {
+                var value = (byte)Convert.ToInt32(raw.Substring(i + 1, 2), 16);
+                if (value == (byte)'/') bytes.AddRange("%2F"u8.ToArray());
+                else bytes.Add(value);
+                i += 3;
+                continue;
+            }
+            // Literal text up to the next escape, encoded whole (surrogate pairs stay together).
+            var next = raw.IndexOf('%', i + 1);
+            var end = next < 0 ? raw.Length : next;
+            bytes.AddRange(System.Text.Encoding.UTF8.GetBytes(raw[i..end]));
+            i = end;
+        }
+        string decoded;
+        try
+        {
+            decoded = new System.Text.UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes.ToArray());
+        }
+        catch (System.Text.DecoderFallbackException)
+        {
+            decoded = raw;
+        }
+        return RemoveDotSegments(decoded);
+    }
+
+    /// <summary>RFC 3986 §5.2.4 on an absolute path: <c>/a/./b/../c</c> → <c>/a/c</c>; never above <c>/</c>.</summary>
+    internal static string RemoveDotSegments(string path)
+    {
+        if (!path.StartsWith('/')) path = "/" + path;
+        var output = new List<string>();
+        var segments = path.Split('/');
+        for (var i = 1; i < segments.Length; i++)
+        {
+            var segment = segments[i];
+            var last = i == segments.Length - 1;
+            if (segment == ".")
+            {
+                if (last) output.Add("");
+            }
+            else if (segment == "..")
+            {
+                if (output.Count > 0) output.RemoveAt(output.Count - 1);
+                if (last) output.Add("");
+            }
+            else output.Add(segment);
+        }
+        return "/" + string.Join('/', output);
     }
 
     sealed class AddressesFeature : IServerAddressesFeature

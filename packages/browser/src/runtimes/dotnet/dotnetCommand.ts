@@ -89,8 +89,11 @@ function readOptions(args: string[], forward: boolean): { ok: true; options: Opt
       }
       const property = PROPERTY.exec(arg);
       if (property) {
-        const [name, setting] = property[1]!.split('=', 2);
-        if (name?.toLowerCase() === 'configuration' && setting) options.configuration = setting;
+        // `-p:Configuration=Release;X=Y` sets several properties: each `Name=Value` after a `;`.
+        for (const assignment of property[1]!.split(';')) {
+          const at = assignment.indexOf('=');
+          if (at > 0 && assignment.slice(0, at).trim().toLowerCase() === 'configuration' && assignment.slice(at + 1).trim()) options.configuration = assignment.slice(at + 1).trim();
+        }
       } else if (arg === '--project' || arg === '-p' || (arg === '--file' && forward)) options.project = value();
       else if (arg === '-c' || arg === '--configuration') options.configuration = value();
       else if (arg === '-o' || arg === '--output') options.output = value();
@@ -101,7 +104,10 @@ function readOptions(args: string[], forward: boolean): { ok: true; options: Opt
       else if (IGNORED_FLAGS.has(arg) || /^--tl(?::|$)/.test(arg) || /^-(?:v|-verbosity):/.test(arg)) continue;
       else if (arg.startsWith('-') && forward) options.forwarded.push(arg);
       else if (arg.startsWith('-')) return { ok: false, reason: `Unknown option '${arg}'.` };
-      else options.positional.push(arg);
+      else {
+        options.positional.push(arg);
+        if (forward) options.forwarded.push(arg);
+      }
     } catch (error) {
       return { ok: false, reason: (error as Error).message };
     }
@@ -115,17 +121,17 @@ function parseRun(args: string[]): DotnetCommandParse {
   const { options } = read;
   const configuration = options.configuration ?? 'Debug';
   // `dotnet run app.cs`: the first argument names a file-based program; any other positional goes to the program.
-  const [first, ...rest] = options.positional;
+  // `forwarded` holds the program's arguments in order: positionals, unknown options, everything after `--`.
+  const first = options.positional[0];
   if (!options.project && first && isSourceFile(first)) {
-    return { ok: true, invocation: { kind: 'run', file: first, configuration, noBuild: false, launchProfile: null, appArgs: [...rest, ...options.forwarded] } };
+    const appArgs = [...options.forwarded];
+    appArgs.splice(appArgs.indexOf(first), 1);
+    return { ok: true, invocation: { kind: 'run', file: first, configuration, noBuild: false, launchProfile: null, appArgs } };
   }
   if (options.project && isSourceFile(options.project)) {
-    return { ok: true, invocation: { kind: 'run', file: options.project, configuration, noBuild: false, launchProfile: null, appArgs: [...options.positional, ...options.forwarded] } };
+    return { ok: true, invocation: { kind: 'run', file: options.project, configuration, noBuild: false, launchProfile: null, appArgs: options.forwarded } };
   }
-  return {
-    ok: true,
-    invocation: { kind: 'run', project: options.project, configuration, noBuild: options.noBuild, launchProfile: options.launchProfile, appArgs: [...options.positional, ...options.forwarded] },
-  };
+  return { ok: true, invocation: { kind: 'run', project: options.project, configuration, noBuild: options.noBuild, launchProfile: options.launchProfile, appArgs: options.forwarded } };
 }
 
 function parseProjectCommand(kind: 'build' | 'clean' | 'restore', args: string[]): DotnetCommandParse {

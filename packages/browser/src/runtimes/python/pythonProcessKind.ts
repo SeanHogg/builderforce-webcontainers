@@ -36,10 +36,10 @@ export function createPythonProcessKind(options: PythonHostOptions = {}): Python
       return rejectedReports;
     },
     foreignCommands: PYTHON_COMMAND_PATTERN,
-    route(command, args, { fs, cwd, env }) {
+    route(command, args, context) {
       if (isPythonCommand(command)) return { kind: 'python', command, args };
       // A script run by path: its shebang may name Python (`#!/usr/bin/env python3`).
-      const script = shebangRoute(command, args, { fs, cwd, env }, isPythonCommand);
+      const script = shebangRoute(command, args, context, isPythonCommand);
       return script ? { kind: 'python', ...script } : { kind: 'node', command, args };
     },
     startOptions(kind) {

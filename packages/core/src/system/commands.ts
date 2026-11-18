@@ -5,7 +5,7 @@
  * shim runs its target directly) or, with a shell shebang, under `bfsh`.
  */
 import type { VirtualFileSystem } from '../vfs.js';
-import { dirname, extname, join, normalizePath } from '../paths.js';
+import { dirname, extname, join, normalizePath, resolveFrom } from '../paths.js';
 import { readBinLink } from '../installer/bins.js';
 import type { Program } from './types.js';
 
@@ -43,7 +43,7 @@ export function binDirectories(cwd: string): string[] {
 /** Find an executable file named `command` on PATH (then node_modules/.bin). */
 export function findExecutable(fs: VirtualFileSystem, command: string, cwd: string, env: Record<string, string | undefined>): string | undefined {
   if (command.includes('/')) {
-    const path = command.startsWith('/') ? normalizePath(command) : join(cwd, command);
+    const path = resolveFrom(cwd, command);
     return fs.isFile(path) ? path : undefined;
   }
   const dirs = [...(env.PATH ?? '').split(':').filter(Boolean), ...binDirectories(cwd)];

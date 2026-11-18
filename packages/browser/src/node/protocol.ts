@@ -27,8 +27,8 @@ import type { HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo, VfsDelt
 /** One file-system change, either way (the core journal's op). */
 export type FsOp = VfsOp;
 
-/** Which process Worker runs a command: the Node runtime's, the Python runtime's (Pyodide), or the PHP runtime's (php-wasm). */
-export type WorkerKind = 'node' | 'python' | 'php';
+/** Which process Worker runs a command: the Node runtime's, the Python runtime's (Pyodide), the PHP runtime's (php-wasm), the .NET runtime's (Mono), or the Rust runtime's (prebuilt wasm32-wasip1 on the WASI host). */
+export type WorkerKind = 'node' | 'python' | 'php' | 'dotnet' | 'rust';
 
 /** A host-provided Python extension: a module the Python Worker imports, whose export builds it (runtimes/python/pythonExtensions.ts). */
 export interface PythonExtensionRef {
@@ -76,6 +76,20 @@ export interface PhpStartOptions {
   composer?: ComposerSourceOptions;
 }
 
+/**
+ * The host's instructions to a .NET process Worker. Like Python's and PHP's,
+ * they travel in the start message, never the environment, so a program's env
+ * cannot redirect where the runtime bundle is loaded from.
+ */
+export interface DotnetStartOptions {
+  /**
+   * Where the .NET runtime bundle (scripts/build-dotnet-runtime.mjs) is served:
+   * absolute, CORS-enabled; in relay mode, reachable from the preview origin.
+   * There is no default — the bundle is the host's artifact.
+   */
+  bundleUrl?: string;
+}
+
 export interface StartMessage {
   type: 'start';
   pid: number;
@@ -106,6 +120,8 @@ export interface StartMessage {
   python?: PythonStartOptions;
   /** Set for a PHP process. */
   php?: PhpStartOptions;
+  /** Set for a .NET process. */
+  dotnet?: DotnetStartOptions;
   /**
    * Commands another Worker kind runs (a RegExp source over the command's base
    * name): a Node process spawns them through the page instead of resolving

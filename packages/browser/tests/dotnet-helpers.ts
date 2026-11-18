@@ -13,12 +13,17 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from '../src/node/processHost.js';
 import type { HostToWorker, WorkerKind } from '../src/node/protocol.js';
-import { DOTNET_KIND, createDotnetProcessKind, createDotnetWorkerProcess, loadDotnetRuntime, type DotnetHostOptions, type DotnetLoadOptions, type LoadedDotnet } from '../src/runtimes/dotnet/index.js';
+import { DOTNET_KIND, createDotnetProcessKind, createDotnetWorkerProcess, loadDotnetRuntime, type DotnetDial as Dial, type DotnetHostOptions, type DotnetLoadOptions, type LoadedDotnet } from '../src/runtimes/dotnet/index.js';
 import { fakeWorker } from './helpers.js';
 
-/** The bundle: `BFWC_DOTNET_BUNDLE`, else dotnet-host/out — undefined until it has been built. */
+/**
+ * The bundle: `BFWC_DOTNET_BUNDLE`, else dotnet-host/out — undefined until it has been built. A bundle named
+ * by `BFWC_DOTNET_BUNDLE` must exist: CI sets it, and its real-runtime tests must fail, never skip, without one.
+ */
 const configured = process.env.BFWC_DOTNET_BUNDLE ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'dotnet-host', 'out');
-export const DOTNET_BUNDLE_DIR = existsSync(join(configured, 'manifest.json')) ? configured : undefined;
+const built = existsSync(join(configured, 'manifest.json'));
+if (process.env.BFWC_DOTNET_BUNDLE && !built) throw new Error(`BFWC_DOTNET_BUNDLE is ${process.env.BFWC_DOTNET_BUNDLE}, but it has no manifest.json: build the bundle (scripts/build-dotnet-runtime.mjs) or unset it.`);
+export const DOTNET_BUNDLE_DIR = built ? configured : undefined;
 export const DOTNET_BUNDLE_URL = DOTNET_BUNDLE_DIR ? pathToFileURL(`${DOTNET_BUNDLE_DIR}/`).href : 'https://bundle.test/dotnet/';
 
 /** `fetch` for file: URLs (the bundle on disk), as a static server would answer. */
@@ -32,8 +37,8 @@ export const fileFetch: typeof fetch = async (input) => {
 /** The real runtime from the bundle on disk. */
 export const loadBundledDotnet = (options: DotnetLoadOptions) => loadDotnetRuntime({ ...options, fetch: fileFetch });
 
-/** A .NET process Worker running in this thread, with structured-clone messaging like the real thing. */
-export function fakeDotnetWorker(loadDotnet: (options: DotnetLoadOptions) => Promise<LoadedDotnet>): WorkerLike {
+/** A .NET process Worker running in this thread, with structured-clone messaging like the real thing. `dial` replaces the process protocol's dialled connections. */
+export function fakeDotnetWorker(loadDotnet: (options: DotnetLoadOptions) => Promise<LoadedDotnet>, dial?: Dial): WorkerLike {
   let alive = true;
   const worker: WorkerLike = {
     onmessage: null,
@@ -52,21 +57,22 @@ export function fakeDotnetWorker(loadDotnet: (options: DotnetLoadOptions) => Pro
       queueMicrotask(() => alive && worker.onmessage?.({ data: copy }));
     },
     loadDotnet,
+    dial,
     fetch: fileFetch,
   });
   return worker;
 }
 
 /** In-thread Workers of each kind: .NET processes on `loadDotnet`, the rest on the Node runtime. */
-export const dotnetWorkers = (loadDotnet: (options: DotnetLoadOptions) => Promise<LoadedDotnet>) => (kind: WorkerKind) => (kind === DOTNET_KIND ? fakeDotnetWorker(loadDotnet) : fakeWorker());
+export const dotnetWorkers = (loadDotnet: (options: DotnetLoadOptions) => Promise<LoadedDotnet>, dial?: Dial) => (kind: WorkerKind) => (kind === DOTNET_KIND ? fakeDotnetWorker(loadDotnet, dial) : fakeWorker());
 
 /** A process host whose `dotnet` commands run in .NET Workers. */
-export function dotnetHost(files: Record<string, string>, loadDotnet: (options: DotnetLoadOptions) => Promise<LoadedDotnet>, options: DotnetHostOptions = { bundleUrl: DOTNET_BUNDLE_URL }) {
+export function dotnetHost(files: Record<string, string>, loadDotnet: (options: DotnetLoadOptions) => Promise<LoadedDotnet>, options: DotnetHostOptions = { bundleUrl: DOTNET_BUNDLE_URL }, dial?: Dial) {
   const fs = new VirtualFileSystem();
   fs.writeTree(files);
   const processes = new ProcessHost({
     fs,
-    createWorker: dotnetWorkers(loadDotnet),
+    createWorker: dotnetWorkers(loadDotnet, dial),
     previewOrigin: 'https://app.test',
     previewBase: '/__bfwc/p1/',
     killGraceMs: 500,

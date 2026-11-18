@@ -38,6 +38,8 @@ import { createPortResponder, createProcessHost, databaseWorkerFactory, trackWor
 import type { WorkerLike } from './node/processHost.js';
 import { createPythonProcessKind, type PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
 import { createPhpProcessKind, type PhpHostOptions, type PhpPlatformRecord } from './runtimes/php/phpProcessKind.js';
+import { createDotnetProcessKind, type DotnetHostOptions } from './runtimes/dotnet/dotnetProcessKind.js';
+import { createRustProcessKind } from './runtimes/rust/rustProcessKind.js';
 import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from './previewMessages.js';
 import { listenToPreviewBridge } from './previewBridge.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
@@ -108,6 +110,12 @@ export interface CommonRuntimeOptions {
   python?: PythonHostOptions;
   /** PHP processes (`php`, `php -S`, `composer`): where php-wasm is served, the PHP version, Composer's sources. */
   php?: PhpHostOptions;
+  /**
+   * .NET processes (`dotnet run`, `dotnet build`, `./app.cs`): where the runtime
+   * bundle (scripts/build-dotnet-runtime.mjs) is served. No default — without
+   * `bundleUrl`, `dotnet` commands decline with the reason.
+   */
+  dotnet?: DotnetHostOptions;
 }
 
 export interface RuntimeBuildOptions {
@@ -266,8 +274,10 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const previewUrl = new URL(base, transport.origin).href;
   // In relay mode processes run on the preview origin (the relay starts them), never the host's.
   const node = { ...options.node, createWorker: options.node?.createWorker ?? transport.createWorker?.bind(transport) };
-  // Python commands run in Python process Workers (Pyodide), PHP commands in PHP ones (php-wasm), beside the Node ones.
-  const kinds = createPhpProcessKind(options.php, createPythonProcessKind(options.python));
+  // Python commands run in Python process Workers (Pyodide), PHP commands in PHP ones (php-wasm), .NET commands in .NET ones (Mono), beside the Node ones.
+  const php = createPhpProcessKind(options.php, createPythonProcessKind(options.python));
+  // Prebuilt wasm32-wasip1 modules (and the declined cargo/rustc) run in Rust process Workers.
+  const kinds = createRustProcessKind(createDotnetProcessKind(options.dotnet, php));
   const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, previewUrl, options: node, kinds });
   // Databases never run where processes do in relay mode: their Workers start on this (host) origin.
   const databaseWorkers = trackWorkers(databaseWorkerFactory(options.node));
@@ -310,7 +320,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     fs,
     root,
     server,
-    phpPlatform: kinds.platform,
+    phpPlatform: php.platform,
     writeTree: (files, at) => fs.writeTree(files, at),
     // With the project at `/`, the hidden badge marker's directory is inside it: never ship it in a download.
     exportZip: (zipOptions) =>

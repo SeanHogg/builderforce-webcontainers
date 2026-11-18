@@ -33,7 +33,7 @@ export { FrameDecoder, Opcode, encodeFrame, encodeClosePayload, decodeClosePaylo
 export type { WebSocketFrame } from './webSocketFrames.js';
 export { CookieJar, PortCookieJars, parseSetCookie, defaultCookiePath, cookiePathMatches } from './cookieJar.js';
 export type { StoredCookie } from './cookieJar.js';
-export type { PortEvent } from './ports.js';
+export type { PortEvent, PortAccessPolicy, PortDecisionEvent, PortRegistryOptions } from './ports.js';
 export { WORKSPACE_APPLICATION, WORKSPACE_SERVICE, PLATFORM_APPLICATION, PLATFORM_SERVICE, WORKSPACE_CONTEXT, PLATFORM_CONTEXT, sameService, ALLOW, deny } from './securityContext.js';
 export type { SecurityContext, ShieldReasonCode, ShieldDecision } from './securityContext.js';
 export { runProgram, runArguments, toRuntimeProcess, allocatePid } from './process.js';
@@ -56,3 +56,5 @@ export type { ShellOptions, ShellIO, JobInput, ShellCommand } from '../shell/exe
 export { parse as parseShell, ShellSyntaxError } from '../shell/parse.js';
 export { LineEditor } from '../shell/lineEditor.js';
 export { matchDevServer } from '../shell/devHandoff.js';
+// The one path-containment check (rooted file systems, Security Shield file-system views). Belongs in core/src/index.ts; exported here until that file is free.
+export { isInsideDir, pathBelow } from '../pathContainment.js';

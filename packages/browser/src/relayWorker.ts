@@ -67,9 +67,22 @@ export const RELAY_PYTHON_WORKER = 'python-worker.js';
 /** The PHP process worker's file name beside `relay.html` on the preview origin. */
 export const RELAY_PHP_WORKER = 'php-worker.js';
 
+/** The .NET process worker's file name beside `relay.html` on the preview origin. */
+export const RELAY_DOTNET_WORKER = 'dotnet-worker.js';
+
+/** The Rust process worker's file name beside `relay.html` on the preview origin. */
+export const RELAY_RUST_WORKER = 'rust-worker.js';
+
+/** The script the relay starts for each Worker kind. */
+const RELAY_WORKER_SCRIPTS: Readonly<Record<WorkerKind, { file: string; name: string }>> = {
+  node: { file: RELAY_PROCESS_WORKER, name: 'bfwc-process' },
+  python: { file: RELAY_PYTHON_WORKER, name: 'bfwc-python' },
+  php: { file: RELAY_PHP_WORKER, name: 'bfwc-php' },
+  dotnet: { file: RELAY_DOTNET_WORKER, name: 'bfwc-dotnet' },
+  rust: { file: RELAY_RUST_WORKER, name: 'bfwc-rust' },
+};
+
 /** The script the relay starts for a Worker kind (anything unknown is a Node process Worker). */
 export function relayWorkerScript(kind: unknown): { file: string; name: string } {
-  if (kind === 'python') return { file: RELAY_PYTHON_WORKER, name: 'bfwc-python' };
-  if (kind === 'php') return { file: RELAY_PHP_WORKER, name: 'bfwc-php' };
-  return { file: RELAY_PROCESS_WORKER, name: 'bfwc-process' };
+  return typeof kind === 'string' && Object.hasOwn(RELAY_WORKER_SCRIPTS, kind) ? RELAY_WORKER_SCRIPTS[kind as WorkerKind] : RELAY_WORKER_SCRIPTS.node;
 }

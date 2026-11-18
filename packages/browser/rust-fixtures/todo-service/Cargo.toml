@@ -1,0 +1,18 @@
+[package]
+name = "todo-service"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A reactor (`_initialize` + exports), not a command: the host calls into it per request.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bfwc-wasi = { path = "../bfwc-wasi" }
+axum = { version = "0.8", default-features = false, features = ["json", "matched-path"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["sync"] }
+# No `runtime` feature: it brings tokio's networking (socket2), which wasm32-wasip1 lacks. connect_raw takes our stream.
+tokio-postgres = { version = "0.7", default-features = false }

@@ -17,7 +17,8 @@ const host = window.parent;
 async function start(): Promise<void> {
   const container = navigator.serviceWorker;
   if (!container) throw new Error('Service workers are unavailable on the preview origin.');
-  const registration = await container.register(new URL('./sw.js', location.href).href, { scope: './' });
+  // `mode=relay` tells the worker to accept ATTACH only from this exact relay page (not any same-origin page).
+  const registration = await container.register(new URL('./sw.js?mode=relay', location.href).href, { scope: './' });
   await waitForActive(registration);
 
   container.addEventListener('message', (event) => {
@@ -32,7 +33,7 @@ async function start(): Promise<void> {
     } else if (data?.type === RELAY_UPDATE && typeof data.base === 'string') {
       broadcastUpdate(data.base, data.update ?? { type: 'reload' });
     } else if (data?.type === RELAY_SPAWN && event.ports[0]) {
-      // Process code runs HERE, on the preview origin, never on the host's — Node's, Python's or PHP's.
+      // Process code runs HERE, on the preview origin, never on the host's — Node's, Python's, PHP's or .NET's.
       const script = relayWorkerScript((data as { worker?: unknown }).worker);
       bridgeWorker(event.ports[0], new Worker(new URL(`./${script.file}`, location.href), { name: script.name }));
     }

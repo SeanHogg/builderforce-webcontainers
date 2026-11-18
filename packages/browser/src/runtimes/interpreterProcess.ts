@@ -1,6 +1,6 @@
 /**
  * The worker side of one interpreted-language process — what the Python
- * (Pyodide) and PHP (php-wasm) process Workers share. It speaks the process
+ * (Pyodide), PHP (php-wasm) and .NET (Mono) process Workers share. It speaks the process
  * Workers' protocol (node/protocol.ts), so the page's process host drives it
  * like any other process:
  *
@@ -13,7 +13,10 @@
  *   interpreter boots and again after (another process may have taken it
  *   meanwhile) — both fail like the language's own server (EADDRINUSE) — then
  *   announced with `listen`, and its requests answered through
- *   node/servedPorts.ts; a `listen-failed` ends the process;
+ *   node/servedPorts.ts; a `listen-failed` ends the process. A program that
+ *   claims ports itself while it runs (.NET's ASP.NET Core host) is a
+ *   {@link DynamicPorts} outcome instead: the same routing, unlisten and
+ *   listen-failed handling over whatever ports it holds;
  * - `kill` closes the server and exits with the signal's code; WebSocket and
  *   raw-TCP connections to the process are refused.
  *
@@ -31,7 +34,26 @@ export interface InterpreterServer {
   close(): Promise<void>;
 }
 
-export type InterpreterOutcome = { kind: 'exited'; code: number } | { kind: 'serving'; server: InterpreterServer; banner: string };
+/**
+ * A program that claims and releases ports itself while it runs (an ASP.NET
+ * Core host: any number of URLs, bound when the host starts). It announces its
+ * own `listen`/`unlisten` (checking `takenPorts`); the skeleton routes requests
+ * to `handlerFor`, unlistens what is still `listening` at the exit, and ends
+ * the process when the program's `done` settles.
+ */
+export interface DynamicPorts {
+  readonly listening: ReadonlySet<number>;
+  handlerFor(port: number): HttpHandler | undefined;
+  /** Ask the program to stop (a kill): best effort, the exit follows at once. */
+  stop(): void;
+  /** Fail what is still in flight (the process is ending). */
+  closeAll(): void;
+}
+
+export type InterpreterOutcome =
+  | { kind: 'exited'; code: number }
+  | { kind: 'serving'; server: InterpreterServer; banner: string }
+  | { kind: 'running'; ports: DynamicPorts; done: Promise<number> };
 
 /** The interpreter's project once it holds it: page ops go here, and its own pending writes are flushed before an exit. */
 export interface MountedProject {
@@ -47,6 +69,8 @@ export interface InterpreterContext {
   exit(code: number): void;
   /** The interpreter took over the project: `staging`'s files are copied in; later ops go to `project`. */
   mounted(project: MountedProject): void;
+  /** Ports taken anywhere in the runtime, as this process knows them (a {@link DynamicPorts} program claims its own here). */
+  readonly takenPorts: Set<number>;
 }
 
 /** What the command line asks for: refused (with the language's message and exit code), or a run — serving `port` when known before booting. */
@@ -67,6 +91,7 @@ export function createInterpreterProcess(post: (message: WorkerToHost) => void, 
   let project: MountedProject | undefined;
   let server: InterpreterServer | undefined;
   let serverPort: number | undefined;
+  let dynamic: DynamicPorts | undefined;
   let exited = false;
 
   const exit = (code: number) => {
@@ -74,6 +99,8 @@ export function createInterpreterProcess(post: (message: WorkerToHost) => void, 
     project?.flush(); // every write reaches the page before the exit does
     exited = true;
     if (serverPort !== undefined) post({ type: 'unlisten', port: serverPort });
+    for (const port of dynamic?.listening ?? []) post({ type: 'unlisten', port });
+    dynamic?.closeAll();
     post({ type: 'exit', code });
   };
   const context: InterpreterContext = {
@@ -90,13 +117,19 @@ export function createInterpreterProcess(post: (message: WorkerToHost) => void, 
       staging = undefined;
       project = mounted;
     },
+    get takenPorts() {
+      return served.taken;
+    },
   };
-  const runtime = create(context);
-
   const stop = async (signal: string, code = signalExitCode(signal)) => {
     const running = server;
     server = undefined;
     served.cancelAll();
+    try {
+      dynamic?.stop();
+    } catch {
+      // Stopping is best effort: the Worker is terminated after the exit.
+    }
     try {
       await running?.close();
     } finally {
@@ -105,14 +138,16 @@ export function createInterpreterProcess(post: (message: WorkerToHost) => void, 
   };
   const served = createServedPorts({
     post,
-    handlerFor: (port) => (server && port === serverPort ? server.handle : undefined),
+    handlerFor: (port) => (server && port === serverPort ? server.handle : dynamic?.handlerFor(port)),
     onListenFailed(port) {
-      if (port !== serverPort) return;
+      if (port === serverPort) serverPort = undefined; // never ours: nothing to unlisten
+      else if (!dynamic?.listening.has(port)) return;
       context.io.stderr(runtime.addressInUse(port));
-      serverPort = undefined; // never ours: nothing to unlisten
       void stop('SIGTERM', 1);
     },
   });
+  // After `served`: a runtime may read `takenPorts` while it is created.
+  const runtime = create(context);
   const applyIncoming = (ops: readonly VfsOp[]) => {
     if (staging) applyOps(staging, ops);
     else project?.apply(ops);
@@ -134,6 +169,10 @@ export function createInterpreterProcess(post: (message: WorkerToHost) => void, 
     }
     const outcome = await plan.run(staging!);
     if (outcome.kind === 'exited') return exit(outcome.code);
+    if (outcome.kind === 'running') {
+      dynamic = outcome.ports;
+      return exit(await outcome.done);
+    }
     const { port } = outcome.server;
     // Another process may have taken the port while this one booted (the page tells every process).
     if (exited || served.taken.has(port)) {

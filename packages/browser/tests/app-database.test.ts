@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { createNodeProvider, createPgliteProvider, startApplicationRuntime, type ApplicationSpec, type DatabaseServiceHost, type NodeServiceHost } from '../src/app.js';
 import type { PreviewRuntime } from '../src/host.js';
 import type { ProcessHost } from '../src/node/processHost.js';
+import { WORKSPACE_CONTEXT } from '@seanhogg/builderforce-webcontainers-core';
 import { appHost, collect, fakeLocks, installedPackage } from './databaseHelpers.js';
 
 // Compile-time: a preview runtime IS a database service host (`createPgliteProvider(runtime)`).
@@ -116,13 +117,16 @@ describe('application runtime with a pglite database', () => {
     const provider = createPgliteProvider(databases);
     const handle = await provider.start(
       { id: 'db', type: 'database', runtime: 'pglite', port: 5460, database: { engine: 'postgres', provider: 'pglite', persistent: false } },
-      { env: { BUILDERFORCE_PROJECT_ID: 'kill' }, signal: new AbortController().signal },
+      { env: { BUILDERFORCE_PROJECT_ID: 'kill' }, signal: new AbortController().signal, security: WORKSPACE_CONTEXT },
     );
     void handle.output.cancel();
     await handle.ready();
+    // The holder's generated login (W10 control 5: the gateway authenticates every connection).
+    const dbSpec = { id: 'db', type: 'database', runtime: 'pglite', port: 5460, database: { engine: 'postgres', provider: 'pglite', persistent: false } } as const;
+    const login = provider.databaseCredentials!(dbSpec, { id: 'holder', type: 'application', runtime: 'node', dependsOn: ['db'] })!;
     fs.writeFile('/hold.js', `
       const { Client } = require('pg');
-      const c = new Client('postgres://postgres@localhost:5460/postgres');
+      const c = new Client('postgres://${login.user}:${login.password}@localhost:5460/postgres');
       c.on('error', () => console.log('database gone'));
       c.connect().then(() => c.query('BEGIN')).then(() => console.log('holding'));
     `);

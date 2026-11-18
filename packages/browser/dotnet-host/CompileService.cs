@@ -31,7 +31,8 @@ internal sealed record BuildPlan(
     bool Optimize,
     bool WarningsAsErrors,
     string[] NoWarn,
-    bool Quiet);
+    bool Quiet,
+    bool FileBased);
 
 internal static class CompileService
 {
@@ -74,11 +75,16 @@ internal static class CompileService
 
     static CSharpCompilation Create(BuildPlan plan)
     {
+        // The Worker always sends one: the project's LangVersion, else the SDK's default for its target framework.
         var language = LanguageVersion.Latest;
         if (plan.LangVersion is { Length: > 0 } requested && !LanguageVersionFacts.TryParse(requested, out language))
             throw new ArgumentException($"Invalid LangVersion '{requested}'.");
         var parse = new CSharpParseOptions(language, preprocessorSymbols: plan.Defines);
-        var trees = plan.Sources.Select(path => CSharpSyntaxTree.ParseText(SourceText.From(WithoutRunDirectives(File.ReadAllText(path)), Encoding.UTF8), parse, path)).ToList();
+        var trees = plan.Sources.Select(path =>
+        {
+            var text = File.ReadAllText(path);
+            return CSharpSyntaxTree.ParseText(SourceText.From(plan.FileBased ? WithoutRunDirectives(text) : text, Encoding.UTF8), parse, path);
+        }).ToList();
         if (plan.GlobalUsings.Length > 0) trees.Add(CSharpSyntaxTree.ParseText(plan.GlobalUsings, parse, Path.Combine(plan.ProjectDir, "obj", $"{plan.AssemblyName}.GlobalUsings.g.cs")));
 
         var kind = plan.OutputKind == "library" ? OutputKind.DynamicallyLinkedLibrary : OutputKind.ConsoleApplication;
@@ -96,15 +102,24 @@ internal static class CompileService
         return CSharpCompilation.Create(plan.AssemblyName, trees, plan.References.Select(ReferenceOf), options);
     }
 
-    /// <summary>A file-based program's `#:` directives and `#!` line, blanked so line numbers hold (they are read by the Worker).</summary>
+    /// <summary>
+    /// A file-based program's leading `#!` line and `#:` directives, blanked so line numbers hold (the Worker
+    /// reads them: runtimes/dotnet/dotnetProjectFile.ts `runDirectives`, the same rule). Directives count only at
+    /// the top — among blank and `//` comment lines — and the scan stops at the first other line, so a `#:` further
+    /// down is left for the compiler to report.
+    /// </summary>
     static string WithoutRunDirectives(string text)
     {
         if (!text.Contains("#:") && !text.StartsWith("#!", StringComparison.Ordinal)) return text;
         var lines = text.Split('\n');
         for (var i = 0; i < lines.Length; i++)
         {
-            var trimmed = lines[i].TrimStart();
-            if (trimmed.StartsWith("#:", StringComparison.Ordinal) || (i == 0 && trimmed.StartsWith("#!", StringComparison.Ordinal))) lines[i] = lines[i].EndsWith('\r') ? "\r" : "";
+            var trimmed = lines[i].TrimEnd('\r').Trim();
+            var blank = lines[i].EndsWith('\r') ? "\r" : "";
+            if (i == 0 && trimmed.StartsWith("#!", StringComparison.Ordinal)) lines[i] = blank;
+            else if (trimmed.Length == 0 || trimmed.StartsWith("//", StringComparison.Ordinal)) continue;
+            else if (trimmed.StartsWith("#:", StringComparison.Ordinal)) lines[i] = blank;
+            else break;
         }
         return string.Join('\n', lines);
     }

@@ -8,7 +8,7 @@ export type { VfsSnapshot, VfsDelta, SnapshotOptions } from './vfs/snapshots.js'
 export { rootedFileSystem, projectToBase, baseToProject } from './rootedFs.js';
 export { exportZip, importZip, ZipLimitError, DEFAULT_ZIP_IMPORT_LIMITS } from './archive.js';
 export type { ZipExportOptions, ZipImportLimits } from './archive.js';
-export { normalizePath, dirname, basename, join, extname } from './paths.js';
+export { normalizePath, dirname, basename, join, extname, resolveFrom } from './paths.js';
 export { DevServer } from './devServer.js';
 export type { DevServerOptions, ServedFile } from './devServer.js';
 export { detectProject } from './detectProject.js';
@@ -77,5 +77,10 @@ export { previewSocketScript, previewCookieScript, bridgeInsertionPoint, SOCKET_
 export { mimeFor } from './mime.js';
 export { attributionScript, attributionFromMarker, injectAttribution, ATTRIBUTION_URL, ATTRIBUTION_LABEL, ATTRIBUTION_OFF_MARKER } from './attribution.js';
 export type { AttributionOptions, AttributionSetting } from './attribution.js';
+// The preview1 WASI host over a VirtualFileSystem (node:wasi's, and the Rust runtime's in the browser package).
+export { WasiExit } from './node/wasi/index.js';
+export type { WasiHost } from './node/wasi/index.js';
+export { createVfsWasi } from './node/wasi/vfsWasi.js';
+export type { VfsWasiOptions } from './node/wasi/vfsWasi.js';
 export * from './installer/index.js';
 export * from './system/index.js';

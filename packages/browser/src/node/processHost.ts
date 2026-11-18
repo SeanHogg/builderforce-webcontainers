@@ -17,16 +17,19 @@
  * Responses from a worker's servers stream through here chunk by chunk (see
  * responseWire.ts); connections — upgraded (WebSockets) and raw TCP, to a
  * worker's servers or dialled by it — are relayed as raw bytes (connectionRelay.ts).
+ * Each process's identity is assigned here at spawn (processIdentity.ts): its ports,
+ * loopbacks and dials carry it, its application's quota admits it, and an application
+ * process sees only its service's view of the file system (fsScope.ts).
  */
 import {
   DEFAULT_ENV,
   PortRegistry,
   ServerEvents,
+  WORKSPACE_APPLICATION,
   allocatePid,
   createIpcEndpoint,
   runArguments,
   signalExitCode,
-  textResponse,
   toRuntimeProcess,
   type ByteChannel,
   type ChildHandle,
@@ -35,19 +38,23 @@ import {
   type HttpStreamResponse,
   type ProcessOptions,
   type RuntimeProcess,
-  type StdioChunk,
+  type SecurityContext,
+  type ShieldDecision,
   type VfsSnapshots,
   type VirtualFileSystem,
 } from '@seanhogg/builderforce-webcontainers-core';
 import type { HostToWorker, WorkerKind, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
 import { NODE_ONLY, type ProcessKindPolicy } from './processKinds.js';
-import { ResponseReceiver, sendResponse } from './responseWire.js';
+import { ResponseReceiver } from './responseWire.js';
 import { ChildRelay, isChildMessage } from './childRelay.js';
 import { ConnectionRelay, isConnectionMessage } from './connectionRelay.js';
 import { WorkerSupply } from './workerSupply.js';
-import { notListening } from './servedPorts.js';
 import { FsSync } from './fsSync.js';
+import { ProcessIdentities, type ProcessShieldOptions, type SpawnOptions, type SpawnOrigin } from './processIdentity.js';
+import { ProcessPorts } from './processPorts.js';
+import { ViewSupplies } from './viewSupply.js';
+import type { Proc } from './procRecord.js';
 
 /** The part of `Worker` the host uses — a real Worker, or an in-thread fake in tests. */
 export interface WorkerLike {
@@ -78,6 +85,8 @@ export interface ProcessHostOptions {
   killGraceMs?: number;
   /** After a spawn, keep one spare Worker primed with the file system, so the next spawn sends only the changes since. Default true. */
   warmWorker?: boolean;
+  /** Process quotas, file-system views and the decisions they report (Security Shield). */
+  security?: ProcessShieldOptions;
 }
 
 /** A running process, as `listProcesses()` reports it. */
@@ -92,48 +101,33 @@ export interface ProcessInfo {
   ports: number[];
 }
 
-interface Proc {
-  pid: number;
-  /** The Worker kind running it: what it may send is judged by this, never by its own claims. */
-  kind: WorkerKind;
-  info: Omit<ProcessInfo, 'ports'>;
-  worker: WorkerLike;
-  stdout: Set<(chunk: StdioChunk) => void>;
-  stderr: Set<(chunk: StdioChunk) => void>;
-  exited: boolean;
-  resolveExit(code: number): void;
-  registrations: Map<number, { close(): void }>;
-  /** The children its Worker spawned, relayed back to it. */
-  children: ChildRelay;
-  /** Its message channel to whoever spawned it with `ipc`: the parent's side. */
-  ipc?: ReturnType<typeof createIpcEndpoint>;
-  /** Responses its servers are streaming back to requests forwarded here. */
-  responses: ResponseReceiver;
-  /** Its loopback requests being answered, by the worker's request id: cancel functions. */
-  loopbacks: Map<number, () => void>;
-  /** Connections to its servers (upgraded or raw TCP) and the ones it dialled. */
-  connections: ConnectionRelay;
-}
-
-const EXITED = 'The server process exited.';
-
 export class ProcessHost {
   readonly ports = new PortRegistry();
   /** Servers listening, ports opening and closing. */
   readonly servers = new ServerEvents();
   private readonly procs = new Set<Proc>();
-  private nextReq = 1;
   private readonly stopPorts: () => void;
+  /** Each process's servers and loopback requests, as itself. */
+  private readonly served: ProcessPorts;
+  /** Application processes' Workers and snapshots, per file-system view. */
+  private readonly views: ViewSupplies;
   /** The processes' file systems kept in step with the page's, and the snapshots new ones start from. */
   private readonly fsSync: FsSync<Proc>;
   /** New processes' Workers: a primed spare when there is one, else a new Worker and the snapshot. */
   readonly workers: WorkerSupply;
   private readonly kinds: ProcessKindPolicy;
+  /** Who each process is, its application's quota and its view of the file system. */
+  private readonly identities: ProcessIdentities;
 
   constructor(private readonly options: ProcessHostOptions) {
     this.kinds = options.kinds ?? NODE_ONLY;
-    this.fsSync = new FsSync(options.fs, (proc, ops) => this.post(proc, { type: 'fs', ops }));
-    this.workers = new WorkerSupply((kind) => options.createWorker(kind), this.fsSync.snapshots, options.warmWorker !== false);
+    this.identities = new ProcessIdentities(options.cwd ?? '/', options.security);
+    const onRefused = (context: SecurityContext | undefined, _op: unknown, decision: ShieldDecision) => context && this.identities.report(context, decision);
+    this.fsSync = new FsSync(options.fs, { send: (proc, ops) => this.post(proc, { type: 'fs', ops }), onRefused });
+    const createWorker = (kind: WorkerKind) => options.createWorker(kind);
+    this.workers = new WorkerSupply(createWorker, this.fsSync.snapshots, options.warmWorker !== false);
+    this.views = new ViewSupplies(options.fs, createWorker, options.warmWorker !== false);
+    this.served = new ProcessPorts(this.ports, (proc, message) => this.post(proc, message), (pid) => this.identityOf(pid));
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
       for (const proc of this.procs) this.post(proc, { type: 'ports', open: type === 'open' ? [port] : [], closed: type === 'close' ? [port] : [] });
@@ -151,19 +145,38 @@ export class ProcessHost {
   }
 
   /** Start a command in its own Web Worker, as a stream-based {@link RuntimeProcess}. */
-  run(command: string, args?: string[], options?: ProcessOptions): RuntimeProcess;
-  run(command: string, options?: ProcessOptions): RuntimeProcess;
-  run(command: string, argsOrOptions?: string[] | ProcessOptions, maybeOptions?: ProcessOptions): RuntimeProcess {
-    const [args, options] = runArguments(argsOrOptions, maybeOptions);
+  run(command: string, args?: string[], options?: SpawnOptions): RuntimeProcess;
+  run(command: string, options?: SpawnOptions): RuntimeProcess;
+  run(command: string, argsOrOptions?: string[] | SpawnOptions, maybeOptions?: SpawnOptions): RuntimeProcess {
+    const [args, options] = runArguments(argsOrOptions, maybeOptions) as [string[], SpawnOptions];
     return toRuntimeProcess(this.spawnChild(command, args, options), !!options.terminal);
   }
 
-  spawnChild(requested: string, requestedArgs: string[] = [], options: ProcessOptions = {}): ChildHandle {
-    const pid = allocatePid();
+  /** A page-side start: the process is `options.identity` (default `workspace`). Throws EAGAIN when its application is over quota. */
+  spawnChild(requested: string, requestedArgs: string[] = [], options: SpawnOptions = {}): ChildHandle {
+    return this.spawn({ identity: options.identity }, requested, requestedArgs, options);
+  }
+
+  /** Who process `pid` is, as the page assigned it; undefined once it exited. */
+  identityOf(pid: number): SecurityContext | undefined {
+    return this.identities.identityOf(pid);
+  }
+
+  /** End every process of an application (of one of its services, given `serviceId`) now — `detached` ones included. */
+  killApplication(applicationId: string, serviceId?: string): void {
+    for (const proc of [...this.procs]) if (this.identities.attributedTo(proc.pid, applicationId, serviceId)) this.terminate(proc, signalExitCode('SIGKILL'));
+    // The whole application ended: its views' mirrors, snapshots and warm spares go too (rebuilt if it spawns again).
+    if (serviceId === undefined) this.views.release(applicationId);
+  }
+
+  private spawn(origin: SpawnOrigin, requested: string, requestedArgs: string[], options: ProcessOptions): ChildHandle {
     const cwd = options.cwd ?? this.options.cwd ?? '/';
+    const admitted = this.identities.admit(origin, cwd);
+    const pid = allocatePid();
     const env = { ...DEFAULT_ENV, ...this.options.env, ...options.env };
     const { kind, command, args } = this.kinds.route(requested, requestedArgs, { fs: this.options.fs, cwd, env });
-    const { worker, snapshot } = this.workers.take(kind);
+    // An application process starts from its own view's supply: nothing outside the view is in its pack or spare.
+    const { worker, snapshot } = (admitted.view ? this.views.supplyFor(admitted.view) : this.workers).take(kind);
     let resolveExit!: (code: number) => void;
     const exit = new Promise<number>((resolve) => (resolveExit = resolve));
     const proc: Proc = {
@@ -183,15 +196,16 @@ export class ProcessHost {
       registrations: new Map(),
       children: new ChildRelay((childCommand, childArgs, childOptions) => {
         this.fsSync.flush(); // the child must see every write made so far
-        return this.spawnChild(childCommand, childArgs, childOptions);
+        return this.spawn({ parent: pid }, childCommand, childArgs, childOptions); // its parent's identity, whatever the Worker asked
       }, (message) => this.post(proc, message)),
       responses: new ResponseReceiver(),
       loopbacks: new Map(),
-      connections: new ConnectionRelay(this.ports, (message) => this.post(proc, message)),
+      connections: new ConnectionRelay(this.ports, (message) => this.post(proc, message), { pid, identityOf: (of) => this.identityOf(of) }),
     };
     if (options.ipc) proc.ipc = createIpcEndpoint((data) => this.post(proc, { type: 'ipc', data }), () => this.post(proc, { type: 'ipc-disconnect' }));
+    this.identities.register(pid, admitted);
     this.procs.add(proc);
-    this.fsSync.add(proc);
+    this.fsSync.add(proc, { view: admitted.view, context: this.identityOf(pid) });
     worker.onmessage = (event) => this.onWorkerMessage(proc, event.data as WorkerToHost);
     worker.onerror = (event) => {
       for (const l of proc.stderr) l(`Process worker failed: ${event?.message ?? 'unknown error'}\n`);
@@ -213,7 +227,8 @@ export class ProcessHost {
       previewBase: this.options.previewBase,
       previewUrl: this.options.previewUrl,
       registry: this.options.registry,
-      packageCache: this.options.packageCache !== false,
+      // The shared tarball cache is off for application processes: one application must not seed another's installs.
+      packageCache: this.options.packageCache !== false && !admitted.view,
       foreignCommands: this.kinds.foreignCommands,
       ...this.kinds.startOptions(kind),
     });
@@ -236,25 +251,26 @@ export class ProcessHost {
     return [...this.procs].map((proc) => ({ ...proc.info, args: [...proc.info.args], ports: [...proc.registrations.keys()] }));
   }
 
-  /** Dispatch an HTTP request to the server on `port` and wait for the whole response. */
-  request(port: number, request: HttpRequestData): Promise<HttpResponseData | undefined> {
-    return this.ports.requestBuffered(port, request);
+  /** Dispatch an HTTP request to the server on `port` and wait for the whole response. `caller`: who asks (the port registry decides). */
+  request(port: number, request: HttpRequestData, caller?: SecurityContext): Promise<HttpResponseData | undefined> {
+    return this.ports.requestBuffered(port, request, caller);
   }
 
   /** Dispatch an HTTP request to the server on `port` (the preview's `/__port/<port>/` path); resolves at the head, the body streaming. */
-  requestStream(port: number, request: HttpRequestData): Promise<HttpStreamResponse | undefined> {
-    return this.ports.request(port, request);
+  requestStream(port: number, request: HttpRequestData, caller?: SecurityContext): Promise<HttpStreamResponse | undefined> {
+    return this.ports.request(port, request, caller);
   }
 
   /** Open an upgraded connection (a WebSocket) to the server on `port`; returns the client end. */
-  upgrade(port: number, request: HttpRequestData): ByteChannel | undefined {
-    return this.ports.upgrade(port, request);
+  upgrade(port: number, request: HttpRequestData, caller?: SecurityContext): ByteChannel | undefined {
+    return this.ports.upgrade(port, request, caller);
   }
 
   dispose(): void {
     for (const proc of [...this.procs]) this.terminate(proc, signalExitCode('SIGKILL'));
     this.stopPorts();
     this.workers.dispose();
+    this.views.dispose();
     this.fsSync.dispose();
   }
 
@@ -277,16 +293,13 @@ export class ProcessHost {
   }
 
   private cleanup(proc: Proc): void {
-    for (const registration of proc.registrations.values()) registration.close();
-    proc.registrations.clear();
-    proc.responses.abort(() => textResponse(502, EXITED), EXITED);
-    for (const cancel of [...proc.loopbacks.values()]) cancel();
-    proc.loopbacks.clear();
+    this.served.close(proc);
     proc.connections.closeAll();
     proc.ipc?.closed();
     // Exited on its own: its children get SIGTERM (and the grace period), as a real parent's would.
     proc.children.killAll('SIGTERM');
     this.procs.delete(proc);
+    this.identities.release(proc.pid);
     this.fsSync.remove(proc);
     queueMicrotask(() => proc.worker.terminate());
   }
@@ -296,6 +309,7 @@ export class ProcessHost {
   }
 
   private onWorkerMessage(proc: Proc, message: WorkerToHost): void {
+    if (proc.exited) return; // its record is gone: a late message is never applied unscoped or unowned
     if (isChildMessage(message)) return proc.children.receive(message);
     if (isConnectionMessage(message)) return proc.connections.receive(message);
     switch (message.type) {
@@ -316,53 +330,26 @@ export class ProcessHost {
         return proc.ipc?.receive(message.data);
       case 'ipc-disconnect':
         return proc.ipc?.closed();
-      case 'listen': {
-        try {
-          const { port } = message;
-          const registration = this.ports.listen(
-            port,
-            (request) => this.forward(proc, port, request),
-            (request, socket) => (proc.exited ? socket.close() : proc.connections.upgrade(port, request, socket)),
-            message.tcp ? (socket) => (proc.exited ? socket.close() : proc.connections.accept(port, socket)) : undefined,
-          );
-          proc.registrations.set(message.port, registration);
-          this.post(proc, { type: 'listened', port: message.port, id: message.id });
-        } catch (error) {
-          // The port is taken: the process must learn it does not own it.
-          this.post(proc, { type: 'listen-failed', port: message.port, message: (error as Error).message, id: message.id });
-        }
-        return;
-      }
+      case 'listen':
+        return this.served.listen(proc, message);
       case 'unlisten':
-        proc.registrations.get(message.port)?.close();
-        proc.registrations.delete(message.port);
-        return;
+        return this.served.unlisten(proc, message.port);
       case 'response-head':
       case 'response-chunk':
       case 'response-end':
         return proc.responses.receive(message);
-      case 'loopback': {
-        const { reqId } = message;
-        const cancel = sendResponse((reply) => this.post(proc, reply), reqId, this.ports.request(message.port, message.request), () => proc.loopbacks.delete(reqId));
-        proc.loopbacks.set(reqId, cancel);
-        return;
-      }
+      case 'loopback':
+        return this.served.loopback(proc, message);
       case 'request-cancel':
         return proc.loopbacks.get(message.reqId)?.();
       case 'listening':
         this.servers.announce({ port: message.port, url: message.url });
         return;
       default:
-        // A message of one process kind (python-installed): its policy decides, knowing who sent it.
-        this.kinds.receive(proc.kind, message);
+        // A message of one process kind (python-installed): its policy decides, knowing who sent it. What it
+        // records (the session's pip installs, the PHP platform) seeds every later process, so only a
+        // workspace process may report it: one application must not seed another's (or the terminal's) installs.
+        if (this.identityOf(proc.pid)?.applicationId === WORKSPACE_APPLICATION) this.kinds.receive(proc.kind, message);
     }
-  }
-
-  private async forward(proc: Proc, port: number, request: HttpRequestData): Promise<HttpStreamResponse> {
-    if (proc.exited) return textResponse(502, EXITED);
-    const reqId = this.nextReq++;
-    const response = proc.responses.expect(reqId, () => this.post(proc, { type: 'request-cancel', reqId }));
-    this.post(proc, { type: 'http-request', reqId, port, request });
-    return (await response) ?? notListening(port);
   }
 }

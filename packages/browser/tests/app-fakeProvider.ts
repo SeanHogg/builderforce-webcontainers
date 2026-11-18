@@ -1,8 +1,11 @@
 /** A scripted `RuntimeProvider` for orchestrator tests: each started service is a `FakeProcess` the test drives. */
 import type { RuntimeProvider, ServiceHandle, ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
+import type { SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 
 export class FakeProcess {
   readonly signals: string[] = [];
+  /** The identity the runtime started it with (`ServiceStartContext.security`). */
+  security?: SecurityContext;
   readonly output: ReadableStream<string>;
   private outputController!: ReadableStreamDefaultController<string>;
   private exitCode: number | undefined;
@@ -115,6 +118,7 @@ export function fakeProvider(options: { autoReady?: string[]; startGate?: (servi
       start(service, context) {
         const launch = () => {
           const proc = new FakeProcess(service, context.env, stubborn.has(service.id), kills);
+          proc.security = context.security;
           started.push(proc);
           if (options.autoReady?.includes(service.id)) queueMicrotask(() => proc.markReady());
           return proc.handle();

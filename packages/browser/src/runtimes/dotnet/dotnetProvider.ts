@@ -14,7 +14,7 @@ import { readinessOf, type Acceptance, type RuntimeProvider, type ServiceSpec } 
 import type { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import { createNodeProvider, type NodeProviderOptions } from '../../app/nodeProvider.js';
 import type { NodeServiceHost } from '../../app/nodeReadiness.js';
-import { resolveFrom } from '../python/requirements.js';
+import { resolveFrom } from '@seanhogg/builderforce-webcontainers-core';
 import { findProject, planBuild } from './dotnetBuildPlan.js';
 import { isDotnetCommand, parseDotnetCommand } from './dotnetCommand.js';
 

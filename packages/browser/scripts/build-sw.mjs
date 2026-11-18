@@ -6,9 +6,10 @@
 //   dist/node/worker.js   the process worker (Node runtime, npm, shell);
 //   dist/runtimes/python/worker.js  the Python process worker (Pyodide);
 //   dist/runtimes/php/worker.js  the PHP process worker (php-wasm fetched at run time, never bundled);
+//   dist/runtimes/dotnet/worker.js  the .NET process worker (the runtime bundle fetched at run time, never bundled);
 //   dist/inference/worker.bundle.js  the local inference worker (Phase 1).
 // dist/assets.js exports what a preview origin serves (the service worker, the
-// relay page, the Node, Python and PHP process workers) as strings, so a server (a
+// relay page, the Node, Python, PHP and .NET process workers) as strings, so a server (a
 // Worker, an Express app) can serve them straight from the installed package
 // without copying files.
 import { build } from 'esbuild';
@@ -65,6 +66,24 @@ const phpWorker = await bundle('src/runtimes/php/worker.ts');
 await writeFile('dist/runtimes/php/worker.js', phpWorker);
 await writeFile('dist/php-worker.js', phpWorker);
 
+// The .NET process worker: one per .NET process (dotnet run, dotnet build, ./app.cs).
+// The runtime (Mono, Roslyn, ASP.NET Core, Npgsql) is NOT bundled: it is the host's
+// artifact (scripts/build-dotnet-runtime.mjs), loaded at start from the start
+// message's `dotnet.bundleUrl`. The host finds the worker at dist/runtimes/dotnet/worker.js;
+// the relay starts it from `<scope>/dotnet-worker.js`, served beside relay.html.
+await mkdir('dist/runtimes/dotnet', { recursive: true });
+const dotnetWorker = await bundle('src/runtimes/dotnet/worker.ts');
+await writeFile('dist/runtimes/dotnet/worker.js', dotnetWorker);
+await writeFile('dist/dotnet-worker.js', dotnetWorker);
+
+// The Rust process worker: one per Rust process (a prebuilt wasm32-wasip1 module, wasmtime run).
+// The module is a project file; the WASI host is bundled. The host finds the worker at
+// dist/runtimes/rust/worker.js; the relay starts it from `<scope>/rust-worker.js`, served beside relay.html.
+await mkdir('dist/runtimes/rust', { recursive: true });
+const rustWorker = await bundle('src/runtimes/rust/worker.ts');
+await writeFile('dist/runtimes/rust/worker.js', rustWorker);
+await writeFile('dist/rust-worker.js', rustWorker);
+
 // The local inference worker (Phase 1): self-contained so it can run on a
 // dedicated worker thread. It gets its OWN path — dist/inference/worker.js is
 // tsc's ES module (startInferenceWorkerHost / runInferenceWorker, re-exported
@@ -86,7 +105,11 @@ await writeFile(
     `/** The Python process worker — serve as \`<scope>/python-worker.js\`, text/javascript, beside relay.html. */\n` +
     `export const pythonWorkerSource = ${JSON.stringify(pythonWorker)};\n` +
     `/** The PHP process worker — serve as \`<scope>/php-worker.js\`, text/javascript, beside relay.html. */\n` +
-    `export const phpWorkerSource = ${JSON.stringify(phpWorker)};\n`,
+    `export const phpWorkerSource = ${JSON.stringify(phpWorker)};\n` +
+    `/** The .NET process worker — serve as \`<scope>/dotnet-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export const dotnetWorkerSource = ${JSON.stringify(dotnetWorker)};\n` +
+    `/** The Rust process worker — serve as \`<scope>/rust-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export const rustWorkerSource = ${JSON.stringify(rustWorker)};\n`,
 );
 await writeFile(
   'dist/assets.d.ts',
@@ -99,5 +122,9 @@ await writeFile(
     `/** The Python process worker — serve as \`<scope>/python-worker.js\`, text/javascript, beside relay.html. */\n` +
     `export declare const pythonWorkerSource: string;\n` +
     `/** The PHP process worker — serve as \`<scope>/php-worker.js\`, text/javascript, beside relay.html. */\n` +
-    `export declare const phpWorkerSource: string;\n`,
+    `export declare const phpWorkerSource: string;\n` +
+    `/** The .NET process worker — serve as \`<scope>/dotnet-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export declare const dotnetWorkerSource: string;\n` +
+    `/** The Rust process worker — serve as \`<scope>/rust-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export declare const rustWorkerSource: string;\n`,
 );

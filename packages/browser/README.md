@@ -489,3 +489,197 @@ const app = startApplicationRuntime(
   browser — and `gitlab.com`, `bitbucket.org` or a custom host for packages
   served there), or only `distProxy`'s host when one is set. `php.baseUrl`
   must be absolute and CORS-served.
+
+### .NET
+
+`dotnet` commands run in a .NET process Worker — Mono's `browser-wasm`
+runtime (.NET 10) — beside the Node, Python and PHP processes, on the same
+files and ports. The runtime is **a bundle the host serves**, built by
+`node scripts/build-dotnet-runtime.mjs` (needs the .NET SDK that
+`dotnet-host/global.json` pins, and git; about 73 MiB uncompressed;
+`pnpm -C packages/browser build:dotnet`) and passed as
+`dotnet.bundleUrl`; this package never contains it, and there is no default —
+without `bundleUrl`, `dotnet` commands fail with a message saying so.
+`runtime.run('dotnet', ['run'])`, a shell's `dotnet …`, Node's
+`spawn('dotnet')` and a file-based program whose shebang names dotnet
+(`./app.cs`) all work. A `dotnet` service uses `createDotnetProvider(runtime)`:
+
+```ts
+import { startPreviewRuntime } from '@seanhogg/builderforce-webcontainers';
+import { createDotnetProvider, createPgliteProvider, startApplicationRuntime } from '@seanhogg/builderforce-webcontainers/app';
+
+const runtime = await startPreviewRuntime({
+  serviceWorkerUrl: '/__bfwc/sw.js',
+  id: projectId,
+  dotnet: { bundleUrl: 'https://assets.example.com/bfwc-dotnet/' }, // the built bundle's directory
+});
+const app = startApplicationRuntime(
+  {
+    projectId,
+    services: [
+      { id: 'db', type: 'database', runtime: 'pglite', port: 5432, readiness: { kind: 'query' },
+        database: { engine: 'postgres', provider: 'pglite', persistent: true } },
+      { id: 'api', type: 'application', runtime: 'dotnet', root: '/api', command: 'dotnet',
+        args: ['run', '--urls', 'http://localhost:5080'], port: 5080, dependsOn: ['db'],
+        readiness: { kind: 'http', path: '/health' } },
+    ],
+  },
+  { providers: [createDotnetProvider(runtime, { fs: runtime.fs }), createPgliteProvider(runtime)] },
+);
+```
+
+The .NET process Worker script itself ships in this package
+(`dist/runtimes/dotnet/worker.js`, found beside the module by default;
+`node.dotnetWorkerUrl` points elsewhere).
+
+- **Commands.** `dotnet run [--project p] [-c cfg] [--no-build]
+  [--launch-profile n | --no-launch-profile] [-- args]` (launch profiles from
+  `Properties/launchSettings.json`; their `applicationUrl` becomes
+  ASPNETCORE_URLS unless the process already has one), file-based programs
+  (`dotnet run app.cs`, `#:sdk`/`#:package`/`#:property`, a `dotnet` shebang),
+  `dotnet build [-o dir]`, `dotnet app.dll` / `dotnet exec`, `dotnet clean`
+  (removes the built assembly, only ever under the project's `bin/`),
+  `dotnet restore` (a check: only bundled packages resolve), `--version`,
+  `--info`, `--list-sdks`, `--list-runtimes`. `watch`, `test`, `publish`,
+  `new`, `ef`, tools and solutions are declined with a reason.
+- **Builds.** Roslyn runs in the runtime and compiles SDK-style C# projects
+  (Microsoft.NET.Sdk, .Web, .Worker; `net5.0`–`net10.0`, compiled as
+  `net10.0`): every `.cs` under the project but `bin/`/`obj/` and `<Compile
+  Remove>`, implicit and `<Using>` global usings, Nullable, LangVersion (by
+  default the target framework's: net8.0 → C# 12, net9.0 → 13, net10.0 → 14),
+  AllowUnsafeBlocks, DefineConstants, NoWarn, TreatWarningsAsErrors, simple
+  `$(Configuration)` conditions and `<Choose>`. A file-based program's `#:`
+  directives count only at the top of the file. The assembly lands in
+  `bin/<Configuration>/<tfm>/` and reaches the page. Source generators and
+  analyzers do not run; Directory.Build.props is not read (a build note says
+  so). Project references, `<Compile Include>` outside the project,
+  `EnableDefaultCompileItems=false`, properties or items set inside a
+  `<Target>`, an AssemblyName that is a path, and NuGet packages beyond the
+  bundled **Npgsql 9.0.3** (and the Microsoft.Extensions.* packages ASP.NET
+  Core's shared framework carries) are declined with the reason.
+- **ASP.NET Core.** Kestrel cannot bind sockets in `browser-wasm`, so every
+  host a program builds gets an in-memory `IServer` instead (injected through
+  the hosting DiagnosticListener, as `WebApplicationFactory` does): its URLs'
+  ports (`--urls`, ASPNETCORE_URLS, `app.Run(url)`; default
+  `http://localhost:5000`) open on the virtual network, and requests stream
+  through ASP.NET Core's pipeline. Minimal APIs, middleware, routing,
+  `appsettings.json` and logging work unchanged; `app.Run()` works although
+  the runtime has one thread. A host that fails to start — a URL it cannot
+  bind (taken, port 0, no scheme), a hosted service throwing — ends the
+  program as an unhandled exception does: the error printed, exit 134.
+  Request paths are decoded as Kestrel decodes them (`%2F` kept, dot segments
+  removed). No TLS (https URLs serve plain HTTP), no WebSockets.
+- **Postgres.** Npgsql is patched (dotnet-host/patches/npgsql-browser.patch)
+  so its connections are the runtime's virtual TCP: `Host=localhost;Port=5432`
+  reaches the PGlite gateway. Take `Username` and `Password` from the service's
+  `DATABASE_URL` userinfo (`new Uri(url).UserInfo`, each part unescaped) and
+  fail when the password is missing: the gateway checks the service's
+  credentials. Any SSL Mode the gateway can answer works (the
+  default, Prefer, goes on in plain text). Use Npgsql's **async** API
+  (`OpenAsync`, `ExecuteReaderAsync`, …): with one thread, a synchronous call
+  that must wait for the database throws.
+- **Integrity and caching.** The bundle's `manifest.json` lists every file's
+  SHA-256: the Worker checks `dotnet.js` (which carries Mono's own integrity
+  hashes for the rest) and each reference pack before using them, and refuses
+  a bundle that does not match, or that is absent or unreachable, with one
+  line. In browsers the files are kept in the Cache API under the manifest's
+  hash, so a `dotnet build` then a `dotnet run` download each once (each
+  process still starts its own runtime).
+- **Limits.** One thread (no `Thread`, no blocking waits); no standard input;
+  `localhost` is the only reachable host.
+- **Relay mode and CSP.** .NET Workers run on the preview origin like Node's:
+  serve `dist/dotnet-worker.js` (`dotnetWorkerSource` in `./assets`) as
+  `<scope>/dotnet-worker.js` beside `process-worker.js`. `dotnet.bundleUrl`
+  must be absolute and CORS-served to the preview origin, whose CSP must let
+  the Worker fetch and import from the bundle's host and compile WebAssembly
+  (`'wasm-unsafe-eval'`).
+
+### Rust
+
+Rust runs as **prebuilt `wasm32-wasip1` modules** in a Rust process Worker,
+on the same preview1 WASI host `node:wasi` uses, beside the Node, Python, PHP
+and .NET processes, on the same files and ports. A path to a module
+(`./target/wasm32-wasip1/release/api.wasm`) or `wasmtime [run] [--env K=V]
+[--dir D] app.wasm args…` runs it — from `runtime.run`, a shell or Node's
+`spawn`. Nothing is compiled in the browser (see the gate below): `cargo`,
+`rustc` and `rustup` exit 1 with the reason and the prebuilt path. A `rust`
+service uses `createRustProvider(runtime, { fs })`, which declares its one
+profile (`RUST_PROFILE`) and declines everything else with a reason — a
+toolchain command, a module that is missing (not built), not wasm, or a
+preview 2 component:
+
+```ts
+{ id: 'api', type: 'application', runtime: 'rust', root: '/api',
+  command: './target/wasm32-wasip1/release/todo_service.wasm', env: { PORT: '8080' },
+  port: 8080, dependsOn: ['db'], readiness: { kind: 'http', path: '/health' } }
+```
+
+- **Commands.** A module exporting `_start` is a WASI command: it runs to
+  completion with its arguments and exit code, and its writes reach the page.
+  Run by path, it gets the process's environment, the project at `/` and the
+  working directory at `.`. Under `wasmtime run` it gets only what wasmtime
+  would give: `--env K=V` (and `--env K`, inherited from the process),
+  `--dir HOST[::GUEST]` preopens.
+- **Services (a wasi:http-style handler).** A WASI preview1 module cannot
+  block in a browser without threads, so a service is a *reactor*
+  (`crate-type = ["cdylib"]`) built with the `bfwc-wasi` crate, which ships
+  in this npm package as source. Depend on it by path, from the
+  installed package or a vendored copy:
+
+  ```toml
+  [lib]
+  crate-type = ["cdylib"]
+
+  [dependencies]
+  bfwc-wasi = { path = "../node_modules/@seanhogg/builderforce-webcontainers/rust-fixtures/bfwc-wasi" }
+  axum = { version = "0.8", default-features = false, features = ["json"] }
+  ```
+
+  The app exports `bfwc_start`, which calls `bfwc_wasi::serve(port, router)`
+  with an **axum 0.8** `Router`. Each request is handed to the module
+  (`bfwc_request`), runs through the router as a task, and is answered whole
+  (a status outside 200–599 or a body over 64 MiB answers 502). The host
+  drives the tasks (`bfwc_poll`) whenever a request, bytes, room to write or
+  a dial arrive; no thread ever waits, no SharedArrayBuffer. tokio's own
+  runtime is not used (its `block_on` parks the thread); tokio's I/O traits
+  and `sync` primitives work unchanged. ABI version 1: imports `bfwc.{listen,
+  respond, connect, send, recv, close}`; exports `bfwc_abi_version`,
+  `bfwc_start`, `bfwc_alloc`, `bfwc_request`, `bfwc_poll`. A module built for
+  another ABI version, importing a function the runtime lacks, or whose
+  `bfwc_start` returns without serving, is declined with the reason.
+- **Postgres.** `bfwc_wasi::net::connect(port)` dials a virtual port (the
+  PGlite gateway) and implements tokio's `AsyncRead`/`AsyncWrite`, so
+  **tokio-postgres 0.7** (`default-features = false`: no `runtime` feature,
+  which needs socket2) connects with `Config::connect_raw(stream, NoTls)`;
+  spawn the `Connection` with `bfwc_wasi::spawn`. No patches to tokio-postgres
+  or axum. Connections are flow-controlled both ways (a write is pending while
+  64 KiB is in flight unread); at most 256 are open per process. One import of a dependency (`wasi:cli/environment` from
+  `whoami`, linked but never called when the URL names a user) is stubbed:
+  imports from modules other than `wasi_snapshot_preview1` and `bfwc` fail
+  only if called.
+- **Fixture.** `rust-fixtures/todo-service` (axum + tokio-postgres CRUD,
+  706 KiB release `.wasm`; `hello`, an 81 KiB command) is built by
+  `node scripts/build-rust-fixtures.mjs` (`pnpm build:rust-fixtures`; the
+  toolchain is pinned by `rust-fixtures/rust-toolchain.toml`, rustc 1.95.0
+  with wasm32-wasip1; ~1.5 min cold). `tests/rust-runtime.test.ts` runs it
+  against PGlite (CRUD, a rolled-back transaction, 404). It skips when the
+  modules are not built, and fails when `BFWC_RUST_FIXTURES` names them but
+  they are missing; CI's `rust-runtime` job builds them.
+- **In-browser compile gate: not passed.** rustc runs in a browser only as a
+  community `wasm32-wasip1-threads` build, which needs shared memory —
+  SharedArrayBuffer and cross-origin isolation, which this runtime never
+  requires. It would also need a large download: on the measured toolchain
+  (rustc 1.95), the compiler with LLVM (`rustc_driver`) is 184 MiB native,
+  the wasm32-wasip1 sysroot 96 MiB, and the linker (`rust-lld`) 108 MiB.
+  Building the fixture also pulls 217 dependency rlibs (98 MiB) from
+  crates.io. No in-browser compiler ships until this gate passes
+  (`RUST_COMPILE_GATE`).
+- **Limits.** Preview1 only (components and `wasmtime serve` are declined);
+  one served port per process; responses are buffered, not streamed; no
+  WebSockets or inbound raw TCP; no half-close (`poll_shutdown` is a no-op —
+  dropping the stream hangs up); no timers (`tokio::time` needs a runtime and
+  panics); no standard input; a trap ends the process with 134.
+- **Relay mode and CSP.** Serve `dist/rust-worker.js` (`rustWorkerSource` in
+  `./assets`) as `<scope>/rust-worker.js` beside `process-worker.js`
+  (`node.rustWorkerUrl` otherwise); the preview origin's CSP must allow
+  `'wasm-unsafe-eval'`.

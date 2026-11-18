@@ -21,7 +21,8 @@ import type { HostToWorker, StartMessage, WorkerToHost } from '../../node/protoc
 import { createWorkerDialer } from '../../node/workerConnections.js';
 import { createInterpreterProcess, type InterpreterContext, type InterpreterOutcome } from '../interpreterProcess.js';
 import { mapInvocationPaths, parsePhpCommand, type PhpInvocation } from './phpCommand.js';
-import { applyOpsToPhp, copyIntoPhp, toPhpPath, trackPhpWrites } from './phpFs.js';
+import { trackWrappedFsWrites } from '../emscripten/wrappedFsWrites.js';
+import { applyOpsToPhp, copyIntoPhp, toPhpPath } from './phpFs.js';
 import { checkPhpVersion, type LoadedPhp, type PhpLoadOptions } from './phpLoader.js';
 import { runPhpInvocation } from './phpProgram.js';
 import { installRuntimeLibrary } from './phpRuntimeLibrary.js';
@@ -51,7 +52,7 @@ export function createPhpWorkerProcess(deps: PhpWorkerProcessDeps): { receive(me
       installPhpSockets(php.module, dial);
       installRuntimeLibrary(php.module.FS);
       copyIntoPhp(staging, php.module.FS);
-      const tracker = trackPhpWrites(php.module.FS, (ops) => {
+      const tracker = trackWrappedFsWrites(php.module.FS, (ops) => {
         if (!context.exited) deps.post({ type: 'fs', ops });
       });
       context.mounted({ apply: (ops) => tracker.quietly(() => applyOpsToPhp(php.module.FS, ops)), flush: () => tracker.flush() });

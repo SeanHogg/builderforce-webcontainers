@@ -1,0 +1,10 @@
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A WASI command (`_start`): run to completion, like `wasmtime hello.wasm`.
+[[bin]]
+name = "hello"
+path = "src/main.rs"

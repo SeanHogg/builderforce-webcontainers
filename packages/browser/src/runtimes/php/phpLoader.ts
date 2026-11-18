@@ -13,7 +13,7 @@
  * The slice of the php-wasm API the runtime uses is typed here, so the
  * package's public types never depend on php-wasm.
  */
-import type { EmscriptenFsCore } from '../emscripten/projectMirror.js';
+import type { WrappableEmscriptenFs } from '../emscripten/wrappedFsWrites.js';
 
 /** The php-wasm release this runtime is built and tested against (`@php-wasm/*`). */
 export const PHP_WASM_VERSION = '3.1.62';
@@ -68,28 +68,13 @@ export type WebSocketConstructorLike = new (url: string, protocols?: string | st
 
 /** php-wasm's Emscripten module: its file system, and the socket layer's config (read at each `connect`). */
 export interface PhpModuleLike {
-  readonly FS: PhpEmscriptenFs;
+  readonly FS: WrappableEmscriptenFs;
   websocket?: {
     url?: string | ((socket: unknown, addr: string, port: number) => string);
     subprotocol?: string | null;
     decorator?: (base: WebSocketConstructorLike) => WebSocketConstructorLike;
     [key: string]: unknown;
   };
-}
-
-/** A file stream in php-wasm's FS. */
-export interface PhpFsStream {
-  path?: string;
-}
-
-/** php-wasm's Emscripten FS: the mirror's calls plus the ones wrapped to hear the program's changes (it has no `trackingDelegate`). */
-export interface PhpEmscriptenFs extends EmscriptenFsCore {
-  open(path: string, flags: number | string, mode?: number): PhpFsStream;
-  write(stream: PhpFsStream, ...rest: unknown[]): number;
-  close(stream: PhpFsStream): void;
-  mkdir(path: string, mode?: number): unknown;
-  rename(from: string, to: string): void;
-  symlink(target: string, link: string): unknown;
 }
 
 /** A started PHP: the instance and its module. */

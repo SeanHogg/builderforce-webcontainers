@@ -19,7 +19,7 @@ export const MAX_MESSAGE = 0x3fffffff;
 
 export type FrontendPacket =
   /** An untyped start-up packet: `code` is the protocol version, or an SSL/GSS/cancel request. */
-  | { kind: 'startup'; code: number; params: Record<string, string> }
+  | { kind: 'startup'; code: number; params: Record<string, string>; bytes: Uint8Array }
   /** A typed message, whole (type byte and length included), ready to pass to the engine. */
   | { kind: 'message'; type: number; bytes: Uint8Array }
   /** The stream broke the protocol; nothing after it can be framed. */
@@ -67,6 +67,11 @@ export class FrameReader {
     return packets;
   }
 
+  /** Remove and return every byte buffered but not yet framed (the start of a packet still arriving). */
+  drain(): Uint8Array {
+    return this.take(this.buffered);
+  }
+
   /** The first `n` buffered bytes, without consuming them. */
   private peek(n: number): Uint8Array {
     const first = this.chunks[0]!;
@@ -104,5 +109,5 @@ function startupPacket(bytes: Uint8Array): Extract<FrontendPacket, { kind: 'star
     const fields = decoder.decode(bytes.subarray(8)).split('\0');
     for (let i = 0; i + 1 < fields.length && fields[i]; i += 2) params[fields[i]!] = fields[i + 1]!;
   }
-  return { kind: 'startup', code, params };
+  return { kind: 'startup', code, params, bytes };
 }

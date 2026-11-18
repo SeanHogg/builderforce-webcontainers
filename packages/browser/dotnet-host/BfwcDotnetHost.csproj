@@ -27,13 +27,18 @@
     <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
     <UseSystemResourceKeys>false</UseSystemResourceKeys>
     <WasmFingerprintAssets>false</WasmFingerprintAssets>
+    <!-- Reproducible restores: packages.lock.json records every package and its hash; the build script restores in
+         locked mode. After changing a PackageReference, rewrite it here with dotnet restore's force-evaluate option and
+         Configuration=Release (Debug adds an implicit hot-reload package that Release builds do not have). -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <AspNetCoreSharedDir>$(NetCoreRoot)shared/Microsoft.AspNetCore.App/$(BundledNETCoreAppPackageVersion)/</AspNetCoreSharedDir>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Minimal APIs, controllers, hosting, configuration, logging. Not Blazor, SignalR, Identity or the native servers. -->
+    <!-- Minimal APIs, controllers, hosting, configuration, logging. Not Blazor, SignalR, Identity or HttpSys.
+         Kestrel's assemblies (transports included) stay: WebApplication's defaults configure Kestrel's options. -->
     <AspNetCoreAssembly Include="$(AspNetCoreSharedDir)Microsoft.AspNetCore*.dll;$(AspNetCoreSharedDir)Microsoft.Extensions*.dll;$(AspNetCoreSharedDir)Microsoft.Net.Http.Headers.dll;$(AspNetCoreSharedDir)Microsoft.JSInterop.dll;$(AspNetCoreSharedDir)System.*.dll"
-                        Exclude="$(AspNetCoreSharedDir)Microsoft.AspNetCore.Components*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.SignalR*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Http.Connections*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Identity.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Server.HttpSys.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Server.Kestrel.Transport.NamedPipes.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Server.Kestrel.Transport.Quic.dll;$(AspNetCoreSharedDir)System.Diagnostics.EventLog.Messages.dll" />
+                        Exclude="$(AspNetCoreSharedDir)Microsoft.AspNetCore.Components*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.SignalR*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Http.Connections*.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Identity.dll;$(AspNetCoreSharedDir)Microsoft.AspNetCore.Server.HttpSys.dll;$(AspNetCoreSharedDir)System.Diagnostics.EventLog.Messages.dll" />
     <!-- Each one referenced explicitly: as dependencies of one another they get mislabelled boot entries. -->
     <Reference Include="@(AspNetCoreAssembly)" Private="true" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />

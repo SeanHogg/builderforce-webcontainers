@@ -77,7 +77,9 @@ function contentOf(bytes: Uint8Array): string | Uint8Array {
 export const exists = (FS: EmscriptenFsCore, path: string) => FS.analyzePath(path).exists;
 export const isDirectory = (FS: EmscriptenFsCore, path: string) => exists(FS, path) && FS.isDir(FS.stat(path).mode);
 export const isFile = (FS: EmscriptenFsCore, path: string) => exists(FS, path) && !FS.isDir(FS.stat(path).mode);
-export const childrenOf = (FS: EmscriptenFsCore, path: string) => FS.readdir(path).filter((name) => name !== '.' && name !== '..');
+/** A path the program gave (relative to its working directory, or absolute) as an absolute runtime path. */
+export const absoluteIn = (FS: EmscriptenFsCore, path: string) => (path.startsWith('/') ? path : join(FS.cwd(), path));
+export const childrenOf =(FS: EmscriptenFsCore, path: string) => FS.readdir(path).filter((name) => name !== '.' && name !== '..');
 
 /** Remove a file or a directory tree. */
 export function removeTree(FS: EmscriptenFsCore, path: string): void {
@@ -184,7 +186,6 @@ export function trackMountWrites(FS: EmscriptenFsCore, send: (ops: VfsOp[]) => v
   const queueOpenFiles = () => {
     for (const path of dirty) queue('write', path);
   };
-  const absolute = (path: string) => (path.startsWith('/') ? path : join(FS.cwd(), path));
 
   const events: FsChangeEvents = {
     // Paths outside the project (stdout's /dev/tty, /tmp) are ignored at once: no tracking, no timer re-armed per write.
@@ -214,7 +215,7 @@ export function trackMountWrites(FS: EmscriptenFsCore, send: (ops: VfsOp[]) => v
   FS.truncate = (path, length) => {
     truncate(path, length);
     // `open(O_TRUNC)` truncates by node, not path; that open is tracked by its flags already.
-    if (typeof path === 'string') queue('write', absolute(path));
+    if (typeof path === 'string') queue('write', absoluteIn(FS, path));
   };
   FS.ftruncate = (fd, length) => {
     ftruncate(fd, length);

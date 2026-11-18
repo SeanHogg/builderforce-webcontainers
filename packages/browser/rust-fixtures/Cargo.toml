@@ -1,0 +1,12 @@
+# Rust fixtures for the Rust runtime (PRD 31 §W9 phase 6d): prebuilt wasm32-wasip1 services the
+# runtime runs. Build with `node scripts/build-rust-fixtures.mjs` (needs rustup's wasm32-wasip1 target).
+[workspace]
+resolver = "2"
+members = ["bfwc-wasi", "todo-service", "hello"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

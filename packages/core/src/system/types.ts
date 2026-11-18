@@ -7,6 +7,7 @@
 import type { VirtualFileSystem } from '../vfs.js';
 import type { PackageCache } from '../installer/registry.js';
 import type { IpcEndpoint } from './ipc.js';
+import type { SecurityContext } from './securityContext.js';
 
 export interface TerminalPort {
   cols: number;
@@ -122,8 +123,13 @@ export interface ByteChannel {
 /** Take over a connection a client asked to upgrade (`Upgrade: websocket`); `socket` is the server end. */
 export type UpgradeHandler = (request: HttpRequestData, socket: ByteChannel) => void;
 
-/** Take a raw TCP connection (`net.Server`'s `'connection'`); `socket` is the server end. */
-export type ConnectionHandler = (socket: ByteChannel) => void;
+/**
+ * Take a raw TCP connection (`net.Server`'s `'connection'`); `socket` is the server end.
+ * `caller` is who dialled, as the page-side `PortRegistry` knows it (never what
+ * the dialling process claims) — page-side listeners such as the database
+ * gateway decide on it; a listener in a process Worker never receives it.
+ */
+export type ConnectionHandler = (socket: ByteChannel, caller?: SecurityContext) => void;
 
 /**
  * A server's place on a port. Where the port table lives elsewhere (a process

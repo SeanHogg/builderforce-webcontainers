@@ -1,7 +1,7 @@
 import type * as TS from 'typescript';
 import type { VirtualFileSystem } from '../vfs.js';
 import type { PathAlias } from '../projectConfig.js';
-import { dirname, extname, join, normalizePath } from '../paths.js';
+import { dirname, extname, join, normalizePath, resolveFrom } from '../paths.js';
 import { isBareSpecifier } from '../resolve.js';
 import { AMBIENT_SHIM_PATH, EMPTY_TYPES_PATH, SHIMMED_TYPE_REFERENCES, SHIM_DIR } from './shims.js';
 import { dtsCandidates, LIB_DIR, packageRequestUrl, TYPES_DIR, type TypeStore } from './typeStore.js';
@@ -74,7 +74,7 @@ export function createVirtualHost(ts: typeof TS, options: VirtualHostOptions): T
   function resolveInProject(specifier: string, containingFile: string): string | undefined {
     if (specifier.includes('?')) return undefined; // `?raw`/`?url`: the ambient shim declares them
     if (!isBareSpecifier(specifier)) {
-      const base = specifier.startsWith('/') ? normalizePath(specifier) : join(dirname(containingFile), specifier);
+      const base = resolveFrom(dirname(containingFile), specifier);
       return probeProject(fs, base);
     }
     for (const alias of options.aliases) {

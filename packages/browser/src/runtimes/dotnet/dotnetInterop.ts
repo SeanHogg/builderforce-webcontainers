@@ -10,7 +10,10 @@
  *   it, `respondEnd` closes it. A client hanging up cancels the request.
  * - Dialling: `dial` opens a connection to a virtual port anywhere in the
  *   runtime (the Postgres gateway, another service) through the process
- *   protocol's dialled connections; bytes flow both ways as copies.
+ *   protocol's dialled connections; bytes flow both ways as copies. A server
+ *   that speaks first may deliver bytes before .NET has registered the
+ *   connection id `dial` returned: the host program holds them until it does
+ *   (dotnet-host/VirtualTcp.cs).
  */
 import type { ByteChannel, HttpHandler, HttpResponseHead, HttpStreamResponse } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerToHost } from '../../node/protocol.js';
@@ -27,6 +30,8 @@ export interface DotnetBridge {
   handlerFor(port: number): HttpHandler | undefined;
   /** The host program's exports, once the runtime is up. */
   attach(exports: DotnetExports): void;
+  /** Ask the program's hosts to stop (a kill): `Exports.Stop`. */
+  stop(): void;
   /** Fail every response still pending and hang up every connection (the process is ending). */
   closeAll(): void;
 }
@@ -117,7 +122,8 @@ export function createDotnetBridge(options: DotnetBridgeOptions): DotnetBridge {
       if (!channel) return -1;
       const connId = nextConnection++;
       connections.set(connId, channel);
-      channel.onData((data) => exports?.TcpData(connId, data));
+      // Only while the connection is open: .NET holds bytes for an id it has not registered yet, never for one it hung up.
+      channel.onData((data) => connections.has(connId) && exports?.TcpData(connId, data));
       channel.onClose(() => {
         if (connections.delete(connId)) exports?.TcpClosed(connId);
       });
@@ -139,6 +145,9 @@ export function createDotnetBridge(options: DotnetBridgeOptions): DotnetBridge {
     handlerFor: (port) => (listening.has(port) ? handler(port) : undefined),
     attach(attached) {
       exports = attached;
+    },
+    stop() {
+      exports?.Stop();
     },
     closeAll() {
       for (const entry of pending.values()) {

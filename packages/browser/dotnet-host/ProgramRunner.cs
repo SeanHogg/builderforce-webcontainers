@@ -6,8 +6,11 @@
 // browser-wasm has one thread: a program that blocks waiting on its host — `app.Run()`, `host.Run()`,
 // `WaitForShutdown()` — gets PlatformNotSupportedException ("Cannot wait on monitors") instead of
 // blocking. The host it built is already starting (HostCapture saw it built), and keeps serving from the
-// event loop, so the program is treated as running until that host stops. `await app.RunAsync()` needs no
-// such help.
+// event loop, so the program is treated as running until that host stops — when the host has begun
+// starting (HostCapture.Starting). If it then fails to start (its URLs refused, a hosted service throwing),
+// the program ends as on an unhandled exception: printed, exit 134. A PlatformNotSupportedException with
+// no host starting is the program's own blocking wait, and is unhandled the same way. `await
+// app.RunAsync()` needs no such help.
 using System.Reflection;
 using System.Runtime.Loader;
 
@@ -15,7 +18,6 @@ namespace Bfwc.Host;
 
 internal static class ProgramRunner
 {
-    const int UnhandledExceptionExitCode = 134;
     static readonly HashSet<string> probed = new(StringComparer.Ordinal);
 
     internal static async Task<int> RunAsync(string assemblyPath, string[] args, string cwd)
@@ -39,7 +41,7 @@ internal static class ProgramRunner
             Console.Error.WriteLine($"'{assemblyPath}' is not a .NET assembly: {error.Message}");
             return 1;
         }
-        var entry = assembly.EntryPoint;
+        var entry = assembly.EntryPoint is { } declared ? AsyncEntryOf(declared) : null;
         if (entry is null)
         {
             Console.Error.WriteLine($"'{assemblyPath}' has no entry point: it is a class library.");
@@ -59,11 +61,27 @@ internal static class ProgramRunner
         catch (Exception error)
         {
             var thrown = error is TargetInvocationException { InnerException: { } inner } ? inner : error;
-            if (thrown is PlatformNotSupportedException && HostCapture.Latest is { } host) return await HostCapture.WaitForShutdownAsync(host);
+            // Blocked waiting on a host that is starting (`app.Run()`): it keeps serving from the event loop. A
+            // PlatformNotSupportedException with no host starting is the program's own blocking wait: unhandled.
+            if (thrown is PlatformNotSupportedException && HostCapture.Starting && HostCapture.Latest is { } host) return await HostCapture.WaitForShutdownAsync(host);
             Console.Error.WriteLine($"Unhandled exception. {thrown}");
-            return UnhandledExceptionExitCode;
+            return HostCapture.UnhandledExceptionExitCode;
         }
         return result is int code ? code : Environment.ExitCode;
+    }
+
+    /// <summary>
+    /// The method to run for an entry point. An async program (`async Task Main`, or top-level statements that
+    /// await) has a compiler-made synchronous entry, <c>&lt;Main&gt;</c>, that blocks on the real method — which on
+    /// browser-wasm's one thread throws instead of waiting. That real method (<c>Main</c> or <c>&lt;Main&gt;$</c>,
+    /// returning a Task) is run instead, and awaited.
+    /// </summary>
+    static MethodInfo AsyncEntryOf(MethodInfo entry)
+    {
+        if (entry.Name != "<Main>" || entry.DeclaringType is not { } type) return entry;
+        var parameters = entry.GetParameters().Length;
+        return type.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .FirstOrDefault(method => method.Name is "Main" or "<Main>$" && typeof(Task).IsAssignableFrom(method.ReturnType) && method.GetParameters().Length == parameters) ?? entry;
     }
 
     static Assembly? ResolveBeside(string directory, AssemblyLoadContext context, AssemblyName name)

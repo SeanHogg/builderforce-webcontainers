@@ -14,7 +14,7 @@
  * (relayedChannels.ts). When the process ends, `closeAll` hangs up on
  * everything, so the other side hears it.
  */
-import type { ByteChannel, HttpRequestData, PortRegistry } from '@seanhogg/builderforce-webcontainers-core';
+import { WORKSPACE_CONTEXT, type ByteChannel, type HttpRequestData, type PortRegistry, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import type { HostToWorker, WorkerToHost } from './protocol.js';
 import { RelayedChannels } from './relayedChannels.js';
 
@@ -26,6 +26,18 @@ export function isConnectionMessage(message: WorkerToHost): message is Connectio
   return CONNECTION_MESSAGES.has(message.type);
 }
 
+/**
+ * Who the process this relay serves is, bound when the page creates the relay
+ * for ONE Worker's page-side record — never read from a message the Worker
+ * sends (a Worker can put any pid or app in those).
+ */
+export interface ConnectionRelayIdentity {
+  /** The pid the PAGE allocated for this relay's Worker (`ProcessHost.spawnChild`'s `allocatePid()`). */
+  readonly pid: number;
+  /** The page-side identity of `pid` now; undefined (an unknown or exited process) refuses every dial. */
+  identityOf(pid: number): SecurityContext | undefined;
+}
+
 export class ConnectionRelay {
   /** Connections to the process's servers, by the page's id: the server end. */
   private readonly inbound: RelayedChannels<'socket'>;
@@ -33,9 +45,14 @@ export class ConnectionRelay {
   private readonly outbound: RelayedChannels<'dial'>;
   private nextConn = 1;
 
+  /**
+   * `identity` omitted: the process is the workspace's (a runtime that mints no
+   * identities yet). Given: every dial is decided as `identityOf(pid)`.
+   */
   constructor(
     private readonly ports: PortRegistry,
     private readonly post: (message: HostToWorker) => void,
+    private readonly identity?: ConnectionRelayIdentity,
   ) {
     this.inbound = new RelayedChannels('socket', post);
     this.outbound = new RelayedChannels('dial', post);
@@ -67,8 +84,10 @@ export class ConnectionRelay {
     this.outbound.closeAll();
   }
 
+  /** Decided as the relay's bound process; nothing in the message names the caller. A refusal is `ECONNREFUSED`, like nothing listening. */
   private dial(connId: number, port: number): void {
-    const client = this.ports.connect(port);
+    const caller = this.identity ? this.identity.identityOf(this.identity.pid) : WORKSPACE_CONTEXT;
+    const client = caller ? this.ports.connect(port, caller) : undefined;
     this.post({ type: 'dial-result', connId, ok: client !== undefined });
     if (client) this.outbound.add(connId, client);
   }

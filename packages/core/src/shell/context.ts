@@ -6,7 +6,7 @@
 import type { VirtualFileSystem } from '../vfs.js';
 import type { Program, System } from '../system/types.js';
 import { InputQueue, textChunks } from '../system/terminal.js';
-import { join, normalizePath } from '../paths.js';
+import { join, resolveFrom } from '../paths.js';
 
 export interface CommandIO {
   stdout(text: string): void;
@@ -33,7 +33,7 @@ export type Command = (ctx: CommandContext) => Promise<number>;
 
 export function resolvePath(ctx: { cwd: string; env: Record<string, string> }, path: string): string {
   if (path === '~' || path.startsWith('~/')) return join(ctx.env.HOME ?? '/home/user', path.slice(1));
-  return path.startsWith('/') ? normalizePath(path) : join(ctx.cwd, path);
+  return resolveFrom(ctx.cwd, path);
 }
 
 /** Split `-abc` style flags from operands (`--` ends flags). */

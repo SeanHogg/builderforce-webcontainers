@@ -4,7 +4,7 @@
  * edge cases live in exactly one place.
  */
 import type { VirtualFileSystem } from '../../vfs.js';
-import { normalizePath, dirname, join } from '../../paths.js';
+import { normalizePath, dirname, join, resolveFrom } from '../../paths.js';
 import { Buffer, encode } from '../buffer.js';
 import { Dirent, fsError, Stats, constants } from './stats.js';
 
@@ -41,7 +41,7 @@ export function createSyncFs(ctx: FsContext) {
     const text = typeof p === 'string' ? p : new TextDecoder().decode(p);
     if (typeof text !== 'string') throw new TypeError('The "path" argument must be of type string, Buffer or URL');
     if (text.startsWith('file://')) return normalizePath(decodeURIComponent(new URL(text).pathname));
-    return text.startsWith('/') ? normalizePath(text) : join(ctx.cwd(), text);
+    return resolveFrom(ctx.cwd(), text);
   };
 
   const bytesOf = (path: string): Uint8Array => {

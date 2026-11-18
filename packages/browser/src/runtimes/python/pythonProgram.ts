@@ -14,7 +14,8 @@ import type { PipInstall } from './pipRecord.js';
 import type { PythonInvocation } from './pythonCommand.js';
 import type { ProvidedPackages } from './pythonExtensions.js';
 import type { PyodideLike, PyProxyLike } from './pyodideLoader.js';
-import { parseRequirement, readProjectRequirements, readRequirementFile, resolveFrom, type Requirement } from './requirements.js';
+import { resolveFrom } from '@seanhogg/builderforce-webcontainers-core';
+import { parseRequirement, readProjectRequirements, readRequirementFile, type Requirement } from './requirements.js';
 
 export interface PythonProgramIo {
   stdout(text: string): void;

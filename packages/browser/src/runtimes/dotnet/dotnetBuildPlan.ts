@@ -12,8 +12,7 @@
  * marked `PrivateAssets="all"` are skipped; Microsoft.Extensions.* packages
  * that ASP.NET Core's shared framework carries are satisfied by it).
  */
-import { basename, normalizePath } from '@seanhogg/builderforce-webcontainers-core';
-import { resolveFrom } from '../python/requirements.js';
+import { basename, dirname, normalizePath, resolveFrom } from '@seanhogg/builderforce-webcontainers-core';
 import { DOTNET_BUNDLE } from './dotnetBundle.js';
 import { globMatcher, parseFileBasedProgram, parseProjectFile, type ProjectFile } from './dotnetProjectFile.js';
 
@@ -42,7 +41,8 @@ export interface DotnetBuildPlan {
   globalUsings: string;
   nullable: string;
   allowUnsafe: boolean;
-  langVersion?: string;
+  /** The project's LangVersion, else the SDK's default for its target framework (net8.0 → 12, net9.0 → 13, net10.0 → 14). */
+  langVersion: string;
   defines: string[];
   optimize: boolean;
   warningsAsErrors: boolean;
@@ -150,6 +150,8 @@ export function planBuild(files: ProjectFiles, path: string, configuration: stri
   const web = sdk === 'microsoft.net.sdk.web' || project.frameworkReferences.some((reference) => reference.toLowerCase() === 'microsoft.aspnetcore.app');
   const props = project.properties;
   const assemblyName = props.assemblyname || name.replace(/\.(?:csproj|cs)$/i, '');
+  // It names the output file: a path in it would write (and `clean` remove) outside the project's bin/.
+  if (!validAssemblyName(assemblyName)) return { ok: false, reason: `${name}: AssemblyName "${assemblyName}" is not a valid assembly name (it names a file: no / \\ or :, and not . or ..).` };
   const outputType = (props.outputtype || (sdk === 'microsoft.net.sdk' ? 'Library' : 'Exe')).toLowerCase();
   const release = configuration.toLowerCase() === 'release';
   const prefix = project.dir === '/' ? '/' : `${project.dir}/`;
@@ -165,6 +167,8 @@ export function planBuild(files: ProjectFiles, path: string, configuration: stri
         })
         .sort();
   if (!sources.length) return { ok: false, reason: `${name}: no C# sources (.cs files) in ${project.dir}.` };
+
+  for (const ignored of msbuildFilesAbove(files, project.dir)) notes.push(`${ignored} is ignored: the browser runtime does not read MSBuild imports.`);
 
   const defines = [...list(expandDefines(props.defineconstants)), ...(release ? ['RELEASE'] : ['DEBUG']), 'TRACE', ...frameworkDefines(Number(framework[1]), Number(framework[2]))];
   const outputPath = project.fileBased
@@ -186,7 +190,7 @@ export function planBuild(files: ProjectFiles, path: string, configuration: stri
       globalUsings: globalUsingsOf(project, web),
       nullable: (props.nullable || 'disable').toLowerCase(),
       allowUnsafe: isTrue(props.allowunsafeblocks),
-      ...(props.langversion ? { langVersion: props.langversion } : {}),
+      langVersion: props.langversion || defaultLangVersion(Number(framework[1])),
       defines: [...new Set(defines)],
       optimize: props.optimize ? isTrue(props.optimize) : release,
       warningsAsErrors: isTrue(props.treatwarningsaserrors),
@@ -196,6 +200,37 @@ export function planBuild(files: ProjectFiles, path: string, configuration: stri
       notes,
     },
   };
+}
+
+/** The C# version the SDK compiles a target framework with when the project sets none (net5.0 → 9 … net10.0 → 14). */
+export const defaultLangVersion = (frameworkMajor: number) => String(frameworkMajor + 4);
+
+/** MSBuild files the SDK would import from the project's directory or above it: named in a build note, never read. */
+const MSBUILD_IMPORTS = ['Directory.Build.props', 'Directory.Build.targets', 'Directory.Packages.props'];
+
+function msbuildFilesAbove(files: ProjectFiles, dir: string): string[] {
+  const found: string[] = [];
+  for (let at = dir; ; at = dirname(at)) {
+    for (const file of MSBUILD_IMPORTS) if (files.readText(`${at === '/' ? '' : at}/${file}`) !== undefined) found.push(`${at === '/' ? '' : at}/${file}`);
+    if (at === '/') return found;
+  }
+}
+
+/** An assembly name usable as a file name: no separators or drive colon, not `.`/`..`, no control characters. */
+export const validAssemblyName = (name: string) => !!name.trim() && !/[/\\:\u0000-\u001f]/.test(name) && name !== '.' && name !== '..';
+
+/**
+ * What `dotnet clean` removes: the files the build produced (the assembly), and
+ * only when they are strictly under the project's `bin/` — anything else is
+ * refused with the reason. A file-based program's output lives outside the
+ * project: nothing to remove.
+ */
+export function cleanTargets(plan: Pick<DotnetBuildPlan, 'projectDir' | 'outputPath' | 'outputInProject'>): { ok: true; paths: string[] } | { ok: false; reason: string } {
+  if (!plan.outputInProject) return { ok: true, paths: [] };
+  const bin = `${plan.projectDir === '/' ? '' : normalizePath(plan.projectDir)}/bin/`;
+  const output = normalizePath(plan.outputPath);
+  if (!output.startsWith(bin) || output.length <= bin.length) return { ok: false, reason: `Refusing to clean ${output}: it is not under ${bin}.` };
+  return { ok: true, paths: [output] };
 }
 
 /** `$(DefineConstants)` inside DefineConstants is the SDK's own list (already added): drop the reference. */

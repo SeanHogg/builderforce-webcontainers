@@ -11,6 +11,13 @@ internal static class VirtualTcp
 {
     static readonly Dictionary<int, VirtualTcpStream> open = [];
 
+    /// <summary>
+    /// What arrived for a connection before its <see cref="ConnectAsync"/> continuation registered it: the Worker
+    /// relays a server that speaks first (a greeting, a banner) as soon as the dial succeeds, while the id is still
+    /// on its way back to .NET. Handed to the stream when it registers; nothing is lost.
+    /// </summary>
+    static readonly Dictionary<int, (List<byte[]> Chunks, bool Closed)> early = [];
+
     internal static bool IsLocal(string host) =>
         host is "localhost" or "0.0.0.0" or "::1" or "[::1]" || host.StartsWith("127.", StringComparison.Ordinal) || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase);
 
@@ -21,20 +28,38 @@ internal static class VirtualTcp
         if (connId < 0) throw new IOException($"Connection refused ({host}:{port}): nothing is listening on that port.");
         var stream = new VirtualTcpStream(connId);
         open[connId] = stream;
+        if (early.Remove(connId, out var held))
+        {
+            foreach (var chunk in held.Chunks) stream.Push(chunk);
+            if (held.Closed) Closed(connId);
+        }
         return stream;
     }
 
     internal static void Received(int connId, byte[] data)
     {
         if (open.TryGetValue(connId, out var stream)) stream.Push(data);
+        else Hold(connId).Chunks.Add(data);
     }
 
     internal static void Closed(int connId)
     {
         if (open.Remove(connId, out var stream)) stream.End();
+        else if (early.TryGetValue(connId, out var held)) early[connId] = held with { Closed = true };
+        else early[connId] = ([], true);
     }
 
-    internal static void Forget(int connId) => open.Remove(connId);
+    static (List<byte[]> Chunks, bool Closed) Hold(int connId)
+    {
+        if (!early.TryGetValue(connId, out var held)) early[connId] = held = ([], false);
+        return held;
+    }
+
+    internal static void Forget(int connId)
+    {
+        open.Remove(connId);
+        early.Remove(connId);
+    }
 
     sealed class VirtualTcpStream(int connId) : Stream
     {

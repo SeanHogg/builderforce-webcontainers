@@ -14,6 +14,7 @@ import {
   serviceGraph,
   type ApplicationSpec,
   type ProviderRegistry,
+  type ServiceSpec,
   type StateChange,
 } from '@seanhogg/builderforce-webcontainers-core/app';
 import { messageOf } from './asyncHelpers.js';
@@ -39,6 +40,11 @@ async function settle(starts: Array<[string, Promise<void>]>): Promise<void> {
   if (failures.length > 0) throw new ApplicationStartError(failures);
 }
 
+/** A fresh application identity: unique per runtime instance, never `workspace` or `platform`. */
+function mintApplicationId(projectId: string): string {
+  return `app:${projectId}:${crypto.randomUUID()}`;
+}
+
 export function startApplicationRuntime(spec: ApplicationSpec, options: ApplicationRuntimeOptions): ApplicationRuntime {
   const graph = serviceGraph(spec);
   const registry = isRegistry(options.providers) ? options.providers : createProviderRegistry(options.providers);
@@ -47,6 +53,13 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   const errors = createListeners<ServiceError>();
   const services = new Map<string, SupervisedService>();
   let disposed = false;
+  // Minted here, never taken from the spec: every service's processes carry it (W10 principle 3).
+  const applicationId = mintApplicationId(spec.projectId);
+  /** A client's login for a database: generated and held by the database's provider (W10 control 5). */
+  const databaseCredentials = (database: ServiceSpec, client: ServiceSpec) => {
+    const resolution = registry.resolve(database);
+    return resolution.ok ? resolution.provider.databaseCredentials?.(database, client) : undefined;
+  };
 
   for (const id of graph.startOrder) {
     // Start order: every dependency is created before its dependents.
@@ -55,7 +68,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
       id,
       superviseService({
         spec: spec.services.find((service) => service.id === id)!,
-        env: serviceEnv(spec, id),
+        env: serviceEnv(spec, id, { databaseCredentials }),
         registry,
         logs,
         onStateChange: (change) => stateChanges.emit(change),
@@ -66,6 +79,8 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
         stopTimeoutMs: options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs,
         restart: options.restart ?? {},
         stableAfterMs: options.stableAfterMs ?? DEFAULTS.stableAfterMs,
+        security: Object.freeze({ applicationId, serviceId: id }),
+        processes: options.processes,
       }),
     );
   }
@@ -80,10 +95,12 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   };
   const stopAll = async () => {
     for (const id of graph.stopOrder) await service(id).stop();
+    options.processes?.killApplication(applicationId); // whatever outlived its service: the whole attributed set
   };
 
   return {
     projectId: spec.projectId,
+    applicationId,
     async start() {
       assertLive();
       // All or nothing: a declined service means another target, never a half-started app.

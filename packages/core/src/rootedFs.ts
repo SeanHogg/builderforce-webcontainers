@@ -15,6 +15,7 @@
  */
 import { VirtualFileSystem, type DirectoryEntry, type FileContent, type FlatFiles, type FsChange, type SeedContent, type WatchOptions } from './vfs.js';
 import { normalizePath } from './paths.js';
+import { pathBelow } from './pathContainment.js';
 
 /**
  * A project path (`/src`, rooted at `/`) as a path in the base file system under
@@ -29,11 +30,7 @@ export function projectToBase(root: string, path: string): string {
 
 /** A base path as a project path (`/` is `root`); undefined when it lies outside `root`. */
 export function baseToProject(root: string, path: string): string | undefined {
-  const key = normalizePath(path);
-  const at = normalizePath(root);
-  if (at === '/') return key;
-  if (key === at) return '/';
-  return key.startsWith(at + '/') ? key.slice(at.length) : undefined;
+  return pathBelow(normalizePath(root), normalizePath(path));
 }
 
 class RootedFileSystem extends VirtualFileSystem {

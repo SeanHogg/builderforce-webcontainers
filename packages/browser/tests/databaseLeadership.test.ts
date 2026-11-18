@@ -10,7 +10,7 @@ import { startDatabaseHost } from '../src/database/databaseHost.js';
 import { pgliteDataDir } from '../src/app/pgliteProvider.js';
 import { databaseWorkerFactory, trackWorkers } from '../src/node/index.js';
 import type { WorkerLike } from '../src/node/processHost.js';
-import { appHost, collect, fakeDatabaseWorker, fakeLocks, installedPackage } from './databaseHelpers.js';
+import { appHost, collect, fakeDatabaseWorker, fakeLocks, installedPackage, trustConnections } from './databaseHelpers.js';
 
 const stubWorker = (): WorkerLike => ({ onmessage: null, postMessage: () => undefined, terminate: () => undefined });
 
@@ -59,7 +59,7 @@ describe('database shared by tabs', () => {
     const dataDir = pgliteDataDir(`tabs-${Date.now()}`, 'db');
     const tabA = appHost();
     const tabB = appHost(installedPackage('pg'));
-    const options = { createWorker: fakeDatabaseWorker, port: 5451, dataDir, locks, BroadcastChannel };
+    const options = { createWorker: fakeDatabaseWorker, port: 5451, dataDir, locks, BroadcastChannel, authenticate: trustConnections };
     const owner = await startDatabaseHost({ ...options, listen: tabA.databases.listenTcp });
     await owner.booted;
     let tookOver!: () => void;

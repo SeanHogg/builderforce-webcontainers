@@ -12,7 +12,7 @@
  * process ({@link PhpProcessKind.platform}), which `createPhpProvider` checks
  * services against.
  */
-import { NODE_ONLY, type ProcessKindPolicy, type ProcessRoute } from '../../node/processKinds.js';
+import { NODE_ONLY, unionCommandPatterns, type ProcessKindPolicy, type ProcessRoute } from '../../node/processKinds.js';
 import { shebangRoute } from '../shebangRoute.js';
 import type { Platform } from './composer/platform.js';
 import { PHP_COMMAND_PATTERN, isPhpCommand } from './phpCommand.js';
@@ -32,11 +32,6 @@ export interface PhpProcessKind extends ProcessKindPolicy {
   readonly platform: PhpPlatformRecord;
 }
 
-const unionPattern = (...patterns: Array<string | undefined>) => {
-  const present = patterns.filter((pattern): pattern is string => !!pattern);
-  return present.length ? present.map((pattern) => `(?:${pattern})`).join('|') : undefined;
-};
-
 /** A well-formed `php-platform` report, or undefined. */
 function platformReport(message: unknown): Platform | undefined {
   const report = message as { phpVersion?: unknown; extensions?: unknown };
@@ -49,7 +44,7 @@ export function createPhpProcessKind(options: PhpHostOptions = {}, next: Process
   let platform: Platform | undefined;
   return {
     platform: { current: () => platform },
-    foreignCommands: unionPattern(PHP_COMMAND_PATTERN, next.foreignCommands),
+    foreignCommands: unionCommandPatterns(PHP_COMMAND_PATTERN, next.foreignCommands),
     route(command, args, context): ProcessRoute {
       if (isPhpCommand(command)) return { kind: PHP_KIND, command, args };
       // A script run by path: its shebang may name PHP (`#!/usr/bin/env php`).

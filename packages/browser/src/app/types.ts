@@ -60,9 +60,24 @@ export interface ServiceSnapshot {
   error?: ServiceError;
 }
 
+/**
+ * The runtime's processes, attributed to the application identities this
+ * runtime mints (`ProcessHost.killApplication`): what ends an application's (or
+ * one service's) whole set — `detached` children included — when it stops.
+ */
+export interface AttributedProcesses {
+  killApplication(applicationId: string, serviceId?: string): void;
+}
+
 export interface ApplicationRuntimeOptions {
   /** The runtimes services run on (`createNodeProvider(runtime)`), or a registry of them. */
   providers: readonly RuntimeProvider[] | ProviderRegistry;
+  /**
+   * The runtime the providers spawn on, to end every process attributed to a
+   * service when it stops or fails, and to the application when it stops.
+   * Without it, only the processes the providers hold are ended.
+   */
+  processes?: AttributedProcesses;
   /** Default readiness timeout, when a service's readiness sets none. Default 120000ms. */
   readinessTimeoutMs?: number;
   /** How long a stopping service gets after `SIGTERM` before `SIGKILL`. Default 5000ms. */
@@ -81,6 +96,8 @@ export interface ApplicationRuntimeOptions {
 
 export interface ApplicationRuntime {
   readonly projectId: string;
+  /** This application's identity, minted when it was created: every service's processes carry it (`SecurityContext.applicationId`). */
+  readonly applicationId: string;
   /**
    * Start every service: each one after the services it depends on are ready.
    * First, every service must be accepted by a provider: if any is declined,

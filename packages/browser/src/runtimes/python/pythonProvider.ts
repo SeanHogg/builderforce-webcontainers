@@ -13,7 +13,8 @@ import type { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-cor
 import { createNodeProvider, type NodeProviderOptions } from '../../app/nodeProvider.js';
 import type { NodeServiceHost } from '../../app/nodeReadiness.js';
 import { isPythonCommand, parsePythonCommand } from './pythonCommand.js';
-import { normalizeName, planRequirements, readProjectRequirements, resolveFrom } from './requirements.js';
+import { resolveFrom } from '@seanhogg/builderforce-webcontainers-core';
+import { normalizeName, planRequirements, readProjectRequirements } from './requirements.js';
 
 export interface PythonProviderOptions extends NodeProviderOptions {
   /** The project's files: with them, a service whose requirements include native-only packages is declined up front, by name. */

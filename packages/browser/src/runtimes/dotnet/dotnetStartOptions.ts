@@ -1,28 +1,11 @@
 /**
- * The .NET Worker kind and the host's instructions to it. Until the process
- * protocol declares them (node/protocol.ts: `WorkerKind` gains `'dotnet'`,
- * `StartMessage` gains `dotnet?: DotnetStartOptions`), they are declared here
- * and the start message is read through {@link dotnetStartOptionsOf}.
+ * The .NET Worker kind and the host's instructions to it. The instructions are
+ * declared with the process protocol (node/protocol.ts: `StartMessage.dotnet`),
+ * beside Python's and PHP's; re-exported here for the .NET runtime's API.
  */
-import type { StartMessage } from '../../node/protocol.js';
+import type { WorkerKind } from '../../node/protocol.js';
 
-/** The Worker kind .NET processes run in. */
-export const DOTNET_WORKER_KIND = 'dotnet' as const;
+export type { DotnetStartOptions } from '../../node/protocol.js';
 
-/**
- * Host-only settings for .NET processes: a program's environment can change
- * none of them.
- */
-export interface DotnetStartOptions {
-  /**
-   * Where the .NET runtime bundle (scripts/build-dotnet-runtime.mjs) is served:
-   * absolute, CORS-enabled; in relay mode, reachable from the preview origin.
-   * There is no default — the bundle is the host's artifact.
-   */
-  bundleUrl?: string;
-}
-
-/** A start message as a .NET process receives it. */
-export type DotnetStartMessage = StartMessage & { dotnet?: DotnetStartOptions };
-
-export const dotnetStartOptionsOf = (message: StartMessage): DotnetStartOptions | undefined => (message as DotnetStartMessage).dotnet;
+/** The Worker kind .NET processes run in — the one constant for it. */
+export const DOTNET_KIND = 'dotnet' satisfies WorkerKind;

@@ -6,7 +6,7 @@
  * replaces), and what it declines — packages known not to work in the browser,
  * each with a reason naming it. Pure: files are read through a callback.
  */
-import { dirname, join, normalizePath } from '@seanhogg/builderforce-webcontainers-core';
+import { dirname, join, normalizePath, resolveFrom } from '@seanhogg/builderforce-webcontainers-core';
 import { tomlStringArray, tomlTable } from './tomlScan.js';
 
 export interface Requirement {
@@ -129,9 +129,6 @@ export function parsePyproject(text: string): Requirement[] {
   }
   return out;
 }
-
-/** `file` against the directory `dir` (an absolute `file` stays as it is), normalized. */
-export const resolveFrom =(dir: string, file: string) => (file.startsWith('/') ? normalizePath(file) : join(dir, file));
 
 /**
  * A requirements file (an absolute path) and everything it includes, each file

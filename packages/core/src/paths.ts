@@ -34,6 +34,11 @@ export function join(...segments: string[]): string {
   return normalizePath(segments.join('/'));
 }
 
+/** `path` against the directory `dir` (an absolute `path` stays as it is), normalised. */
+export function resolveFrom(dir: string, path: string): string {
+  return path.startsWith('/') ? normalizePath(path) : join(dir, path);
+}
+
 /** Lower-cased extension including the dot (`.tsx`), or `''`. Dotfiles have none. */
 export function extname(path: string): string {
   const base = basename(path);

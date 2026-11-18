@@ -7,10 +7,9 @@
  * the program inside the started runtime, returning its exit code (a served
  * app's when it stops).
  */
-import { dirname, type VfsOp, type VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
-import { resolveFrom } from '../python/requirements.js';
+import { dirname, resolveFrom, type VfsOp, type VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import { toMountPath } from '../emscripten/projectMirror.js';
-import { findProject, planBuild, type DotnetBuildPlan } from './dotnetBuildPlan.js';
+import { cleanTargets, findProject, planBuild, type DotnetBuildPlan } from './dotnetBuildPlan.js';
 import type { DotnetInfo, DotnetInvocation } from './dotnetCommand.js';
 import { readLaunchProfile, type LaunchResult } from './dotnetLaunch.js';
 import type { DotnetBundleManifest, LoadedDotnet } from './dotnetLoader.js';
@@ -88,8 +87,11 @@ export async function prepareInvocation(invocation: DotnetInvocation, context: P
       const planned = plan(context, invocation);
       if (!planned.ok) return fail(planned.reason);
       if (invocation.kind === 'clean') {
-        if (planned.plan.outputInProject) context.sendOps([{ op: 'remove', path: dirname(planned.plan.outputPath) }]);
-        io.stdout(`Cleaned ${dirname(planned.plan.outputPath)}\n`);
+        const targets = cleanTargets(planned.plan);
+        if (!targets.ok) return fail(targets.reason);
+        const present = targets.paths.filter((path) => context.files.isFile(path));
+        if (present.length) context.sendOps(present.map((path) => ({ op: 'remove', path })));
+        io.stdout(present.length ? present.map((path) => `  Deleting file "${path}".\n`).join('') : `  Nothing to clean in ${dirname(planned.plan.outputPath)}.\n`);
       } else {
         for (const note of planned.plan.notes) io.stdout(`  ${note}\n`);
         io.stdout(`  Restore complete: ${planned.plan.projectFile} uses ${planned.plan.packages.length ? 'bundled packages only' : 'no NuGet packages'}.\n`);
@@ -138,7 +140,9 @@ export function compilePlan(planned: DotnetBuildPlan, references: Map<string, st
     references: [...files].filter(Boolean),
     nullable: planned.nullable,
     allowUnsafe: planned.allowUnsafe,
-    langVersion: planned.langVersion ?? null,
+    langVersion: planned.langVersion,
+    // Only a file-based program's leading `#:` directives are blanked before compiling.
+    fileBased: planned.fileBased,
     defines: planned.defines,
     optimize: planned.optimize,
     warningsAsErrors: planned.warningsAsErrors,

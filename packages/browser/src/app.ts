@@ -25,5 +25,13 @@ export { DEFAULT_PGLITE_URL, PGLITE_VERSION } from './database/pgliteLoader.js';
 export * from './runtimes/python/index.js';
 // The PHP runtime: the `php` provider, `php -S`, Composer, PHP sockets and the runtime's Postgres PDO.
 export * from './runtimes/php/index.js';
+// The .NET runtime: the `dotnet` provider, in-browser builds, ASP.NET Core on virtual ports, Npgsql over virtual TCP.
+export * from './runtimes/dotnet/index.js';
+// The Rust runtime: the `rust` provider, prebuilt wasm32-wasip1 modules on the WASI host, axum services, tokio-postgres over virtual TCP.
+export * from './runtimes/rust/index.js';
+// What the interpreter runtimes share: paths against a directory (core's, re-exported: `./app` published it), hearing writes in an Emscripten FS without hooks.
+export { resolveFrom } from '@seanhogg/builderforce-webcontainers-core';
+export { trackWrappedFsWrites } from './runtimes/emscripten/wrappedFsWrites.js';
+export type { EmscriptenFsStream, WrappableEmscriptenFs } from './runtimes/emscripten/wrappedFsWrites.js';
 export type { ProcessKindPolicy, PythonExtensionRef, WorkerKind } from './node/index.js';
 export * from '@seanhogg/builderforce-webcontainers-core/app';

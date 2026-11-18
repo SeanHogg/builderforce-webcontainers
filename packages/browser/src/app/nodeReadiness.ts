@@ -3,13 +3,21 @@
  * opening (the runtime's own server signals), and a health URL answering over
  * the runtime's in-runtime localhost — never the page's network.
  */
-import type { PortChange, ProcessOptions, RuntimeProcess, ServerAddress } from '@seanhogg/builderforce-webcontainers-core';
+import type { PortChange, RuntimeProcess, SecurityContext, ServerAddress } from '@seanhogg/builderforce-webcontainers-core';
+import type { SpawnOptions } from '../node/processIdentity.js';
 import { sleep, within } from './asyncHelpers.js';
 import { exitWithin } from './stopService.js';
 
+/** Who a readiness probe runs as: the service's identity, from its directory (so it is held to the service's quota and view). */
+export interface ProbeIdentity {
+  identity: SecurityContext;
+  cwd: string;
+}
+
 /** The slice of a runtime (`startPreviewRuntime()`'s, or the core `Kernel` adapted) the Node provider uses. */
 export interface NodeServiceHost {
-  run(command: string, args: string[], options?: ProcessOptions): RuntimeProcess;
+  /** `options.identity`: who the process is (the service's minted identity); a host without identities ignores it. */
+  run(command: string, args: string[], options?: SpawnOptions): RuntimeProcess;
   /** A server started listening on a port (or a dev script handed off to the preview). */
   onServerListening(listener: (server: ServerAddress) => void): () => void;
   /** A virtual server opened or closed its port. */
@@ -18,8 +26,9 @@ export interface NodeServiceHost {
    * Send a request to a virtual server directly, without a process
    * (`PreviewRuntime.request`, the core `Kernel.request`). Without it, `http`
    * readiness probes from inside the runtime with a short `node -e` fetch.
+   * `caller`: the probing service's identity (the port registry decides with it).
    */
-  request?(port: number, request: { url: string }): Promise<{ status: number } | undefined>;
+  request?(port: number, request: { url: string }, caller?: SecurityContext): Promise<{ status: number } | undefined>;
   /**
    * Processes running, with their ports (`PreviewRuntime.listProcesses`). With
    * it, a service whose port another process still holds fails at once instead
@@ -49,13 +58,13 @@ export function httpProbeScript(url: string): string {
 }
 
 /** Ask once, within `timeoutMs`, whether `http://localhost:<port><path>` is healthy, from inside the runtime. */
-export async function probeHttp(host: NodeServiceHost, port: number, path: string, timeoutMs: number): Promise<boolean> {
+export async function probeHttp(host: NodeServiceHost, port: number, path: string, timeoutMs: number, as?: ProbeIdentity): Promise<boolean> {
   const url = path.startsWith('/') ? path : `/${path}`;
   if (host.request) {
-    const response = await within(host.request(port, { url }), { ms: timeoutMs, onTimeout: () => undefined }).catch(() => undefined);
+    const response = await within(host.request(port, { url }, as?.identity), { ms: timeoutMs, onTimeout: () => undefined }).catch(() => undefined);
     return response !== undefined && isHealthy(response.status);
   }
-  const probe = host.run('node', ['-e', httpProbeScript(`http://localhost:${port}${url}`)]);
+  const probe = host.run('node', ['-e', httpProbeScript(`http://localhost:${port}${url}`)], as && { identity: as.identity, cwd: as.cwd });
   void probe.combinedOutput.cancel().catch(() => undefined);
   const code = await exitWithin(probe, timeoutMs);
   if (code === undefined) probe.kill('SIGKILL');
@@ -63,10 +72,10 @@ export async function probeHttp(host: NodeServiceHost, port: number, path: strin
 }
 
 /** Probe until healthy; rejects when `signal` aborts (the process exited, the service stopped). */
-export async function untilHttpHealthy(host: NodeServiceHost, port: number, path: string, intervalMs: number, signal: AbortSignal): Promise<void> {
+export async function untilHttpHealthy(host: NodeServiceHost, port: number, path: string, intervalMs: number, signal: AbortSignal, as?: ProbeIdentity): Promise<void> {
   for (;;) {
     if (signal.aborted) throw new Error(`Gave up waiting for http://localhost:${port}${path}.`);
-    if (await probeHttp(host, port, path, Math.max(intervalMs * 4, 2000))) return;
+    if (await probeHttp(host, port, path, Math.max(intervalMs * 4, 2000), as)) return;
     await sleep(intervalMs, signal);
   }
 }
