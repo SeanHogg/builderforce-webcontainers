@@ -16,12 +16,12 @@ import {
   RELAY_ATTACH,
   RELAY_READY,
   RELAY_REATTACH,
-  RELAY_SPAWN,
   RELAY_UPDATE,
 } from './protocol.js';
 import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerLike } from './node/processHost.js';
-import { workerOverPort } from './relayWorker.js';
+import type { WorkerKind } from './node/protocol.js';
+import { spawnOverRelay } from './relayWorker.js';
 import { broadcastUpdate, waitForActive } from './worker.js';
 
 export interface PreviewTransport {
@@ -36,11 +36,12 @@ export interface PreviewTransport {
   /** Tell every frame showing the preview at `base` what changed: a hot update, or reload. */
   send(base: string, update: PreviewUpdate): void;
   /**
-   * Start a process worker on the preview origin. Only the relay has one to
-   * offer; same-origin mode runs processes on the host's origin, which is the
-   * trust it already chose.
+   * Start a process worker of `kind` (default `node`; `python` for Python
+   * commands) on the preview origin. Only the relay has one to offer;
+   * same-origin mode runs processes on the host's origin, which is the trust it
+   * already chose.
    */
-  createWorker?(): WorkerLike;
+  createWorker?(kind?: WorkerKind): WorkerLike;
   dispose(): void;
 }
 
@@ -128,11 +129,7 @@ export async function relayTransport(relayUrl: string): Promise<PreviewTransport
       return () => listeners.delete(listener);
     },
     send: (base, update) => post({ type: RELAY_UPDATE, base, update }),
-    createWorker() {
-      const channel = new MessageChannel();
-      post({ type: RELAY_SPAWN }, [channel.port2]);
-      return workerOverPort(channel.port1);
-    },
+    createWorker: (kind: WorkerKind = 'node') => spawnOverRelay(post, kind),
     dispose() {
       window.removeEventListener('message', onRelayMessage);
       listeners.clear();

@@ -50,9 +50,9 @@ export function fakeDatabaseWorker(): WorkerLike {
   return worker;
 }
 
-/** A runtime of process Workers plus what the pglite provider needs from it. */
-export function appHost(files: Record<string, string> = {}) {
-  const runtime = host(files);
+/** A runtime of process Workers plus what the pglite provider needs from it (`createWorker`: see `host`). */
+export function appHost(files: Record<string, string> = {}, createWorker?: Parameters<typeof host>[2], kinds?: Parameters<typeof host>[3]) {
+  const runtime = host(files, 2000, createWorker, kinds);
   const databases: DatabaseServiceHost = {
     listenTcp: (port, accept) => runtime.processes.ports.listen(port, async () => ({ status: 502, headers: {}, body: new ReadableStream() }), undefined, accept),
     createDatabaseWorker: fakeDatabaseWorker,

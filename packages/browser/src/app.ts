@@ -21,4 +21,7 @@ export type { DatabaseHost, DatabaseHostOptions } from './database/databaseHost.
 export { claimDatabase, DatabaseCoordinationError } from './database/databaseLeadership.js';
 export type { DatabaseOwnership, LockManagerLike } from './database/databaseLeadership.js';
 export { DEFAULT_PGLITE_URL, PGLITE_VERSION } from './database/pgliteLoader.js';
+// The Python runtime: the `python` provider, its command/requirements rules, the socket seam.
+export * from './runtimes/python/index.js';
+export type { ProcessKindPolicy, PythonExtensionRef, WorkerKind } from './node/index.js';
 export * from '@seanhogg/builderforce-webcontainers-core/app';

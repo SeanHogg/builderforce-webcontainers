@@ -284,3 +284,90 @@ Bytes travel over postMessage, never
 SharedArrayBuffer. Hosts other than localhost are refused, never dialled on the
 network. Not modelled: half-open connections (`end()` closes both directions),
 and HTTP over a raw connection to an HTTP-only port (it connects, then closes).
+
+### Python
+
+Python commands run in a Python process Worker — CPython on WebAssembly
+([Pyodide](https://pyodide.org) `314.0.7`, loaded from jsDelivr when a process
+starts, or from `python.pyodideIndexURL`) — beside the Node processes, on
+the same files and ports. `runtime.run('python', ['app.py'])`, a shell's
+`python app.py`, Node's `spawn('python')` and a script whose shebang names
+Python (`./manage.py`) all work. A `python` service uses
+`createPythonProvider(runtime)`:
+
+```ts
+import { createPgliteProvider, createPythonProvider, startApplicationRuntime } from '@seanhogg/builderforce-webcontainers/app';
+
+const app = startApplicationRuntime(
+  {
+    projectId,
+    services: [
+      { id: 'db', type: 'database', runtime: 'pglite', port: 5432, readiness: { kind: 'query' },
+        database: { engine: 'postgres', provider: 'pglite', persistent: true } },
+      { id: 'api', type: 'application', runtime: 'python', root: '/api', command: 'uvicorn',
+        args: ['main:app', '--port', '8000'], port: 8000, dependsOn: ['db'], readiness: { kind: 'http', path: '/health' } },
+    ],
+  },
+  { providers: [createPythonProvider(runtime, { fs: runtime.fs }), createPgliteProvider(runtime)] },
+);
+```
+
+- **Commands.** `python script.py | -c code | -m module`, `pip install`
+  (packages, `-r` files, `-i`/`--extra-index-url`, `PIP_INDEX_URL`, `pip install .`
+  for a project's own dependencies), and app servers read as declarations:
+  `uvicorn module:app [--port --app-dir --factory --interface wsgi]`,
+  `gunicorn [-k uvicorn.workers.UvicornWorker] module:app -b :port`, `hypercorn`,
+  `waitress-serve`, `flask [--app] run [-p]`, `fastapi run|dev [file]`. Port:
+  the option, else `PORT`, else the server's default. Interactive Python (no
+  script) is declined: there is no terminal.
+- **Packages (micropip).** Before a program runs, the project's
+  `requirements.txt` (with `-r` includes; hashes and per-line options ignored)
+  or `pyproject.toml` (`[project] dependencies`, Poetry) is installed, plus
+  whatever `pip install` added earlier in the session (the process host's
+  record: each earlier install is repeated with only the indexes it used, never
+  applied to the project's requirements; one that cannot be repeated is a
+  warning). Pyodide-built packages come from Pyodide's index, pure-Python wheels
+  from PyPI (or `PIP_INDEX_URL`). Packages that cannot work in the browser are declined **by name**
+  with a reason — known ones (`psycopg2`, `asyncpg`, `psutil`, `uvloop`,
+  `grpcio`, `torch`, …) before anything downloads, the rest when no usable wheel
+  exists; a declined dependency of another package is mocked so the rest
+  installs. App servers (`uvicorn`, `gunicorn`, …) are provided by the runtime,
+  never installed. The `python` provider declines a service whose requirements
+  hold a native-only package up front, so the host can choose another target.
+- **ASGI / WSGI, request-driven.** The runtime imports the app and calls it per
+  request on the service's virtual port: ASGI 3 (http scope, streamed body with
+  backpressure, `http.disconnect` when the reader hangs up, the lifespan
+  protocol when the app speaks it) and WSGI. `uvicorn.run(app)` in `__main__`
+  serves the same way. An app exception is a 500 carrying the traceback.
+  FastAPI's sync endpoints and `asyncio.to_thread` run inline (Pyodide has no
+  threads; `anyio.from_thread` raises rather than deadlock).
+- **Sockets.** Python's `socket.create_connection`, `socket.socket(...).connect`
+  and `bfwc.vsocket.open_connection` (asyncio) reach localhost ports in any
+  process — the PGlite gateway too, so an unmodified `pg8000` works with
+  `DATABASE_URL`. Blocking calls wait through JSPI (`pyodide.ffi.run_sync`), no
+  SharedArrayBuffer; timeouts and non-blocking mode are honoured, and a send
+  waits while the peer is more than 64 KiB behind (backpressure). The runtime's
+  connections have no half-close: `shutdown(SHUT_WR)` stops this side's sends,
+  and the peer sees end of stream only at `close()`. Only localhost is
+  reachable. Without JSPI, blocking calls raise `BlockingIOError` naming the
+  asyncio API.
+- **Files.** The project is mounted at `/project` in Python (`node_modules` and
+  `.git` are left out), and changes flow both ways: a file is sent when it is
+  closed, and while it stays open shortly after writes stop. Symlinks reach the
+  page as copies. No bytecode files are written.
+- **Extensions.** `python.extensions: [{ moduleUrl, exportName }]` (runtime
+  options only — never a program's environment) are imported inside each
+  Python Worker before the program; the export returns `{ jsModules, files,
+  root, provides, imports }` — JS modules Python can import, a Python package
+  written under `root` (outside `/project`; files may not leave it; first on
+  `sys.path`), the distribution names it satisfies (never installed or
+  declined) and their import names (default: `provides` with `-` as `_`).
+- **Limits.** No WebSockets or raw-TCP servers in Python apps yet; `input()` sees
+  only stdin that already arrived; a busy synchronous loop ends only when the
+  kill grace period terminates its Worker; no `subprocess`.
+- **Relay mode.** Python Workers run on the preview origin like Node's: serve
+  `dist/python-worker.js` (`pythonWorkerSource` in `./assets`) as
+  `<scope>/python-worker.js` beside `process-worker.js`. `pyodideIndexURL` and
+  every extension `moduleUrl` must then be absolute URLs served with CORS
+  headers that allow the preview origin (the Worker fetches and imports them
+  from there; relative URLs would resolve against the preview origin).

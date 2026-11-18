@@ -8,7 +8,7 @@
  * must restrict that with `Content-Security-Policy: frame-ancestors <host origins>`.
  */
 import { ATTACH, REATTACH, RELAY_ATTACH, RELAY_READY, RELAY_REATTACH, RELAY_SPAWN, RELAY_UPDATE } from './protocol.js';
-import { bridgeWorker, RELAY_PROCESS_WORKER } from './relayWorker.js';
+import { bridgeWorker, relayWorkerScript } from './relayWorker.js';
 import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 import { broadcastUpdate, waitForActive } from './worker.js';
 
@@ -32,8 +32,9 @@ async function start(): Promise<void> {
     } else if (data?.type === RELAY_UPDATE && typeof data.base === 'string') {
       broadcastUpdate(data.base, data.update ?? { type: 'reload' });
     } else if (data?.type === RELAY_SPAWN && event.ports[0]) {
-      // Process code runs HERE, on the preview origin, never on the host's.
-      bridgeWorker(event.ports[0], new Worker(new URL(`./${RELAY_PROCESS_WORKER}`, location.href), { name: 'bfwc-process' }));
+      // Process code runs HERE, on the preview origin, never on the host's — Node's or Python's.
+      const script = relayWorkerScript((data as { worker?: unknown }).worker);
+      bridgeWorker(event.ports[0], new Worker(new URL(`./${script.file}`, location.href), { name: script.name }));
     }
   });
 

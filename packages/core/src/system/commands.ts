@@ -54,6 +54,19 @@ export function findExecutable(fs: VirtualFileSystem, command: string, cwd: stri
   return undefined;
 }
 
+/**
+ * The command a script's shebang names (`#!/usr/bin/env python3` → `python3`,
+ * `#!/usr/bin/python` → `python`), or undefined without one. A host that runs
+ * some interpreters in other process kinds (Python) routes such scripts by it.
+ */
+export function shebangCommand(fs: VirtualFileSystem, path: string): string | undefined {
+  const firstLine = (fs.readText(path) ?? '').split('\n', 1)[0] ?? '';
+  const match = /^#!\s*(\S+)(?:\s+(?:-\S+\s+)*(\S+))?/.exec(firstLine);
+  if (!match) return undefined;
+  const program = match[1]!.split('/').pop()!;
+  return program === 'env' ? match[2] : program;
+}
+
 /** How to run a script file: its interpreter and arguments. */
 export function interpreterFor(fs: VirtualFileSystem, path: string): { name: 'node' | 'bfsh'; args: string[] } {
   const target = readBinLink(fs, path);

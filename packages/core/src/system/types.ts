@@ -125,6 +125,23 @@ export type UpgradeHandler = (request: HttpRequestData, socket: ByteChannel) => 
 /** Take a raw TCP connection (`net.Server`'s `'connection'`); `socket` is the server end. */
 export type ConnectionHandler = (socket: ByteChannel) => void;
 
+/**
+ * A server's place on a port. Where the port table lives elsewhere (a process
+ * Worker asks the page), `ready` settles once the table answered: it rejects
+ * with an `EADDRINUSE` error when another process took the port first. Without
+ * `ready` the registration is final when `listen` returns.
+ */
+export interface ListenRegistration {
+  port: number;
+  close(): void;
+  ready?: Promise<void>;
+}
+
+/** The error a refused `listen` reports, as Node's `net`/`http` servers emit it. */
+export function addressInUseError(port: number): Error {
+  return Object.assign(new Error(`listen EADDRINUSE: address already in use :::${port}`), { code: 'EADDRINUSE', errno: -98, syscall: 'listen', address: '::', port });
+}
+
 export interface System {
   fs: VirtualFileSystem;
   /** Outbound network (registry, `http.request`, `fetch`). */
@@ -135,7 +152,7 @@ export interface System {
    * `upgrade` takes over connections that ask to upgrade (WebSockets);
    * `connection` takes raw TCP connections (`net.createServer`). Returns the port and an unlisten.
    */
-  listen(port: number, handler: HttpHandler, upgrade?: UpgradeHandler, connection?: ConnectionHandler): { port: number; close(): void };
+  listen(port: number, handler: HttpHandler, upgrade?: UpgradeHandler, connection?: ConnectionHandler): ListenRegistration;
   /**
    * Open a raw TCP connection to a server on `port` in this runtime (loopback
    * only); resolves with the client end, or undefined when nothing listens there

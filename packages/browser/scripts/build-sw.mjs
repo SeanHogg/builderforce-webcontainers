@@ -4,9 +4,12 @@
 //   dist/relay.html  the cross-origin relay page, script inlined;
 //   dist/check/worker.js  the type-check worker;
 //   dist/node/worker.js   the process worker (Node runtime, npm, shell);
+//   dist/runtimes/python/worker.js  the Python process worker (Pyodide);
 //   dist/inference/worker.bundle.js  the local inference worker (Phase 1).
-// dist/assets.js exports both as strings, so a server (a Worker, an Express app)
-// can serve them straight from the installed package without copying files.
+// dist/assets.js exports what a preview origin serves (the service worker, the
+// relay page, the Node and Python process workers) as strings, so a server (a
+// Worker, an Express app) can serve them straight from the installed package
+// without copying files.
 import { build } from 'esbuild';
 import { mkdir, writeFile } from 'node:fs/promises';
 
@@ -43,6 +46,15 @@ await writeFile('dist/node/worker.js', processWorker);
 // relay.html serves this beside it.
 await writeFile('dist/process-worker.js', processWorker);
 
+// The Python process worker: one per Python process (python, pip, uvicorn, …),
+// Pyodide loaded from the CDN at start. The host finds it at
+// dist/runtimes/python/worker.js (beside tsc's runtimes/python modules); the
+// relay starts it from `<scope>/python-worker.js`, served beside relay.html.
+await mkdir('dist/runtimes/python', { recursive: true });
+const pythonWorker = await bundle('src/runtimes/python/worker.ts');
+await writeFile('dist/runtimes/python/worker.js', pythonWorker);
+await writeFile('dist/python-worker.js', pythonWorker);
+
 // The local inference worker (Phase 1): self-contained so it can run on a
 // dedicated worker thread. It gets its OWN path — dist/inference/worker.js is
 // tsc's ES module (startInferenceWorkerHost / runInferenceWorker, re-exported
@@ -60,7 +72,9 @@ await writeFile(
     `/** The cross-origin relay page — serve as \`<scope>/relay.html\`, text/html, with frame-ancestors set. */\n` +
     `export const relayHtml = ${JSON.stringify(relayHtml)};\n` +
     `/** The process worker — serve as \`<scope>/process-worker.js\`, text/javascript, beside relay.html. */\n` +
-    `export const processWorkerSource = ${JSON.stringify(processWorker)};\n`,
+    `export const processWorkerSource = ${JSON.stringify(processWorker)};\n` +
+    `/** The Python process worker — serve as \`<scope>/python-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export const pythonWorkerSource = ${JSON.stringify(pythonWorker)};\n`,
 );
 await writeFile(
   'dist/assets.d.ts',
@@ -69,5 +83,7 @@ await writeFile(
     `/** The cross-origin relay page — serve as \`<scope>/relay.html\`, text/html, with frame-ancestors set. */\n` +
     `export declare const relayHtml: string;\n` +
     `/** The process worker — serve as \`<scope>/process-worker.js\`, text/javascript, beside relay.html. */\n` +
-    `export declare const processWorkerSource: string;\n`,
+    `export declare const processWorkerSource: string;\n` +
+    `/** The Python process worker — serve as \`<scope>/python-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export declare const pythonWorkerSource: string;\n`,
 );

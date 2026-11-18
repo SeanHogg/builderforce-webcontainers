@@ -9,7 +9,8 @@
 import { EventEmitterBase } from '../events.js';
 import { Buffer } from '../buffer.js';
 import type { EventLoop } from '../loop.js';
-import type { ByteChannel, HttpRequestData, HttpStreamResponse, System } from '../../system/types.js';
+import type { ByteChannel, HttpRequestData, HttpStreamResponse, ListenRegistration, System } from '../../system/types.js';
+import { whenListening } from '../listening.js';
 import { pushStream } from '../../system/httpStream.js';
 import { FakeSocket, IncomingMessage } from './messages.js';
 import { ServerResponse } from './serverResponse.js';
@@ -32,7 +33,7 @@ export class Server extends EventEmitterBase {
   headersTimeout = 60000;
   requestTimeout = 300000;
   maxHeadersCount: number | null = null;
-  private registration?: { port: number; close(): void };
+  private registration?: ListenRegistration;
   private release?: () => void;
 
   constructor(private readonly deps: ServerDeps, options?: unknown, listener?: (req: IncomingMessage, res: ServerResponse) => void) {
@@ -46,15 +47,26 @@ export class Server extends EventEmitterBase {
     const first = args[0];
     const port = typeof first === 'object' && first ? Number((first as { port?: number }).port ?? 0) : Number(first ?? 0);
     if (callback) this.once('listening', callback);
+    let registration: ListenRegistration;
     try {
-      this.registration = this.deps.system.listen(port, (request) => this.handle(request), (request, socket) => this.upgrade(request, socket));
+      registration = this.registration = this.deps.system.listen(port, (request) => this.handle(request), (request, socket) => this.upgrade(request, socket));
     } catch (error) {
       queueCallback(() => this.emit('error', error));
       return this;
     }
-    this.listening = true;
+    this.listening = !registration.ready;
     this.release = this.deps.loop.hold();
-    queueCallback(() => this.emit('listening'));
+    whenListening(registration, () => this.registration === registration, (error) => {
+      if (!error) {
+        this.listening = true;
+        return this.emit('listening');
+      }
+      this.registration = undefined;
+      this.listening = false;
+      this.release?.();
+      this.release = undefined;
+      this.emit('error', error);
+    });
     return this;
   }
 

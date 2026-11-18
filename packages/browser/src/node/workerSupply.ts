@@ -9,10 +9,14 @@
  * it has acknowledged: one still loading stays the spare and that spawn goes
  * cold; one that failed, or fell further behind than the journal holds, is
  * dropped.
+ *
+ * Spares are Node Workers. A Python Worker is always cold: its cost is
+ * Pyodide's boot (seconds, and an interpreter's worth of memory), which a
+ * primed file system does not save, so a spare would only hold memory.
  */
 import type { VfsDelta, VfsSnapshot, VfsSnapshots } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerLike } from './processHost.js';
-import type { HostToWorker, WorkerToHost } from './protocol.js';
+import type { HostToWorker, WorkerKind, WorkerToHost } from './protocol.js';
 
 interface Spare {
   worker: WorkerLike;
@@ -32,15 +36,16 @@ export class WorkerSupply {
   primes = 0;
 
   constructor(
-    private readonly createWorker: () => WorkerLike,
+    private readonly createWorker: (kind: WorkerKind) => WorkerLike,
     private readonly snapshots: VfsSnapshots,
-    /** Keep a primed spare. When false every spawn is cold. */
+    /** Keep a primed (Node) spare. When false every spawn is cold. */
     private readonly warm: boolean,
   ) {}
 
-  /** A Worker for a new process, and what its `start` message carries for the file system. */
-  take(): { worker: WorkerLike; snapshot: VfsSnapshot | VfsDelta } {
+  /** A Worker of `kind` for a new process, and what its `start` message carries for the file system. */
+  take(kind: WorkerKind = 'node'): { worker: WorkerLike; snapshot: VfsSnapshot | VfsDelta } {
     if (this.disposed) throw new Error('The process host was disposed.');
+    if (kind === 'python') return { worker: this.createWorker('python'), snapshot: this.snapshots.snapshot() };
     const taken = this.fromSpare() ?? this.cold();
     if (this.warm) this.scheduleRefill();
     return taken;
@@ -71,7 +76,7 @@ export class WorkerSupply {
   }
 
   private cold(): { worker: WorkerLike; snapshot: VfsSnapshot } {
-    return { worker: this.createWorker(), snapshot: this.snapshots.snapshot() };
+    return { worker: this.createWorker('node'), snapshot: this.snapshots.snapshot() };
   }
 
   /** Prime a spare once the current task (the spawn) is done, so it never adds to a spawn's latency. */
@@ -80,7 +85,7 @@ export class WorkerSupply {
     this.refill = setTimeout(() => {
       this.refill = undefined;
       if (this.disposed || this.spare) return;
-      const worker = this.createWorker();
+      const worker = this.createWorker('node');
       const snapshot = this.snapshots.snapshot();
       const spare: Spare = { worker, seq: snapshot.seq, primed: false, failed: false };
       worker.onmessage = (event) => {

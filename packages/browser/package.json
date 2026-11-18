@@ -31,7 +31,9 @@
     },
     "./sw.js": "./dist/sw.js",
     "./relay.html": "./dist/relay.html",
-    "./process-worker.js": "./dist/process-worker.js"
+    "./process-worker.js": "./dist/process-worker.js",
+    "./python-worker.js": "./dist/python-worker.js",
+    "./runtimes/python/worker.js": "./dist/runtimes/python/worker.js"
   },
   "type": "module",
   "sideEffects": false,

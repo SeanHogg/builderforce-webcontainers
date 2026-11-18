@@ -36,6 +36,7 @@ import {
 import { PREVIEW_ID, isPortPath, isWireCancel, isWireRequest, previewBase, type WireReply, type WireResponse } from './protocol.js';
 import { createPortResponder, createProcessHost, databaseWorkerFactory, trackWorkers, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
 import type { WorkerLike } from './node/processHost.js';
+import { createPythonProcessKind, type PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
 import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from './previewMessages.js';
 import { listenToPreviewBridge } from './previewBridge.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
@@ -102,6 +103,8 @@ export interface CommonRuntimeOptions {
   previewScripts?: string[];
   /** The Node runtime behind `run` (process workers, npm registry). */
   node?: NodeRuntimeOptions;
+  /** Python processes (`python`, `pip`, `uvicorn` …): where Pyodide is served, host extensions. */
+  python?: PythonHostOptions;
 }
 
 export interface RuntimeBuildOptions {
@@ -258,7 +261,8 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const previewUrl = new URL(base, transport.origin).href;
   // In relay mode processes run on the preview origin (the relay starts them), never the host's.
   const node = { ...options.node, createWorker: options.node?.createWorker ?? transport.createWorker?.bind(transport) };
-  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, previewUrl, options: node });
+  // Python commands run in Python process Workers (Pyodide), beside the Node ones.
+  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, previewUrl, options: node, kinds: createPythonProcessKind(options.python) });
   // Databases never run where processes do in relay mode: their Workers start on this (host) origin.
   const databaseWorkers = trackWorkers(databaseWorkerFactory(options.node));
 

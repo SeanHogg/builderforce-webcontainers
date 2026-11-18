@@ -18,7 +18,9 @@ export type {
   ConnectionHandler,
   ThreadInfo,
   StdioChunk,
+  ListenRegistration,
 } from './types.js';
+export { addressInUseError } from './types.js';
 export { createIpcEndpoint, createIpcPair } from './ipc.js';
 export type { IpcEndpoint } from './ipc.js';
 export { PortRegistry, parsePortPath } from './ports.js';
@@ -36,7 +38,7 @@ export { runProgram, runArguments, toRuntimeProcess, allocatePid } from './proce
 export type { RuntimeProcess, RunProgramOptions } from './process.js';
 export { ServerEvents } from './serverEvents.js';
 export type { ServerAddress, PortChange } from './serverEvents.js';
-export { resolveCommand, findExecutable, binDirectories, interpreterFor, commandNotFound } from './commands.js';
+export { resolveCommand, findExecutable, binDirectories, interpreterFor, commandNotFound, shebangCommand } from './commands.js';
 export type { ResolvedCommand } from './commands.js';
 export { InputQueue, LineDiscipline, toTerminal } from './terminal.js';
 export { SIGNAL_EXIT_CODES, SIGPIPE_STATUS, signalExitCode, BrokenPipeError, isBrokenPipe, brokePipe } from './signals.js';

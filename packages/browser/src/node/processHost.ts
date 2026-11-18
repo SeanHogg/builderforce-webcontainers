@@ -8,6 +8,12 @@
  * process — however deep — can be killed by terminating its worker. Ending a
  * process (exit, kill, dispose) ends its children too, unless spawned `detached`.
  *
+ * A process's Worker kind follows its command, as the host's `ProcessKindPolicy`
+ * routes it (processKinds.ts): with the Python runtime's policy, Python
+ * commands run in a Python process Worker, everything else in a Node one. Both
+ * speak the same protocol, so a shell's `python app.py` or Node's
+ * `spawn('python')` is just another child.
+ *
  * Responses from a worker's servers stream through here chunk by chunk (see
  * responseWire.ts); connections — upgraded (WebSockets) and raw TCP, to a
  * worker's servers or dialled by it — are relayed as raw bytes (connectionRelay.ts).
@@ -33,12 +39,14 @@ import {
   type VfsSnapshots,
   type VirtualFileSystem,
 } from '@seanhogg/builderforce-webcontainers-core';
-import type { HostToWorker, WorkerToHost } from './protocol.js';
+import type { HostToWorker, WorkerKind, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
+import { NODE_ONLY, type ProcessKindPolicy } from './processKinds.js';
 import { ResponseReceiver, sendResponse } from './responseWire.js';
 import { ChildRelay, isChildMessage } from './childRelay.js';
 import { ConnectionRelay, isConnectionMessage } from './connectionRelay.js';
 import { WorkerSupply } from './workerSupply.js';
+import { notListening } from './servedPorts.js';
 import { FsSync } from './fsSync.js';
 
 /** The part of `Worker` the host uses — a real Worker, or an in-thread fake in tests. */
@@ -53,7 +61,10 @@ export interface ProcessHostOptions {
   fs: VirtualFileSystem;
   /** Where a process starts when `run` names no `cwd`. Default `/`. */
   cwd?: string;
-  createWorker(): WorkerLike;
+  /** A process Worker of `kind` (as `kinds` routes the command). */
+  createWorker(kind: WorkerKind): WorkerLike;
+  /** Which Worker kind runs a command, and what that kind needs. Default: every process is Node. */
+  kinds?: ProcessKindPolicy;
   /** Origin and base path previews are served under (`/__bfwc/<id>/`). */
   previewOrigin: string;
   previewBase: string;
@@ -83,6 +94,8 @@ export interface ProcessInfo {
 
 interface Proc {
   pid: number;
+  /** The Worker kind running it: what it may send is judged by this, never by its own claims. */
+  kind: WorkerKind;
   info: Omit<ProcessInfo, 'ports'>;
   worker: WorkerLike;
   stdout: Set<(chunk: StdioChunk) => void>;
@@ -115,10 +128,12 @@ export class ProcessHost {
   private readonly fsSync: FsSync<Proc>;
   /** New processes' Workers: a primed spare when there is one, else a new Worker and the snapshot. */
   readonly workers: WorkerSupply;
+  private readonly kinds: ProcessKindPolicy;
 
   constructor(private readonly options: ProcessHostOptions) {
+    this.kinds = options.kinds ?? NODE_ONLY;
     this.fsSync = new FsSync(options.fs, (proc, ops) => this.post(proc, { type: 'fs', ops }));
-    this.workers = new WorkerSupply(() => options.createWorker(), this.fsSync.snapshots, options.warmWorker !== false);
+    this.workers = new WorkerSupply((kind) => options.createWorker(kind), this.fsSync.snapshots, options.warmWorker !== false);
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
       for (const proc of this.procs) this.post(proc, { type: 'ports', open: type === 'open' ? [port] : [], closed: type === 'close' ? [port] : [] });
@@ -143,14 +158,17 @@ export class ProcessHost {
     return toRuntimeProcess(this.spawnChild(command, args, options), !!options.terminal);
   }
 
-  spawnChild(command: string, args: string[] = [], options: ProcessOptions = {}): ChildHandle {
+  spawnChild(requested: string, requestedArgs: string[] = [], options: ProcessOptions = {}): ChildHandle {
     const pid = allocatePid();
     const cwd = options.cwd ?? this.options.cwd ?? '/';
-    const { worker, snapshot } = this.workers.take();
+    const env = { ...DEFAULT_ENV, ...this.options.env, ...options.env };
+    const { kind, command, args } = this.kinds.route(requested, requestedArgs, { fs: this.options.fs, cwd, env });
+    const { worker, snapshot } = this.workers.take(kind);
     let resolveExit!: (code: number) => void;
     const exit = new Promise<number>((resolve) => (resolveExit = resolve));
     const proc: Proc = {
       pid,
+      kind,
       info: { pid, command, args: [...args], cwd, startedAt: Date.now() },
       worker,
       stdout: new Set(),
@@ -185,7 +203,7 @@ export class ProcessHost {
       command,
       args,
       cwd,
-      env: { ...DEFAULT_ENV, ...this.options.env, ...options.env },
+      env,
       terminal: options.terminal,
       ipc: options.ipc,
       thread: options.thread,
@@ -196,6 +214,8 @@ export class ProcessHost {
       previewUrl: this.options.previewUrl,
       registry: this.options.registry,
       packageCache: this.options.packageCache !== false,
+      foreignCommands: this.kinds.foreignCommands,
+      ...this.kinds.startOptions(kind),
     });
 
     return {
@@ -306,8 +326,10 @@ export class ProcessHost {
             message.tcp ? (socket) => (proc.exited ? socket.close() : proc.connections.accept(port, socket)) : undefined,
           );
           proc.registrations.set(message.port, registration);
+          this.post(proc, { type: 'listened', port: message.port, id: message.id });
         } catch (error) {
-          for (const l of proc.stderr) l(`${(error as Error).message}\n`);
+          // The port is taken: the process must learn it does not own it.
+          this.post(proc, { type: 'listen-failed', port: message.port, message: (error as Error).message, id: message.id });
         }
         return;
       }
@@ -330,6 +352,9 @@ export class ProcessHost {
       case 'listening':
         this.servers.announce({ port: message.port, url: message.url });
         return;
+      default:
+        // A message of one process kind (python-installed): its policy decides, knowing who sent it.
+        this.kinds.receive(proc.kind, message);
     }
   }
 
@@ -338,6 +363,6 @@ export class ProcessHost {
     const reqId = this.nextReq++;
     const response = proc.responses.expect(reqId, () => this.post(proc, { type: 'request-cancel', reqId }));
     this.post(proc, { type: 'http-request', reqId, port, request });
-    return (await response) ?? textResponse(502, `Nothing is listening on port ${port}.`);
+    return (await response) ?? notListening(port);
   }
 }

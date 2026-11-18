@@ -2,7 +2,8 @@
 import { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from '../src/node/processHost.js';
 import { createWorkerProcess } from '../src/node/workerProcess.js';
-import type { HostToWorker } from '../src/node/protocol.js';
+import type { HostToWorker, WorkerKind } from '../src/node/protocol.js';
+import type { ProcessKindPolicy } from '../src/node/processKinds.js';
 
 /** A Worker that runs the process in this thread, with structured-clone messaging like the real thing. */
 export function fakeWorker(): WorkerLike {
@@ -28,10 +29,11 @@ export function fakeWorker(): WorkerLike {
   return worker;
 }
 
-export function host(files: Record<string, string> = {}, killGraceMs = 2000) {
+/** `createWorker` gets the Worker kind (`python` for Python commands); default: an in-thread Node process Worker for every kind. */
+export function host(files: Record<string, string> = {}, killGraceMs = 2000, createWorker: (kind: WorkerKind) => WorkerLike = fakeWorker, kinds?: ProcessKindPolicy) {
   const fs = new VirtualFileSystem();
   fs.writeTree(files);
-  const processes = new ProcessHost({ fs, createWorker: fakeWorker, previewOrigin: 'https://app.test', previewBase: '/__bfwc/p1/', previewUrl: 'https://app.test/__bfwc/p1/', killGraceMs, packageCache: false });
+  const processes = new ProcessHost({ fs, createWorker, kinds, previewOrigin: 'https://app.test', previewBase: '/__bfwc/p1/', previewUrl: 'https://app.test/__bfwc/p1/', killGraceMs, packageCache: false });
   return { fs, processes };
 }
 

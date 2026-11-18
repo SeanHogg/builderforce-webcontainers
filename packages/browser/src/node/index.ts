@@ -5,9 +5,13 @@
  */
 import type { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from './processHost.js';
+import type { ProcessKindPolicy } from './processKinds.js';
+import type { WorkerKind } from './protocol.js';
 
 export { ProcessHost } from './processHost.js';
 export type { ProcessHostOptions, ProcessInfo, WorkerLike } from './processHost.js';
+export type { ProcessKindPolicy, ProcessRoute } from './processKinds.js';
+export type { PythonExtensionRef, WorkerKind } from './protocol.js';
 export { createWorkerProcess } from './workerProcess.js';
 export { servePortRequest, createPortResponder, openPortResponse, injectBridge } from './portResponder.js';
 export type { PortResponder, PortResponderOptions, OpenedPortResponse } from './portResponder.js';
@@ -19,8 +23,14 @@ export interface NodeRuntimeOptions {
    * bundlers that understand `new Worker(new URL(…))` handle automatically.
    */
   workerUrl?: string | URL;
-  /** Build each process Worker yourself (CSP, a test double). Wins over `workerUrl`. */
-  createWorker?: () => WorkerLike;
+  /** Where this package's `dist/runtimes/python/worker.js` (the Python process Worker) is served. Default: resolved beside this module. */
+  pythonWorkerUrl?: string | URL;
+  /**
+   * Build each process Worker yourself (CSP, a test double, the relay's
+   * `PreviewTransport.createWorker`). It is told the Worker kind the command
+   * needs: `python` for Python commands, else `node`. Wins over the URLs.
+   */
+  createWorker?: (kind: WorkerKind) => WorkerLike;
   /** Build each database Worker yourself. It must run on the host origin, never the preview origin. Wins over `workerUrl`. */
   createDatabaseWorker?: () => WorkerLike;
   /** npm registry. Default https://registry.npmjs.org (it sends CORS headers). */
@@ -38,9 +48,15 @@ export interface NodeRuntimeOptions {
 const bundledWorker = (options: NodeRuntimeOptions, name: string) => () =>
   new Worker(options.workerUrl ?? new URL('./worker.js', import.meta.url), { name }) as unknown as WorkerLike;
 
-/** How this runtime starts a process Worker: the option (in relay mode, the relay's, on the preview origin), else the bundled script. */
-export function workerFactory(options: NodeRuntimeOptions = {}): () => WorkerLike {
-  return options.createWorker ?? bundledWorker(options, 'bfwc-process');
+const bundledPythonWorker = (options: NodeRuntimeOptions) => () =>
+  new Worker(options.pythonWorkerUrl ?? new URL('../runtimes/python/worker.js', import.meta.url), { name: 'bfwc-python' }) as unknown as WorkerLike;
+
+/** How this runtime starts a process Worker of a kind: the option (in relay mode, the relay's, on the preview origin), else the bundled script. */
+export function workerFactory(options: NodeRuntimeOptions = {}): (kind: WorkerKind) => WorkerLike {
+  if (options.createWorker) return options.createWorker;
+  const node = bundledWorker(options, 'bfwc-process');
+  const python = bundledPythonWorker(options);
+  return (kind) => (kind === 'python' ? python() : node());
 }
 
 /**
@@ -74,7 +90,7 @@ export function trackWorkers(create: () => WorkerLike): { create(): WorkerLike; 
   };
 }
 
-export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions }): ProcessHost {
+export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions; kinds?: ProcessKindPolicy }): ProcessHost {
   const { options = {} } = args;
   return new ProcessHost({
     fs: args.fs,
@@ -88,5 +104,6 @@ export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; b
     env: options.env,
     killGraceMs: options.killGraceMs,
     warmWorker: options.warmWorker,
+    kinds: args.kinds,
   });
 }

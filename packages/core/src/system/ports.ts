@@ -4,7 +4,7 @@
  * in one process is reachable from another (`fetch('http://localhost:3000')`)
  * and from the preview service worker (`/__bfwc/<id>/__port/3000/`).
  */
-import type { ByteChannel, ConnectionHandler, HttpHandler, HttpRequestData, HttpResponseData, HttpStreamResponse, UpgradeHandler } from './types.js';
+import { addressInUseError, type ByteChannel, type ConnectionHandler, type HttpHandler, type HttpRequestData, type HttpResponseData, type HttpStreamResponse, type UpgradeHandler } from './types.js';
 import { bufferResponse } from './httpStream.js';
 import { acceptConnection, createChannelPair } from './byteChannel.js';
 
@@ -30,7 +30,7 @@ export class PortRegistry {
       actual = this.nextEphemeral++;
     }
     if (this.handlers.has(actual)) {
-      throw Object.assign(new Error(`listen EADDRINUSE: address already in use :::${actual}`), { code: 'EADDRINUSE', errno: -98, syscall: 'listen', address: '::', port: actual });
+      throw addressInUseError(actual);
     }
     this.handlers.set(actual, handler);
     if (upgrade) this.upgrades.set(actual, upgrade);

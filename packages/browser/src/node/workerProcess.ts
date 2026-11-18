@@ -11,7 +11,9 @@
 import {
   VirtualFileSystem,
   acceptConnection,
+  addressInUseError,
   applyOps,
+  basename,
   changeToOp,
   commandNotFound,
   createIpcEndpoint,
@@ -19,7 +21,6 @@ import {
   mountSnapshot,
   resolveCommand,
   runProgram,
-  textResponse,
   type ChildHandle,
   type ConnectionHandler,
   type FsChange,
@@ -32,7 +33,8 @@ import {
 } from '@seanhogg/builderforce-webcontainers-core';
 import type { FsOp, HostToWorker, StartMessage, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
-import { ResponseReceiver, sendResponse } from './responseWire.js';
+import { ResponseReceiver } from './responseWire.js';
+import { createServedPorts } from './servedPorts.js';
 import { createWorkerConnections, isWorkerConnectionMessage } from './workerConnections.js';
 
 export interface WorkerProcessDeps {
@@ -50,14 +52,30 @@ const EPHEMERAL = 49152;
 export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message: HostToWorker): void } {
   const fs = new VirtualFileSystem();
   const handlers = new Map<number, { handler: HttpHandler; upgrade?: UpgradeHandler; accept?: ConnectionHandler }>();
-  const knownPorts = new Set<number>();
+  /** Listens the page has not answered yet, by id: the entry they registered and how to settle `ready`. */
+  const awaiting = new Map<number, { port: number; entry: object; settle(error?: Error): void }>();
+  let nextListen = 1;
+  const answered = (id: number | undefined, error?: Error) => {
+    const listen = id === undefined ? undefined : awaiting.get(id);
+    if (!listen) return;
+    awaiting.delete(id!);
+    // Only the registration the page refused goes: a later listen on the same port is not touched.
+    if (error && handlers.get(listen.port) === listen.entry) handlers.delete(listen.port);
+    listen.settle(error);
+  };
+  const served = createServedPorts({
+    post: deps.post,
+    handlerFor: (port) => handlers.get(port)?.handler,
+    // Another process holds the port: the server hears EADDRINUSE through its 'error' event, as in Node.
+    onListenFailed: (port, _message, id) => answered(id, addressInUseError(port)),
+    onListened: (_port, id) => answered(id),
+  });
+  const knownPorts = served.taken;
   const children = new Map<number, { stdout: Set<(chunk: StdioChunk) => void>; stderr: Set<(chunk: StdioChunk) => void>; exit: (code: number) => void; ipc?: ReturnType<typeof createIpcEndpoint> }>();
   /** This process's channel to its parent, when it was spawned with `ipc`. */
   let parentChannel: ReturnType<typeof createIpcEndpoint> | undefined;
   /** Responses to this process's loopback requests, streaming in from the page. */
   const loopbacks = new ResponseReceiver();
-  /** Responses this process's servers are streaming to the page, by the page's request id. */
-  const serving = new Map<number, () => void>();
   /** Connections to this process's servers, and the ones it dials. */
   const connections = createWorkerConnections(deps.post);
   let nextChild = 1;
@@ -125,28 +143,36 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
     const { snapshot } = message;
     quietly(() => (snapshot.pack ? mountSnapshot(fs, snapshot) : applyOps(fs, snapshot.ops)));
     for (const port of message.ports) knownPorts.add(port);
+    /** Commands another Worker kind runs (Python): spawned through the page, never resolved here. */
+    const foreign = message.foreignCommands ? new RegExp(message.foreignCommands) : undefined;
 
     const system: System = {
       fs,
       fetch: deps.fetch,
       spawn(command, args, options = {}) {
         // Resolve here, against the mirror, so a missing command fails synchronously
-        // with ENOENT exactly as it does in-process.
+        // with ENOENT exactly as it does in-process. Python commands run in a Python
+        // process Worker the page starts for them.
         const cwd = options.cwd ?? message.cwd;
         const env = { ...message.env, ...options.env };
-        if (!resolveCommand(fs, programs, command, args, cwd, env)) throw commandNotFound(command);
+        if (!foreign?.test(basename(command)) && !resolveCommand(fs, programs, command, args, cwd, env)) throw commandNotFound(command);
         return remoteChild(command, args, { ...options, cwd, env });
       },
       listen(port, handler, upgrade, accept) {
         let actual = port;
         if (!actual) for (actual = EPHEMERAL + (message.pid % 1000) * 8; knownPorts.has(actual); actual++);
-        if (knownPorts.has(actual)) throw Object.assign(new Error(`listen EADDRINUSE: address already in use :::${actual}`), { code: 'EADDRINUSE', errno: -98, syscall: 'listen', port: actual });
+        if (knownPorts.has(actual)) throw addressInUseError(actual);
         knownPorts.add(actual);
         const entry = { handler, upgrade, accept };
         handlers.set(actual, entry);
-        deps.post({ type: 'listen', port: actual, tcp: accept !== undefined });
+        const id = nextListen++;
+        // Settled by the page's answer: another process may have taken the port first.
+        const ready = new Promise<void>((resolve, reject) => awaiting.set(id, { port: actual, entry, settle: (error) => (error ? reject(error) : resolve()) }));
+        ready.catch(() => undefined); // a caller that never looks must not see an unhandled rejection
+        deps.post({ type: 'listen', port: actual, tcp: accept !== undefined, id });
         return {
           port: actual,
+          ready,
           close() {
             if (handlers.get(actual) !== entry) return;
             handlers.delete(actual);
@@ -204,6 +230,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
 
   return {
     receive(message) {
+      if (served.receive(message)) return;
       switch (message.type) {
         case 'prime':
           quietly(() => mountSnapshot(fs, message.snapshot));
@@ -220,10 +247,6 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
           return process?.resize?.(message.cols, message.rows);
         case 'fs':
           return apply(message.ops);
-        case 'ports':
-          for (const port of message.open) knownPorts.add(port);
-          for (const port of message.closed) if (!handlers.has(port)) knownPorts.delete(port);
-          return;
         case 'child-out':
           for (const l of children.get(message.childId)?.[message.stream] ?? []) l(message.data);
           return;
@@ -247,15 +270,6 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
           children.delete(message.childId);
           return;
         }
-        case 'http-request': {
-          const { reqId } = message;
-          const entry = handlers.get(message.port);
-          const response = entry ? entry.handler(message.request) : Promise.resolve(textResponse(502, `Nothing is listening on port ${message.port}.`));
-          serving.set(reqId, sendResponse(deps.post, reqId, response, () => serving.delete(reqId)));
-          return;
-        }
-        case 'request-cancel':
-          return serving.get(message.reqId)?.();
         case 'response-head':
         case 'response-chunk':
         case 'response-end':

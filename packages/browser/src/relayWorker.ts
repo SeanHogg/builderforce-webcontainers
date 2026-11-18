@@ -10,6 +10,8 @@
  * tell the difference.
  */
 import type { WorkerLike } from './node/processHost.js';
+import type { WorkerKind } from './node/protocol.js';
+import { RELAY_SPAWN } from './protocol.js';
 
 type ToWorker = { kind: 'message'; data: unknown } | { kind: 'terminate' };
 type FromWorker = { kind: 'message'; data: unknown } | { kind: 'error'; message: string };
@@ -49,5 +51,20 @@ export function bridgeWorker(port: MessagePort, worker: Worker): void {
   };
 }
 
+/** Host side: ask the relay (through `post`) to start a Worker of `kind` on the preview origin; the Worker as a `WorkerLike`. */
+export function spawnOverRelay(post: (message: unknown, transfer: Transferable[]) => void, kind: WorkerKind = 'node'): WorkerLike {
+  const channel = new MessageChannel();
+  post({ type: RELAY_SPAWN, worker: kind }, [channel.port2]);
+  return workerOverPort(channel.port1);
+}
+
 /** The process worker's file name beside `relay.html` on the preview origin. */
 export const RELAY_PROCESS_WORKER = 'process-worker.js';
+
+/** The Python process worker's file name beside `relay.html` on the preview origin. */
+export const RELAY_PYTHON_WORKER = 'python-worker.js';
+
+/** The script the relay starts for a Worker kind (anything unknown is a Node process Worker). */
+export function relayWorkerScript(kind: unknown): { file: string; name: string } {
+  return kind === 'python' ? { file: RELAY_PYTHON_WORKER, name: 'bfwc-python' } : { file: RELAY_PROCESS_WORKER, name: 'bfwc-process' };
+}

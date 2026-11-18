@@ -14,6 +14,10 @@
  * by the worker (`dial`); both carry raw bytes and flow-control credits both
  * ways (connectionRelay.ts on the page, workerConnections.ts in the worker).
  *
+ * A server's `listen` is answered: `listened` once the page registered it,
+ * `listen-failed` when it cannot (the port is taken), so the process learns it
+ * does not own the port.
+ *
  * A message channel (fork, worker threads) is `ipc` / `ipc-disconnect` between a
  * process and the page (its parent's side), and `child-ipc` /
  * `child-ipc-disconnect` between a parent process and the page (its child's side).
@@ -22,6 +26,34 @@ import type { HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo, VfsDelt
 
 /** One file-system change, either way (the core journal's op). */
 export type FsOp = VfsOp;
+
+/** Which process Worker runs a command: the Node runtime's, or the Python runtime's (Pyodide). */
+export type WorkerKind = 'node' | 'python';
+
+/** A host-provided Python extension: a module the Python Worker imports, whose export builds it (runtimes/python/pythonExtensions.ts). */
+export interface PythonExtensionRef {
+  moduleUrl: string;
+  exportName: string;
+}
+
+/** One successful `pip install`: its requirement specs and the package indexes they came from (replayed together, never mixed with another's). */
+export interface PipInstall {
+  specs: string[];
+  indexUrls: string[];
+}
+
+/**
+ * The host's instructions to a Python process Worker. They travel in the start
+ * message, never the environment, so a program's env cannot redirect where
+ * Pyodide or an extension is loaded from.
+ */
+export interface PythonStartOptions {
+  /** Where Pyodide is served. Default: the pinned jsDelivr build. */
+  indexURL?: string;
+  extensions?: PythonExtensionRef[];
+  /** This session's earlier `pip install`s, in order: each replayed with only its own indexes. */
+  installs?: PipInstall[];
+}
 
 export interface StartMessage {
   type: 'start';
@@ -49,6 +81,14 @@ export interface StartMessage {
   registry?: string;
   /** Use Cache Storage for npm tarballs. */
   packageCache: boolean;
+  /** Set for a Python process. */
+  python?: PythonStartOptions;
+  /**
+   * Commands another Worker kind runs (a RegExp source over the command's base
+   * name): a Node process spawns them through the page instead of resolving
+   * them itself.
+   */
+  foreignCommands?: string;
 }
 
 /** A streamed response, chunk by chunk; `head: null` means nothing listens on that port (loopback only). */
@@ -94,6 +134,10 @@ export type HostToWorker =
   | { type: 'resize'; cols: number; rows: number }
   | { type: 'fs'; ops: FsOp[] }
   | { type: 'ports'; open: number[]; closed: number[] }
+  /** The page registered the process's `listen` (`id` echoes the listen's). */
+  | { type: 'listened'; port: number; id?: number }
+  /** The process's `listen` on `port` was refused (another process holds it): it does not own the port. */
+  | { type: 'listen-failed'; port: number; message: string; id?: number }
   | { type: 'child-out'; childId: number; stream: 'stdout' | 'stderr'; data: StdioChunk }
   | { type: 'child-exit'; childId: number; code: number }
   | { type: 'child-error'; childId: number; code: string; message: string }
@@ -119,14 +163,16 @@ export type WorkerToHost =
   | { type: 'child-stdin'; childId: number; data: StdioChunk | null }
   | { type: 'child-kill'; childId: number; signal: string }
   | { type: 'child-resize'; childId: number; cols: number; rows: number }
-  /** `tcp`: the server takes raw TCP connections (`net.Server`). */
-  | { type: 'listen'; port: number; tcp?: boolean }
+  /** `tcp`: the server takes raw TCP connections (`net.Server`). `id`: echoed by the page's `listened` / `listen-failed`. */
+  | { type: 'listen'; port: number; tcp?: boolean; id?: number }
   | { type: 'unlisten'; port: number }
   | { type: 'loopback'; reqId: number; port: number; request: HttpRequestData }
   | { type: 'request-cancel'; reqId: number }
   | { type: 'listening'; port: number; url: string }
   /** Open a raw TCP connection to whatever listens on `port`, in any process. */
   | { type: 'dial'; connId: number; port: number }
+  /** A Python process's `pip install` succeeded: record it for the processes started after it. */
+  | ({ type: 'python-installed' } & PipInstall)
   | ResponseMessage
   | SocketMessage
   | DialMessage

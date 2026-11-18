@@ -87,11 +87,15 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
       const registration = system.listen(port, handler, upgrade, connection && ((socket) => connection(track(socket))));
       const tracked = {
         port: registration.port,
+        // The host's answer (a process Worker's port table) passes through: a refusal reaches the server.
+        ready: registration.ready,
         close() {
           servers.delete(tracked);
           registration.close();
         },
       };
+      // Refused: nothing left to close at exit.
+      registration.ready?.catch(() => servers.delete(tracked));
       servers.add(tracked);
       return tracked;
     },

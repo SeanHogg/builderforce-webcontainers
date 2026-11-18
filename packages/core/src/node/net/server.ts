@@ -8,13 +8,14 @@
 import { EventEmitterBase } from '../events.js';
 import { queueCallback } from '../processExit.js';
 import { textResponse } from '../../system/httpStream.js';
-import type { ByteChannel } from '../../system/types.js';
+import type { ByteChannel, ListenRegistration } from '../../system/types.js';
+import { whenListening } from '../listening.js';
 import { ephemeralPort, type NetDeps, type NetSocket } from './socket.js';
 
 export class NetServer extends EventEmitterBase {
   listening = false;
   maxConnections?: number;
-  private registration?: { port: number; close(): void };
+  private registration?: ListenRegistration;
   private release?: () => void;
   private readonly sockets = new Set<NetSocket>();
   private closing = false;
@@ -35,16 +36,27 @@ export class NetServer extends EventEmitterBase {
     const first = args[0];
     const port = typeof first === 'object' && first ? Number((first as { port?: number }).port ?? 0) : Number(first ?? 0);
     if (callback) this.once('listening', callback);
+    let registration: ListenRegistration;
     try {
-      this.registration = this.deps.system.listen(port, async () => textResponse(502, 'Not an HTTP server'), undefined, (channel) => this.accept(channel));
+      registration = this.registration = this.deps.system.listen(port, async () => textResponse(502, 'Not an HTTP server'), undefined, (channel) => this.accept(channel));
     } catch (error) {
       queueCallback(() => this.emit('error', error));
       return this;
     }
-    this.listening = true;
+    this.listening = !registration.ready;
     this.closing = false;
     this.release = this.deps.loop.hold();
-    queueCallback(() => this.emit('listening'));
+    whenListening(registration, () => this.registration === registration, (error) => {
+      if (!error) {
+        this.listening = true;
+        return this.emit('listening');
+      }
+      this.registration = undefined;
+      this.listening = false;
+      this.release?.();
+      this.release = undefined;
+      this.emit('error', error);
+    });
     return this;
   }
 
