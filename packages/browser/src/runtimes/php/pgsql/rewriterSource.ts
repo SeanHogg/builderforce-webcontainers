@@ -3,28 +3,42 @@
  * (includesSource.ts applies it to included files). With PHP's tokenizer, each
  * construction of the global `PDO` — `new \PDO(`, `new PDO(` outside a
  * namespace or after `use PDO;` / `use PDO as Alias;` — becomes
- * `\Bfwc\Pgsql\pdo(`, and each `PDO::connect(` (PHP 8.4) becomes
- * `\Bfwc\Pgsql\connect(`. Named arguments and spreads pass through (the
- * factories take PDO's parameter names).
+ * `\Bfwc\Pgsql\pdo(`, and each `PDO::connect(` / `Pdo\Pgsql::connect(` (PHP
+ * 8.4) becomes `\Bfwc\Pgsql\connect(`. Named arguments and spreads pass
+ * through (the factories take PDO's parameter names). `new Pdo\Pgsql(` needs
+ * no rewrite: the runtime declares that class when the extension is absent.
  *
  * Left alone: strings, heredocs and comments; a `PDO` an import shadows (`use
  * Foo\PDO;`, `use X as PDO;`); constant-expression contexts — parameter
- * defaults, attribute arguments, `const` and `static $x =` initialisers — where
- * a function call would not compile (those keep the native PDO); and any file
- * with `__halt_compiler` (its data offset must not move). Line numbers are kept.
+ * defaults, attribute arguments, `const`, and (before PHP 8.3, which allows any
+ * expression there) `static $x =` initialisers — where a function call would
+ * not compile (those keep the native PDO); and any file with `__halt_compiler`
+ * (its data offset must not move). Line numbers are kept.
  */
 export const REWRITER_SOURCE = String.raw`<?php
 namespace Bfwc\Pgsql;
 
 final class Rewriter
 {
+    /** Cheap test for a file that might need the rewrite: a construction or connect naming PDO, or an import mentioning it. */
+    public const CANDIDATE = '/\bnew\b[^;(]*\bpdo\b|\b(?:pdo|pgsql)\s*::\s*connect\b|\buse\b[^;]*\bpdo\b/i';
+
     private const SKIP = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
+    private const TARGETS = ['pdo', 'pdo\\pgsql'];
+
+    public static function isCandidate(string $source): bool
+    {
+        return preg_match(self::CANDIDATE, $source) === 1 && stripos($source, '__halt_compiler') === false;
+    }
 
     public static function rewrite(string $source): string
     {
-        if (!preg_match(Includes::CANDIDATE, $source) || stripos($source, '__halt_compiler') !== false) {
-            return $source;
-        }
+        return self::isCandidate($source) ? self::rewriteCandidate($source) : $source;
+    }
+
+    /** The rewrite of a source {@see isCandidate()} accepted. */
+    public static function rewriteCandidate(string $source): string
+    {
         try {
             $tokens = \PhpToken::tokenize($source);
         } catch (\Throwable) {
@@ -32,7 +46,7 @@ final class Rewriter
         }
         $constant = self::constantContexts($tokens);
         $global = true;
-        $aliases = []; // lower-case name => whether it names the global PDO
+        $aliases = []; // lower-case local name => the lower-case class it imports
         $out = '';
         $changed = false;
         for ($i = 0, $count = count($tokens); $i < $count; $i++) {
@@ -47,10 +61,10 @@ final class Rewriter
             } elseif (!$constant[$i] && $token->id === T_NEW) {
                 $name = self::next($tokens, $i + 1);
                 $paren = $name === null ? null : self::next($tokens, $name + 1);
-                if ($paren !== null && $tokens[$paren]->text === '(' && self::namesPdo($tokens[$name], $global, $aliases)) {
+                if ($paren !== null && $tokens[$paren]->text === '(' && self::resolve($tokens[$name], $global, $aliases) === 'pdo') {
                     $replace = ['\\Bfwc\\Pgsql\\pdo', $paren];
                 }
-            } elseif (!$constant[$i] && self::namesPdo($token, $global, $aliases)) {
+            } elseif (!$constant[$i] && self::resolve($token, $global, $aliases) !== null) {
                 $colons = self::next($tokens, $i + 1);
                 $method = $colons === null ? null : self::next($tokens, $colons + 1);
                 $paren = $method === null ? null : self::next($tokens, $method + 1);
@@ -80,7 +94,7 @@ final class Rewriter
     /**
      * For each token, whether it sits where only a constant expression may:
      * a parameter list (its defaults), an attribute, a 'const' declaration, or
-     * a 'static $x =' initialiser (constant-only before PHP 8.3).
+     * (before PHP 8.3) a 'static $x =' initialiser.
      * @return list<bool>
      */
     private static function constantContexts(array $tokens): array
@@ -108,9 +122,10 @@ final class Rewriter
             $afterUse = $previous !== null && $tokens[$previous]->id === T_USE;
             if ($token->id === T_CONST && !$afterUse) {
                 $statement = true;
-            } elseif ($token->id === T_STATIC) {
+            } elseif ($token->id === T_STATIC && PHP_VERSION_ID < 80300) {
                 $next = self::next($tokens, $i + 1);
-                if ($next !== null && $tokens[$next]->id === T_VARIABLE && ($previous === null || $tokens[$previous]->id === T_OPEN_TAG || in_array($tokens[$previous]->text, [';', '{', '}'], true))) {
+                $starts = $previous === null || in_array($tokens[$previous]->id, [T_OPEN_TAG, T_ELSE], true) || in_array($tokens[$previous]->text, [';', '{', '}', ':', ')'], true);
+                if ($next !== null && $tokens[$next]->id === T_VARIABLE && $starts) {
                     $statement = true;
                 }
             } elseif (($token->id === T_FUNCTION || $token->id === T_FN) && !$afterUse) {
@@ -134,16 +149,17 @@ final class Rewriter
         return $flags;
     }
 
-    private static function namesPdo(\PhpToken $name, bool $global, array $aliases): bool
+    /** The class $name refers to, when it is the global PDO or Pdo\Pgsql ('pdo', 'pdo\pgsql'); otherwise null. */
+    private static function resolve(\PhpToken $name, bool $global, array $aliases): ?string
     {
         $lower = strtolower($name->text);
-        if ($name->id === T_NAME_FULLY_QUALIFIED) {
-            return $lower === '\\pdo';
-        }
-        if ($name->id !== T_STRING) {
-            return false;
-        }
-        return $aliases[$lower] ?? ($global && $lower === 'pdo');
+        $class = match ($name->id) {
+            T_NAME_FULLY_QUALIFIED => substr($lower, 1),
+            T_NAME_QUALIFIED => isset($aliases[strstr($lower, '\\', true)]) ? $aliases[strstr($lower, '\\', true)] . strstr($lower, '\\') : ($global ? $lower : null),
+            T_STRING => $aliases[$lower] ?? ($global ? $lower : null),
+            default => null,
+        };
+        return in_array($class, self::TARGETS, true) ? $class : null;
     }
 
     private static function next(array $tokens, int $from): ?int
@@ -190,7 +206,7 @@ final class Rewriter
         return true;
     }
 
-    /** What an import statement's names say about PDO: name => true (the global PDO) or false (shadowed). */
+    /** What an import statement's names say about PDO: local name => the class it imports (PDO, Pdo\Pgsql, or a class shadowing PDO). */
     private static function imports(array $tokens, int $from): array
     {
         $aliases = [];
@@ -211,8 +227,8 @@ final class Rewriter
                 if ($name !== null) {
                     $target = strtolower(ltrim($name, '\\'));
                     $local = strtolower($alias ?? substr((string) strrchr('\\' . $name, '\\'), 1));
-                    if ($target === 'pdo' || $local === 'pdo') {
-                        $aliases[$local] = $target === 'pdo';
+                    if ($local === 'pdo' || in_array($target, self::TARGETS, true)) {
+                        $aliases[$local] = $target; // 'pdo' / 'pdo\pgsql', or what shadows the name PDO
                     }
                 }
                 $name = $alias = null;
