@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { ApplicationSpecError, ApplicationStartError, startApplicationRuntime, type ApplicationSpec, type ServiceError, type ServiceSpec } from '../src/app.js';
-import { fakeProvider, settle, take, until } from './app-fakeProvider.js';
+import { fakeProvider, settle, stubRuntime, take, until } from './app-fakeProvider.js';
 
 const svc = (id: string, extra: Partial<ServiceSpec> = {}): ServiceSpec => ({ id, type: 'application', runtime: 'fake', command: 'run', ...extra });
 const app = (...services: ServiceSpec[]): ApplicationSpec => ({ projectId: 'p1', services });
-const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000 };
+const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000, runtime: stubRuntime() };
 
 describe('startApplicationRuntime', () => {
   it('validates the spec up front', () => {
     const fake = fakeProvider();
-    expect(() => startApplicationRuntime(app(svc('web', { dependsOn: ['api'] })), { providers: [fake.provider] })).toThrow(ApplicationSpecError);
+    expect(() => startApplicationRuntime(app(svc('web', { dependsOn: ['api'] })), { providers: [fake.provider], runtime: stubRuntime() })).toThrow(ApplicationSpecError);
   });
 
   it('starts each service only after its dependencies are ready, with its own env', async () => {

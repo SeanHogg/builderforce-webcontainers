@@ -1,6 +1,12 @@
 /** A scripted `RuntimeProvider` for orchestrator tests: each started service is a `FakeProcess` the test drives. */
-import type { RuntimeProvider, ServiceHandle, ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
+import { ServiceGraphPolicy, type RuntimeProvider, type ServiceHandle, type ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
 import type { SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
+import type { ApplicationHost } from '../src/app/types.js';
+
+/** The runtime an orchestrator test's application runs on (`startApplicationRuntime`'s required `runtime`): a real port policy, no processes to end. */
+export function stubRuntime(): ApplicationHost {
+  return { portPolicy: new ServiceGraphPolicy(), killApplication: () => undefined };
+}
 
 export class FakeProcess {
   readonly signals: string[] = [];

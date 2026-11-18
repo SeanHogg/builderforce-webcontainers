@@ -4,7 +4,7 @@
  * `DATABASE_URL`. Restarting the API keeps the rows; the database outlives it.
  */
 import { describe, expect, it } from 'vitest';
-import { createNodeProvider, createPgliteProvider, startApplicationRuntime, type ApplicationSpec, type DatabaseServiceHost, type NodeServiceHost } from '../src/app.js';
+import { createNodeProvider, createPgliteProvider, startApplicationRuntime, type ApplicationHost, type ApplicationSpec, type DatabaseServiceHost, type NodeServiceHost } from '../src/app.js';
 import type { PreviewRuntime } from '../src/host.js';
 import type { ProcessHost } from '../src/node/processHost.js';
 import { WORKSPACE_CONTEXT } from '@seanhogg/builderforce-webcontainers-core';
@@ -12,6 +12,8 @@ import { appHost, collect, fakeLocks, installedPackage } from './databaseHelpers
 
 // Compile-time: a preview runtime IS a database service host (`createPgliteProvider(runtime)`).
 export const previewRuntimeHostsDatabases = (runtime: PreviewRuntime): DatabaseServiceHost => runtime;
+// Compile-time: a preview runtime IS what `startApplicationRuntime` requires as `runtime`.
+export const previewRuntimeHostsApplications = (runtime: PreviewRuntime): ApplicationHost => runtime;
 
 function nodeHost(processes: ProcessHost): NodeServiceHost {
   return {
@@ -77,8 +79,7 @@ describe('application runtime with a pglite database', () => {
       ],
     };
     const app = startApplicationRuntime(spec, {
-      portPolicy: processes.portPolicy,
-      processes,
+      runtime: processes,
       providers: [createNodeProvider(nodeHost(processes), { probeIntervalMs: 50 }), createPgliteProvider(databases, { locks: fakeLocks() })],
     });
     const call = async (method: string, url: string, body?: unknown) => {

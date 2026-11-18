@@ -75,22 +75,29 @@ export interface ApplicationPortPolicy {
   register(applicationId: string, spec: ApplicationSpec): () => void;
 }
 
+/**
+ * The runtime an application runs on, as the application runtime needs it: a
+ * `PreviewRuntime` (`startPreviewRuntime()`) or a `ProcessHost` IS one.
+ */
+export interface ApplicationHost extends AttributedProcesses {
+  /** The runtime's port policy: the application's `dependsOn` graph is put in force here while it runs (W10 control 4). */
+  readonly portPolicy: ApplicationPortPolicy;
+}
+
 export interface ApplicationRuntimeOptions {
   /** The runtimes services run on (`createNodeProvider(runtime)`), or a registry of them. */
   providers: readonly RuntimeProvider[] | ProviderRegistry;
   /**
-   * The runtime the providers spawn on, to end every process attributed to a
-   * service when it stops or fails, and to the application when it stops.
-   * Without it, only the processes the providers hold are ended.
+   * The runtime the providers spawn on (`startPreviewRuntime()`'s). Required:
+   * its port policy gets the application's `dependsOn` graph on `start()` (and
+   * loses it on `stop()` / `dispose()`) — without it no service could reach
+   * another — and its attributed processes are ended when a service or the
+   * application stops.
    */
+  runtime: ApplicationHost;
+  /** Override `runtime` as the processes ended on stop. */
   processes?: AttributedProcesses;
-  /**
-   * The runtime's port policy (`ProcessHost.ports.policy`, a `ServiceGraphPolicy`):
-   * the application's `dependsOn` graph is registered under its `applicationId`
-   * on `start()` and removed on `stop()` / `dispose()`, so its services reach
-   * only what they declare (W10 control 4). Without it, application processes
-   * reach no port but their own.
-   */
+  /** Override `runtime.portPolicy`. */
   portPolicy?: ApplicationPortPolicy;
   /** Default readiness timeout, when a service's readiness sets none. Default 120000ms. */
   readinessTimeoutMs?: number;

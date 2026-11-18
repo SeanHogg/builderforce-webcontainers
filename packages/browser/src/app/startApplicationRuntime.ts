@@ -61,6 +61,10 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
     return resolution.ok ? resolution.provider.databaseCredentials?.(database, client) : undefined;
   };
 
+  // The runtime the application runs on: ends its attributed processes, holds its port graph.
+  const processes = options.processes ?? options.runtime;
+  const portPolicy = options.portPolicy ?? options.runtime.portPolicy;
+
   for (const id of graph.startOrder) {
     // Start order: every dependency is created before its dependents.
     const dependencies = graph.dependenciesOf(id).map((dependency) => services.get(dependency)!);
@@ -80,7 +84,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
         restart: options.restart ?? {},
         stableAfterMs: options.stableAfterMs ?? DEFAULTS.stableAfterMs,
         security: Object.freeze({ applicationId, serviceId: id }),
-        processes: options.processes,
+        processes,
       }),
     );
   }
@@ -97,7 +101,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   let unregisterGraph: (() => void) | undefined;
   const stopAll = async () => {
     for (const id of graph.stopOrder) await service(id).stop();
-    options.processes?.killApplication(applicationId); // whatever outlived its service: the whole attributed set
+    processes.killApplication(applicationId); // whatever outlived its service: the whole attributed set
     unregisterGraph?.();
     unregisterGraph = undefined;
   };
@@ -115,7 +119,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
         throw new ApplicationStartError(failures);
       }
       // Before any service runs: its dials are decided against this graph.
-      unregisterGraph ??= options.portPolicy?.register(applicationId, spec);
+      unregisterGraph ??= portPolicy.register(applicationId, spec);
       // In start order, so each service exists and is on its way before its dependents look at it.
       await settle(graph.startOrder.map((id) => [id, service(id).start()]));
     },

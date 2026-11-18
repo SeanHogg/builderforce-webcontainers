@@ -8,11 +8,11 @@
 import { describe, expect, it } from 'vitest';
 import { WORKSPACE_APPLICATION, PLATFORM_APPLICATION, type ProcessOptions, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import { createNodeProvider, startApplicationRuntime, type ApplicationSpec, type NodeServiceHost, type ServiceSpec } from '../src/app.js';
-import { fakeProvider, settle, until } from './app-fakeProvider.js';
+import { fakeProvider, settle, stubRuntime, until } from './app-fakeProvider.js';
 
 const svc = (id: string, extra: Partial<ServiceSpec> = {}): ServiceSpec => ({ id, type: 'application', runtime: 'fake', command: 'run', ...extra });
 const app = (...services: ServiceSpec[]): ApplicationSpec => ({ projectId: 'p1', services });
-const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000 };
+const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000, runtime: stubRuntime() };
 
 function recordingProcesses() {
   const kills: Array<[string, string | undefined]> = [];

@@ -102,7 +102,14 @@ export class FsSync<Peer> {
     }
     this.applyingFrom = peer;
     try {
-      applyOps(this.fs, allowed);
+      // Op by op: one that fails (EISDIR, ENOTDIR…) neither loses the rest of the batch nor escapes `onmessage`; it is reconciled like a refused one.
+      for (const op of allowed) {
+        try {
+          applyOps(this.fs, [op]);
+        } catch {
+          refused.push(op);
+        }
+      }
     } finally {
       this.applyingFrom = undefined;
       // The page's truth once the batch is applied (so a later op of the batch is not undone), once per kind and path.

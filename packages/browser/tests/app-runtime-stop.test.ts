@@ -1,11 +1,11 @@
 /** Stops and restarts racing starts, readiness waits and backoffs, and the end of the runtime. */
 import { describe, expect, it } from 'vitest';
 import { ApplicationStartError, startApplicationRuntime, type ApplicationSpec, type ServiceError, type ServiceSpec } from '../src/app.js';
-import { fakeProvider, gate, settle, until } from './app-fakeProvider.js';
+import { fakeProvider, gate, settle, stubRuntime, until } from './app-fakeProvider.js';
 
 const svc = (id: string, extra: Partial<ServiceSpec> = {}): ServiceSpec => ({ id, type: 'application', runtime: 'fake', command: 'run', ...extra });
 const app = (...services: ServiceSpec[]): ApplicationSpec => ({ projectId: 'p1', services });
-const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000 };
+const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000, runtime: stubRuntime() };
 const failureOf = (promise: Promise<unknown>) => promise.then(() => undefined, (error: unknown) => error as ApplicationStartError);
 
 describe('stopping and restarting while things are in flight', () => {

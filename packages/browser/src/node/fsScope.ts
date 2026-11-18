@@ -126,6 +126,11 @@ export class FsScopes {
     return this.protectedPaths.some((dir) => isInsideDir(path, dir)) || this.isShared(path);
   }
 
+  /** The workspace `.npmrc` (registry tokens): invisible and unwritable to every application view. */
+  private isSecret(path: string): boolean {
+    return path === join(this.workspace, '.npmrc');
+  }
+
   private isShared(path: string): boolean {
     if (this.sharedPaths.some((dir) => isInsideDir(path, dir))) return true;
     return dirname(path) === this.workspace && path !== this.workspace && this.sharedNames.some((pattern) => pattern.test(basename(path)));
@@ -149,12 +154,13 @@ export class FsScopes {
       root,
       revision: 0,
       visible(path) {
+        if (scopes.isSecret(path)) return false; // even to a service rooted at the workspace
         if (scopes.nestedRoots(applicationId, root, true).some((dir) => isInsideDir(path, dir))) return false;
         return readable.some((dir) => isInsideDir(path, dir) || isInsideDir(dir, path)) || scopes.isShared(path);
       },
       judge(op) {
         const path = normalizePath(op.path);
-        if (scopes.isReadOnly(path)) return deny('fs.protected_path');
+        if (scopes.isReadOnly(path) || scopes.isSecret(path)) return deny('fs.protected_path');
         // Making a directory above its own explicit changes nothing anyone reads: dropped.
         if (op.op === 'mkdir' && strictlyInside(root, path)) return 'noop';
         if (op.op === 'remove') {

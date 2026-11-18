@@ -95,7 +95,7 @@ describe('PHP API against the PGlite gateway (offline)', () => {
         { id: 'api', type: 'application', runtime: 'php', root: '/api', command: 'php', args: ['-S', '0.0.0.0:8000', '-t', 'public', 'public/index.php'], port: 8000, dependsOn: ['db'], readiness: { kind: 'http', path: '/health' } },
       ],
     };
-    const app = startApplicationRuntime(spec, { portPolicy: processes.portPolicy, processes, providers: [createPhpProvider(runtimeOf(processes), { probeIntervalMs: 50 }), createPgliteProvider(databases, { locks: fakeLocks() })], readinessTimeoutMs: 120_000 });
+    const app = startApplicationRuntime(spec, { runtime: processes, providers: [createPhpProvider(runtimeOf(processes), { probeIntervalMs: 50 }), createPgliteProvider(databases, { locks: fakeLocks() })], readinessTimeoutMs: 120_000 });
     const logs: string[] = [];
     void (async () => {
       for await (const entry of app.logs('api')) logs.push(entry.text);

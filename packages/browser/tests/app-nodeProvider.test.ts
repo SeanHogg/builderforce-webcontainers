@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { Kernel, defaultPrograms } from '@seanhogg/builderforce-webcontainers-core';
 import { acceptsNodeService, createNodeProvider, startApplicationRuntime, type ApplicationSpec, type NodeServiceHost, type ServiceLogEntry } from '../src/app.js';
 import type { PreviewRuntime } from '../src/host.js';
-import { until } from './app-fakeProvider.js';
+import { stubRuntime, until } from './app-fakeProvider.js';
 
 function kernel(files: Record<string, string>): Kernel {
   const k = new Kernel({ programs: defaultPrograms(), serverUrl: (port) => `https://app.test/__port/${port}/` });
@@ -79,7 +79,7 @@ describe('node provider', () => {
 
   it('runs an API and a dependent service that calls it after readiness; stops both in reverse order', async () => {
     const processes = kernel(FILES);
-    const runtime = startApplicationRuntime(SPEC, { providers: [createNodeProvider(nodeHost(processes), { probeIntervalMs: 20 })], readinessTimeoutMs: 20_000 });
+    const runtime = startApplicationRuntime(SPEC, { runtime: stubRuntime(), providers: [createNodeProvider(nodeHost(processes), { probeIntervalMs: 20 })], readinessTimeoutMs: 20_000 });
     const changes: string[] = [];
     runtime.onStateChange(({ serviceId, to }) => changes.push(`${serviceId}:${to}`));
 
@@ -106,7 +106,7 @@ describe('node provider', () => {
 
   it('restarts the API alone; the dependent keeps running', async () => {
     const processes = kernel(FILES);
-    const runtime = startApplicationRuntime(SPEC, { providers: [createNodeProvider(nodeHost(processes), { probeIntervalMs: 20 })], readinessTimeoutMs: 20_000 });
+    const runtime = startApplicationRuntime(SPEC, { runtime: stubRuntime(), providers: [createNodeProvider(nodeHost(processes), { probeIntervalMs: 20 })], readinessTimeoutMs: 20_000 });
     await runtime.start();
     const changes: string[] = [];
     runtime.onStateChange(({ serviceId, to }) => changes.push(`${serviceId}:${to}`));
@@ -121,7 +121,7 @@ describe('node provider', () => {
   it('probes http readiness from inside the runtime when the host has no direct request', async () => {
     const processes = kernel(FILES);
     const api = SPEC.services[1]!;
-    const runtime = startApplicationRuntime({ projectId: 'p', services: [api] }, { providers: [createNodeProvider(nodeHost(processes, false), { probeIntervalMs: 20 })], readinessTimeoutMs: 20_000 });
+    const runtime = startApplicationRuntime({ projectId: 'p', services: [api] }, { runtime: stubRuntime(), providers: [createNodeProvider(nodeHost(processes, false), { probeIntervalMs: 20 })], readinessTimeoutMs: 20_000 });
     await runtime.start();
     expect(runtime.getService('api')?.state).toBe('running');
     await runtime.stop();
@@ -133,7 +133,7 @@ describe('node provider', () => {
     await until(() => processes.ports.has(8000));
     const runtime = startApplicationRuntime(
       { projectId: 'p', services: [{ ...SPEC.services[1]!, restartPolicy: 'never' }] },
-      { providers: [createNodeProvider(nodeHost(processes))], readinessTimeoutMs: 20_000 },
+      { runtime: stubRuntime(), providers: [createNodeProvider(nodeHost(processes))], readinessTimeoutMs: 20_000 },
     );
     const began = Date.now();
     await expect(runtime.start()).rejects.toMatchObject({ failures: [{ serviceId: 'api', phase: 'start', message: 'Port 8000 is already in use by another process.' }] });
@@ -146,7 +146,7 @@ describe('node provider', () => {
     const processes = kernel({ 'boom.js': 'console.error("boom"); process.exit(3);' });
     const runtime = startApplicationRuntime(
       { projectId: 'p', services: [{ id: 'api', type: 'application', runtime: 'node', command: 'node', args: ['boom.js'], port: 8000, restartPolicy: 'never' }] },
-      { providers: [createNodeProvider(nodeHost(processes))] },
+      { runtime: stubRuntime(), providers: [createNodeProvider(nodeHost(processes))] },
     );
     await expect(runtime.start()).rejects.toMatchObject({ failures: [{ serviceId: 'api', phase: 'exit', exitCode: 3 }] });
     await until(() => runtime.getService('api')?.state === 'failed');

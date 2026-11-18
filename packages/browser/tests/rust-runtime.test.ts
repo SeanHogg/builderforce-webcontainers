@@ -74,7 +74,7 @@ describe.skipIf(!RUST_FIXTURES_DIR)('Rust runtime on prebuilt wasm32-wasip1 modu
         { id: 'api', type: 'application', runtime: 'rust', root: '/api', command: `./${MODULE}/todo_service.wasm`, port: 8080, env: { PORT: '8080' }, dependsOn: ['db'], readiness: { kind: 'http', path: '/health' } },
       ],
     };
-    const app = startApplicationRuntime(spec, { portPolicy: processes.portPolicy, processes, providers: [createRustProvider(runtimeOf(processes), { probeIntervalMs: 50, fs }), createPgliteProvider(databases, { locks: fakeLocks() })], readinessTimeoutMs: 60_000 });
+    const app = startApplicationRuntime(spec, { runtime: processes, providers: [createRustProvider(runtimeOf(processes), { probeIntervalMs: 50, fs }), createPgliteProvider(databases, { locks: fakeLocks() })], readinessTimeoutMs: 60_000 });
     const logs: string[] = [];
     void (async () => {
       for await (const entry of app.logs('api')) logs.push(entry.text);

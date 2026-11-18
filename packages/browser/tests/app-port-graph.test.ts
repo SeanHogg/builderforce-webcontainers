@@ -18,7 +18,7 @@ describe('application runtime registers its service graph', () => {
     const policy = new ServiceGraphPolicy();
     const ports = new PortRegistry({ policy });
     const fake = fakeProvider({ autoReady: ['db', 'api', 'web'] });
-    const runtime = startApplicationRuntime(spec, { providers: [fake.provider], portPolicy: policy, stopTimeoutMs: 20, readinessTimeoutMs: 1000 });
+    const runtime = startApplicationRuntime(spec, { providers: [fake.provider], runtime: { portPolicy: policy, killApplication: () => undefined }, stopTimeoutMs: 20, readinessTimeoutMs: 1000 });
     const as = (serviceId: string): SecurityContext => ({ applicationId: runtime.applicationId, serviceId });
     ports.listen(5432, async () => textResponse(502, ''), undefined, (socket) => socket.close(), as('db'));
 

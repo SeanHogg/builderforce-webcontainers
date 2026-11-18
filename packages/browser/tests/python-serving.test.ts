@@ -179,7 +179,7 @@ describe('the python provider in an application', () => {
     };
     const app = startApplicationRuntime(
       { projectId: 'p1', services: [{ id: 'api', type: 'application', runtime: 'python', root: '/api', command: 'gunicorn', args: ['wsgi:application', '-b', ':8020'], port: 8020 }] },
-      { providers: [createPythonProvider(runtimeHost)] },
+      { runtime: python, providers: [createPythonProvider(runtimeHost)] },
     );
     await app.start();
     expect(app.getService('api')).toMatchObject({ state: expect.stringMatching(/^(ready|running)$/), url: url(8020) });
