@@ -8,8 +8,11 @@
  * `response-head`, `response-chunk`s as the server writes, a `response-end`.
  * Worker → page they answer an `http-request` (ids the page allocated); page →
  * worker they answer a `loopback` (ids the worker allocated). `request-cancel`
- * goes the other way: the reader hung up. Upgraded connections (WebSockets)
- * are opened by the page (`socket-open`) and carry raw bytes both ways.
+ * goes the other way: the reader hung up. Connections to a process's servers
+ * are opened by the page — upgraded ones (WebSockets) with `socket-open`, raw
+ * TCP with `socket-accept` — and connections a process dials (`net.connect`)
+ * by the worker (`dial`); both carry raw bytes and flow-control credits both
+ * ways (connectionRelay.ts on the page, workerConnections.ts in the worker).
  *
  * A message channel (fork, worker threads) is `ipc` / `ipc-disconnect` between a
  * process and the page (its parent's side), and `child-ipc` /
@@ -54,8 +57,25 @@ export type ResponseMessage =
   | { type: 'response-chunk'; reqId: number; data: Uint8Array }
   | { type: 'response-end'; reqId: number; error?: string };
 
-/** Raw bytes of an upgraded connection, either way; ids allocated by the page. */
-export type SocketMessage = { type: 'socket-data'; connId: number; data: Uint8Array } | { type: 'socket-close'; connId: number };
+/**
+ * A connection to one of this process's servers — upgraded (a WebSocket) or raw
+ * TCP — either way; ids allocated by the page. `socket-ack` is flow control:
+ * the receiving side's reader consumed `bytes`.
+ */
+export type SocketMessage =
+  | { type: 'socket-data'; connId: number; data: Uint8Array }
+  | { type: 'socket-ack'; connId: number; bytes: number }
+  | { type: 'socket-close'; connId: number };
+
+/**
+ * A raw TCP connection this process dialled (`net.connect`), either way; ids
+ * allocated by the worker. `dial` asks, `dial-result` answers (`ok: false`:
+ * nothing listens, ECONNREFUSED).
+ */
+export type DialMessage =
+  | { type: 'dial-data'; connId: number; data: Uint8Array }
+  | { type: 'dial-ack'; connId: number; bytes: number }
+  | { type: 'dial-close'; connId: number };
 
 /** Message-channel traffic: to/from this process's parent (`ipc`), or one of its children (`child-ipc`). */
 export type IpcMessage =
@@ -80,8 +100,12 @@ export type HostToWorker =
   | { type: 'http-request'; reqId: number; port: number; request: HttpRequestData }
   | { type: 'request-cancel'; reqId: number }
   | { type: 'socket-open'; connId: number; port: number; request: HttpRequestData }
+  /** A raw TCP connection to the `net.Server` on `port`. */
+  | { type: 'socket-accept'; connId: number; port: number }
+  | { type: 'dial-result'; connId: number; ok: boolean }
   | ResponseMessage
   | SocketMessage
+  | DialMessage
   | IpcMessage;
 
 /** worker → page */
@@ -95,13 +119,17 @@ export type WorkerToHost =
   | { type: 'child-stdin'; childId: number; data: StdioChunk | null }
   | { type: 'child-kill'; childId: number; signal: string }
   | { type: 'child-resize'; childId: number; cols: number; rows: number }
-  | { type: 'listen'; port: number }
+  /** `tcp`: the server takes raw TCP connections (`net.Server`). */
+  | { type: 'listen'; port: number; tcp?: boolean }
   | { type: 'unlisten'; port: number }
   | { type: 'loopback'; reqId: number; port: number; request: HttpRequestData }
   | { type: 'request-cancel'; reqId: number }
   | { type: 'listening'; port: number; url: string }
+  /** Open a raw TCP connection to whatever listens on `port`, in any process. */
+  | { type: 'dial'; connId: number; port: number }
   | ResponseMessage
   | SocketMessage
+  | DialMessage
   | IpcMessage;
 
 /** The preview-relative URL a virtual server on `port` is reachable at. */

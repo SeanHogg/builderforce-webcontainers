@@ -189,18 +189,21 @@ export class Writable extends EventEmitterBase {
   _drainQueue(): void {
     const s = this._writableState;
     if (s.writing || s.destroyed) return;
-    const next = s.queue.shift();
-    if (!next) {
+    if (!s.queue.length) {
       if (s.ending) this._finishMaybe();
       return;
     }
+    // Several writes waiting (corked, or written while one was in flight) go to `_writev` together, as in Node.
+    const batch = this._writev && s.queue.length > 1 ? s.queue.splice(0) : [s.queue.shift()!];
     s.writing = true;
     let sync = true;
     const done = (error?: Error | null) => {
       const after = () => {
         s.writing = false;
-        s.length -= s.objectMode ? 1 : (next.chunk as { length: number }).length;
-        next.callback?.(error ?? null);
+        for (const next of batch) {
+          s.length -= s.objectMode ? 1 : (next.chunk as { length: number }).length;
+          next.callback?.(error ?? null);
+        }
         if (error) {
           s.errored = error;
           this.destroy(error);
@@ -216,7 +219,8 @@ export class Writable extends EventEmitterBase {
       else after();
     };
     try {
-      this._write(next.chunk, next.encoding, done);
+      if (batch.length > 1) this._writev!(batch.map(({ chunk, encoding }) => ({ chunk, encoding })), done);
+      else this._write(batch[0]!.chunk, batch[0]!.encoding, done);
     } catch (error) {
       done(error as Error);
     }

@@ -10,18 +10,18 @@
  */
 import {
   VirtualFileSystem,
+  acceptConnection,
   applyOps,
   changeToOp,
   commandNotFound,
-  createChannelPair,
   createIpcEndpoint,
   defaultPrograms,
   mountSnapshot,
   resolveCommand,
   runProgram,
   textResponse,
-  type ByteChannel,
   type ChildHandle,
+  type ConnectionHandler,
   type FsChange,
   type HttpHandler,
   type PackageCache,
@@ -33,6 +33,7 @@ import {
 import type { FsOp, HostToWorker, StartMessage, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
 import { ResponseReceiver, sendResponse } from './responseWire.js';
+import { createWorkerConnections, isWorkerConnectionMessage } from './workerConnections.js';
 
 export interface WorkerProcessDeps {
   post(message: WorkerToHost): void;
@@ -48,7 +49,7 @@ const EPHEMERAL = 49152;
 
 export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message: HostToWorker): void } {
   const fs = new VirtualFileSystem();
-  const handlers = new Map<number, { handler: HttpHandler; upgrade?: UpgradeHandler }>();
+  const handlers = new Map<number, { handler: HttpHandler; upgrade?: UpgradeHandler; accept?: ConnectionHandler }>();
   const knownPorts = new Set<number>();
   const children = new Map<number, { stdout: Set<(chunk: StdioChunk) => void>; stderr: Set<(chunk: StdioChunk) => void>; exit: (code: number) => void; ipc?: ReturnType<typeof createIpcEndpoint> }>();
   /** This process's channel to its parent, when it was spawned with `ipc`. */
@@ -57,8 +58,8 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
   const loopbacks = new ResponseReceiver();
   /** Responses this process's servers are streaming to the page, by the page's request id. */
   const serving = new Map<number, () => void>();
-  /** Upgraded connections the page opened, by its connection id (our end of the pipe to the server). */
-  const sockets = new Map<number, ByteChannel>();
+  /** Connections to this process's servers, and the ones it dials. */
+  const connections = createWorkerConnections(deps.post);
   let nextChild = 1;
   let nextReq = 1;
   let applying = false;
@@ -136,14 +137,14 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
         if (!resolveCommand(fs, programs, command, args, cwd, env)) throw commandNotFound(command);
         return remoteChild(command, args, { ...options, cwd, env });
       },
-      listen(port, handler, upgrade) {
+      listen(port, handler, upgrade, accept) {
         let actual = port;
         if (!actual) for (actual = EPHEMERAL + (message.pid % 1000) * 8; knownPorts.has(actual); actual++);
         if (knownPorts.has(actual)) throw Object.assign(new Error(`listen EADDRINUSE: address already in use :::${actual}`), { code: 'EADDRINUSE', errno: -98, syscall: 'listen', port: actual });
         knownPorts.add(actual);
-        const entry = { handler, upgrade };
+        const entry = { handler, upgrade, accept };
         handlers.set(actual, entry);
-        deps.post({ type: 'listen', port: actual });
+        deps.post({ type: 'listen', port: actual, tcp: accept !== undefined });
         return {
           port: actual,
           close() {
@@ -161,6 +162,10 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
         const response = loopbacks.expect(reqId, () => deps.post({ type: 'request-cancel', reqId }));
         deps.post({ type: 'loopback', reqId, port, request });
         return response;
+      },
+      async connect(port) {
+        const local = handlers.get(port);
+        return local ? acceptConnection(local.accept) : connections.dial(port);
       },
       serverUrl: (port) => new URL(portPath(message.previewBase, port), message.previewOrigin).href,
       announceServer: (port, url) => deps.post({ type: 'listening', port, url }),
@@ -255,26 +260,12 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
         case 'response-chunk':
         case 'response-end':
           return loopbacks.receive(message);
-        case 'socket-open': {
-          const { connId } = message;
-          const upgrade = handlers.get(message.port)?.upgrade;
-          if (!upgrade) return deps.post({ type: 'socket-close', connId });
-          const [ours, server] = createChannelPair();
-          sockets.set(connId, ours);
-          ours.onData((data) => deps.post({ type: 'socket-data', connId, data }));
-          ours.onClose(() => {
-            sockets.delete(connId);
-            deps.post({ type: 'socket-close', connId });
-          });
-          upgrade(message.request, server);
-          return;
-        }
-        case 'socket-data':
-          return sockets.get(message.connId)?.send(message.data);
-        case 'socket-close':
-          sockets.get(message.connId)?.close();
-          sockets.delete(message.connId);
-          return;
+        case 'socket-open':
+          return connections.upgraded(message.connId, message.request, handlers.get(message.port)?.upgrade);
+        case 'socket-accept':
+          return connections.accepted(message.connId, handlers.get(message.port));
+        default:
+          if (isWorkerConnectionMessage(message)) return connections.receive(message);
       }
     },
   };

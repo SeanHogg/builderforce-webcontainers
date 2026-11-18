@@ -94,9 +94,10 @@ export interface HttpStreamResponse extends HttpResponseHead {
 export type HttpHandler = (request: HttpRequestData) => Promise<HttpStreamResponse>;
 
 /**
- * One end of a raw byte pipe — an upgraded connection. The server end carries
- * whatever the server writes (a WebSocket server writes its `101` reply and then
- * frames), so packages like `ws` run their own framing over it unchanged.
+ * One end of a raw byte pipe — an upgraded connection, or a raw TCP connection.
+ * The server end carries whatever the server writes (a WebSocket server writes
+ * its `101` reply and then frames), so packages like `ws` and `pg` run their own
+ * protocol over it unchanged. Bytes only: never a SharedArrayBuffer.
  */
 export interface ByteChannel {
   send(data: Uint8Array): void;
@@ -105,11 +106,24 @@ export interface ByteChannel {
   onData(listener: (data: Uint8Array) => void): () => void;
   /** The other end hung up. */
   onClose(listener: () => void): () => void;
+  /**
+   * Flow control: this end's reader credits explicitly with `consumed` from now
+   * on. Without it, everything delivered here is credited at once, so a reader
+   * that never credits cannot stall the writer.
+   */
+  manualFlowControl(): void;
+  /** Flow control: this end's reader has consumed `bytes` of what arrived (the other end hears `onConsumed`). */
+  consumed(bytes: number): void;
+  /** Flow control: the other end's reader consumed `bytes` of what this end sent. */
+  onConsumed(listener: (bytes: number) => void): () => void;
   readonly closed: boolean;
 }
 
 /** Take over a connection a client asked to upgrade (`Upgrade: websocket`); `socket` is the server end. */
 export type UpgradeHandler = (request: HttpRequestData, socket: ByteChannel) => void;
+
+/** Take a raw TCP connection (`net.Server`'s `'connection'`); `socket` is the server end. */
+export type ConnectionHandler = (socket: ByteChannel) => void;
 
 export interface System {
   fs: VirtualFileSystem;
@@ -118,9 +132,16 @@ export interface System {
   spawn(command: string, args: string[], options?: ProcessOptions): ChildHandle;
   /**
    * Register a virtual server; throws `EADDRINUSE`. Port 0 picks a free one.
-   * `upgrade` takes over connections that ask to upgrade (WebSockets). Returns the port and an unlisten.
+   * `upgrade` takes over connections that ask to upgrade (WebSockets);
+   * `connection` takes raw TCP connections (`net.createServer`). Returns the port and an unlisten.
    */
-  listen(port: number, handler: HttpHandler, upgrade?: UpgradeHandler): { port: number; close(): void };
+  listen(port: number, handler: HttpHandler, upgrade?: UpgradeHandler, connection?: ConnectionHandler): { port: number; close(): void };
+  /**
+   * Open a raw TCP connection to a server on `port` in this runtime (loopback
+   * only); resolves with the client end, or undefined when nothing listens there
+   * (`ECONNREFUSED`).
+   */
+  connect(port: number): Promise<ByteChannel | undefined>;
   /** Send a request to a virtual server in this runtime (`http.get('http://localhost:3000')`); undefined when nothing listens. The body streams. */
   loopback(port: number, request: HttpRequestData): Promise<HttpStreamResponse | undefined>;
   /** Where a browser reaches a server on `port` (the preview URL), if known. */

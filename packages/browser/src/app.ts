@@ -14,4 +14,11 @@ export type { ApplicationRuntime, ApplicationRuntimeOptions, ServiceError, Servi
 export { createNodeProvider, acceptsNodeService, NODE_DECLINED_COMMANDS, NODE_READINESS } from './app/nodeProvider.js';
 export type { NodeProviderOptions } from './app/nodeProvider.js';
 export type { NodeServiceHost } from './app/nodeReadiness.js';
+export { createPgliteProvider, acceptsPgliteService, pgliteDataDir } from './app/pgliteProvider.js';
+export type { DatabaseServiceHost, PgliteProviderOptions } from './app/pgliteProvider.js';
+export { startDatabaseHost } from './database/databaseHost.js';
+export type { DatabaseHost, DatabaseHostOptions } from './database/databaseHost.js';
+export { claimDatabase, DatabaseCoordinationError } from './database/databaseLeadership.js';
+export type { DatabaseOwnership, LockManagerLike } from './database/databaseLeadership.js';
+export { DEFAULT_PGLITE_URL, PGLITE_VERSION } from './database/pgliteLoader.js';
 export * from '@seanhogg/builderforce-webcontainers-core/app';

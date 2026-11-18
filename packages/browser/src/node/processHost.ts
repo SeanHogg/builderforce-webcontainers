@@ -9,8 +9,8 @@
  * process (exit, kill, dispose) ends its children too, unless spawned `detached`.
  *
  * Responses from a worker's servers stream through here chunk by chunk (see
- * responseWire.ts), and upgraded connections (WebSockets) are relayed as raw
- * bytes between the client end the caller holds and the server's worker.
+ * responseWire.ts); connections — upgraded (WebSockets) and raw TCP, to a
+ * worker's servers or dialled by it — are relayed as raw bytes (connectionRelay.ts).
  */
 import {
   DEFAULT_ENV,
@@ -37,6 +37,7 @@ import type { HostToWorker, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
 import { ResponseReceiver, sendResponse } from './responseWire.js';
 import { ChildRelay, isChildMessage } from './childRelay.js';
+import { ConnectionRelay, isConnectionMessage } from './connectionRelay.js';
 import { WorkerSupply } from './workerSupply.js';
 import { FsSync } from './fsSync.js';
 
@@ -97,8 +98,8 @@ interface Proc {
   responses: ResponseReceiver;
   /** Its loopback requests being answered, by the worker's request id: cancel functions. */
   loopbacks: Map<number, () => void>;
-  /** Upgraded connections to its servers: the page-side end of each, by connection id. */
-  sockets: Map<number, ByteChannel>;
+  /** Connections to its servers (upgraded or raw TCP) and the ones it dialled. */
+  connections: ConnectionRelay;
 }
 
 const EXITED = 'The server process exited.';
@@ -109,7 +110,6 @@ export class ProcessHost {
   readonly servers = new ServerEvents();
   private readonly procs = new Set<Proc>();
   private nextReq = 1;
-  private nextConn = 1;
   private readonly stopPorts: () => void;
   /** The processes' file systems kept in step with the page's, and the snapshots new ones start from. */
   private readonly fsSync: FsSync<Proc>;
@@ -169,7 +169,7 @@ export class ProcessHost {
       }, (message) => this.post(proc, message)),
       responses: new ResponseReceiver(),
       loopbacks: new Map(),
-      sockets: new Map(),
+      connections: new ConnectionRelay(this.ports, (message) => this.post(proc, message)),
     };
     if (options.ipc) proc.ipc = createIpcEndpoint((data) => this.post(proc, { type: 'ipc', data }), () => this.post(proc, { type: 'ipc-disconnect' }));
     this.procs.add(proc);
@@ -262,8 +262,7 @@ export class ProcessHost {
     proc.responses.abort(() => textResponse(502, EXITED), EXITED);
     for (const cancel of [...proc.loopbacks.values()]) cancel();
     proc.loopbacks.clear();
-    for (const socket of proc.sockets.values()) socket.close();
-    proc.sockets.clear();
+    proc.connections.closeAll();
     proc.ipc?.closed();
     // Exited on its own: its children get SIGTERM (and the grace period), as a real parent's would.
     proc.children.killAll('SIGTERM');
@@ -278,6 +277,7 @@ export class ProcessHost {
 
   private onWorkerMessage(proc: Proc, message: WorkerToHost): void {
     if (isChildMessage(message)) return proc.children.receive(message);
+    if (isConnectionMessage(message)) return proc.connections.receive(message);
     switch (message.type) {
       case 'stdout':
         for (const l of proc.stdout) l(message.data);
@@ -298,10 +298,12 @@ export class ProcessHost {
         return proc.ipc?.closed();
       case 'listen': {
         try {
+          const { port } = message;
           const registration = this.ports.listen(
-            message.port,
-            (request) => this.forward(proc, message.port, request),
-            (request, socket) => this.forwardUpgrade(proc, message.port, request, socket),
+            port,
+            (request) => this.forward(proc, port, request),
+            (request, socket) => (proc.exited ? socket.close() : proc.connections.upgrade(port, request, socket)),
+            message.tcp ? (socket) => (proc.exited ? socket.close() : proc.connections.accept(port, socket)) : undefined,
           );
           proc.registrations.set(message.port, registration);
         } catch (error) {
@@ -325,12 +327,6 @@ export class ProcessHost {
       }
       case 'request-cancel':
         return proc.loopbacks.get(message.reqId)?.();
-      case 'socket-data':
-        return proc.sockets.get(message.connId)?.send(message.data);
-      case 'socket-close':
-        proc.sockets.get(message.connId)?.close();
-        proc.sockets.delete(message.connId);
-        return;
       case 'listening':
         this.servers.announce({ port: message.port, url: message.url });
         return;
@@ -343,17 +339,5 @@ export class ProcessHost {
     const response = proc.responses.expect(reqId, () => this.post(proc, { type: 'request-cancel', reqId }));
     this.post(proc, { type: 'http-request', reqId, port, request });
     return (await response) ?? textResponse(502, `Nothing is listening on port ${port}.`);
-  }
-
-  /** Relay an upgraded connection: `socket` is the server end; its bytes go to the worker, and the worker's come back. */
-  private forwardUpgrade(proc: Proc, port: number, request: HttpRequestData, socket: ByteChannel): void {
-    if (proc.exited) return socket.close();
-    const connId = this.nextConn++;
-    proc.sockets.set(connId, socket);
-    socket.onData((data) => this.post(proc, { type: 'socket-data', connId, data }));
-    socket.onClose(() => {
-      if (proc.sockets.delete(connId)) this.post(proc, { type: 'socket-close', connId });
-    });
-    this.post(proc, { type: 'socket-open', connId, port, request });
   }
 }

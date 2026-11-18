@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FrameDecoder, Opcode, decodeClosePayload, encodeClosePayload, encodeFrame, webSocketAccept, webSocketKey, type WebSocketFrame } from '../../src/system/webSocketFrames.js';
-import { createChannelPair, pushStream, readBody } from '../../src/system/httpStream.js';
+import { pushStream, readBody } from '../../src/system/httpStream.js';
+import { createChannelPair } from '../../src/system/byteChannel.js';
 
 describe('websocket frames', () => {
   it('computes the RFC 6455 accept key', () => {

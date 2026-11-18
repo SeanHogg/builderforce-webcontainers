@@ -44,3 +44,26 @@ export async function readAll(stream: ReadableStream<string>): Promise<string> {
     text += value;
   }
 }
+
+/** A process's output, readable as it arrives: wait for some text (`until`), or for all of it (`done`). */
+export function collect(stream: ReadableStream<string>) {
+  let text = '';
+  const waiters = new Set<{ wanted: string; resolve(): void }>();
+  const done = (async () => {
+    const reader = stream.getReader();
+    for (;;) {
+      const { value, done: finished } = await reader.read();
+      if (finished) return text;
+      text += value;
+      for (const waiter of [...waiters]) {
+        if (!text.includes(waiter.wanted)) continue;
+        waiters.delete(waiter);
+        waiter.resolve();
+      }
+    }
+  })();
+  return {
+    done,
+    until: (wanted: string) => (text.includes(wanted) ? Promise.resolve() : new Promise<void>((resolve) => waiters.add({ wanted, resolve }))),
+  };
+}

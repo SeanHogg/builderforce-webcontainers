@@ -3,6 +3,7 @@
  * host calls, and what it hears back.
  */
 import type {
+  DatabaseControl,
   ProviderRegistry,
   RestartLimits,
   RuntimeProvider,
@@ -114,6 +115,13 @@ export interface ApplicationRuntime {
   logs(serviceId?: string): ReadableStream<ServiceLogEntry>;
   onStateChange(listener: (change: StateChange) => void): () => void;
   onError(listener: (error: ServiceError) => void): () => void;
+  /**
+   * A database service's data: `export()` a snapshot, `import(blob)` one in its
+   * place, `reset()` to empty. Each call reaches the database running at that
+   * moment and rejects when it is not running. Throws for an id that is not a
+   * database service.
+   */
+  database(serviceId: string): DatabaseControl;
 }
 
 /** `start()` or `restart()` could not bring every service up. */

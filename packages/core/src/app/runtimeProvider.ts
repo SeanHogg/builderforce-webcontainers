@@ -31,6 +31,19 @@ export interface ServiceHandle {
   kill(signal?: string): void;
   /** Where a browser reaches the service, once it is listening. */
   url(): string | undefined;
+  /** A database service's data operations (`ApplicationRuntime.database(id)`). */
+  readonly database?: DatabaseControl;
+}
+
+/**
+ * A running database's data, as a host manages it: `export()` a snapshot
+ * (Postgres data-directory tarball), `import()` one in its place, `reset()` to
+ * empty. Import and reset close the database's open client connections.
+ */
+export interface DatabaseControl {
+  export(): Promise<Blob>;
+  import(data: Blob): Promise<void>;
+  reset(): Promise<void>;
 }
 
 export interface RuntimeProvider {

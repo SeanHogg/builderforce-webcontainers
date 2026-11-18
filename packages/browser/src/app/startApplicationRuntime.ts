@@ -114,5 +114,15 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
     logs: (serviceId) => logs.stream(serviceId),
     onStateChange: (listener) => stateChanges.on(listener),
     onError: (listener) => errors.on(listener),
+    database(serviceId) {
+      const target = service(serviceId);
+      if (spec.services.find((candidate) => candidate.id === serviceId)?.type !== 'database') throw new Error(`Service "${serviceId}" is not a database.`);
+      const running = async () => target.database() ?? Promise.reject(new Error(`Database "${serviceId}" is not running.`));
+      return {
+        export: async () => (await running()).export(),
+        import: async (data) => (await running()).import(data),
+        reset: async () => (await running()).reset(),
+      };
+    },
   };
 }

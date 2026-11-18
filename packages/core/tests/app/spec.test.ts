@@ -163,6 +163,17 @@ describe('serviceEnv', () => {
     expect(env.DB_DATABASE_URL).toBe(env.DATABASE_URL);
   });
 
+  it('defaults a pglite URL to its one database, without a password (the gateway trusts connections)', () => {
+    const pglite: ApplicationSpec = {
+      projectId: 'p',
+      services: [
+        { id: 'db', type: 'database', runtime: 'pglite', port: 5432, database: { engine: 'postgres', provider: 'pglite', persistent: false } },
+        svc('api', { dependsOn: ['db'] }),
+      ],
+    };
+    expect(serviceEnv(pglite, 'api').DATABASE_URL).toBe('postgres://postgres@localhost:5432/postgres');
+  });
+
   it('never gives a frontend database credentials, even when it depends on the database; its own env wins', () => {
     const env = serviceEnv(spec, 'web');
     expect(env.DATABASE_URL).toBeUndefined();

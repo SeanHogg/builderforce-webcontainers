@@ -21,6 +21,8 @@ export interface NodeRuntimeOptions {
   workerUrl?: string | URL;
   /** Build each process Worker yourself (CSP, a test double). Wins over `workerUrl`. */
   createWorker?: () => WorkerLike;
+  /** Build each database Worker yourself. It must run on the host origin, never the preview origin. Wins over `workerUrl`. */
+  createDatabaseWorker?: () => WorkerLike;
   /** npm registry. Default https://registry.npmjs.org (it sends CORS headers). */
   registry?: string;
   /** Cache npm tarballs in Cache Storage. Default true. */
@@ -33,15 +35,51 @@ export interface NodeRuntimeOptions {
   warmWorker?: boolean;
 }
 
+const bundledWorker = (options: NodeRuntimeOptions, name: string) => () =>
+  new Worker(options.workerUrl ?? new URL('./worker.js', import.meta.url), { name }) as unknown as WorkerLike;
+
+/** How this runtime starts a process Worker: the option (in relay mode, the relay's, on the preview origin), else the bundled script. */
+export function workerFactory(options: NodeRuntimeOptions = {}): () => WorkerLike {
+  return options.createWorker ?? bundledWorker(options, 'bfwc-process');
+}
+
+/**
+ * How this runtime starts a database Worker: always on the HOST origin —
+ * `createDatabaseWorker`, else the bundled script beside this module (it turns
+ * into a database Worker on `database-open`). Never `createWorker`, which in
+ * relay mode starts Workers on the preview origin, where the project's own code
+ * runs: the database's storage must be out of its reach.
+ */
+export function databaseWorkerFactory(options: NodeRuntimeOptions = {}): () => WorkerLike {
+  return options.createDatabaseWorker ?? bundledWorker(options, 'bfwc-database');
+}
+
+/** Workers a factory started, so their owner can stop the ones still running. */
+export function trackWorkers(create: () => WorkerLike): { create(): WorkerLike; terminateAll(): void } {
+  const running = new Set<WorkerLike>();
+  return {
+    create() {
+      const worker = create();
+      running.add(worker);
+      const terminate = worker.terminate.bind(worker);
+      worker.terminate = () => {
+        running.delete(worker);
+        terminate();
+      };
+      return worker;
+    },
+    terminateAll() {
+      for (const worker of [...running]) worker.terminate();
+    },
+  };
+}
+
 export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions }): ProcessHost {
   const { options = {} } = args;
-  const createWorker =
-    options.createWorker ??
-    (() => new Worker(options.workerUrl ?? new URL('./worker.js', import.meta.url), { name: 'bfwc-process' }) as unknown as WorkerLike);
   return new ProcessHost({
     fs: args.fs,
     cwd: args.cwd,
-    createWorker,
+    createWorker: workerFactory(options),
     previewOrigin: args.origin,
     previewBase: args.base,
     previewUrl: args.previewUrl,

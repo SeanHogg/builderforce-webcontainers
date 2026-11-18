@@ -1,10 +1,10 @@
 /**
  * Building blocks for streamed HTTP between programs and hosts: a body stream
  * fed by pushes (a server's `res.write`, chunks arriving over postMessage),
- * buffering helpers for callers that want the whole response, and the in-memory
- * byte pipe an upgraded connection runs over.
+ * and buffering helpers for callers that want the whole response. The byte pipe
+ * connections run over is byteChannel.ts.
  */
-import type { ByteChannel, HttpResponseData, HttpResponseHead, HttpStreamResponse } from './types.js';
+import type { HttpResponseData, HttpResponseHead, HttpStreamResponse } from './types.js';
 
 /** Bytes a body stream queues for a reader that is not keeping up before `push` reports it full. */
 export const BODY_HIGH_WATER_MARK = 1024 * 1024;
@@ -153,47 +153,3 @@ export function drainBody(stream: ReadableStream<Uint8Array>, sink: { chunk(data
   };
 }
 
-class ChannelEnd implements ByteChannel {
-  peer!: ChannelEnd;
-  closed = false;
-  private readonly data = new Set<(data: Uint8Array) => void>();
-  private readonly closes = new Set<() => void>();
-
-  send(data: Uint8Array): void {
-    if (this.closed) return;
-    const copy = new Uint8Array(data); // a copy (a Buffer's slice would be a view)
-    queueMicrotask(() => {
-      if (!this.peer.closed) for (const listener of this.peer.data) listener(copy);
-    });
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    // Delivered after any data already sent, like a FIN after the last segment.
-    queueMicrotask(() => {
-      if (this.peer.closed) return; // both hung up at once: neither needs telling
-      this.peer.closed = true;
-      for (const listener of this.peer.closes) listener();
-    });
-  }
-
-  onData(listener: (data: Uint8Array) => void): () => void {
-    this.data.add(listener);
-    return () => this.data.delete(listener);
-  }
-
-  onClose(listener: () => void): () => void {
-    this.closes.add(listener);
-    return () => this.closes.delete(listener);
-  }
-}
-
-/** Two connected ends: bytes sent on one arrive (asynchronously, in order) on the other. */
-export function createChannelPair(): [ByteChannel, ByteChannel] {
-  const a = new ChannelEnd();
-  const b = new ChannelEnd();
-  a.peer = b;
-  b.peer = a;
-  return [a, b];
-}

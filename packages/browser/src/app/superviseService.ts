@@ -13,6 +13,7 @@ import {
   restartDecision,
   restartPolicyOf,
   roleOf,
+  type DatabaseControl,
   type ProviderRegistry,
   type RestartDecision,
   type RestartLimits,
@@ -52,6 +53,8 @@ export interface SupervisedService extends ReadinessSource {
   /** Stop, then start — unless another stop arrives meanwhile. Dependents waiting for it keep waiting. */
   restart(): Promise<void>;
   url(): string | undefined;
+  /** The running process's database operations, when it is a database. */
+  database(): DatabaseControl | undefined;
   snapshot(): ServiceSnapshot;
 }
 
@@ -263,6 +266,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
     failure: () => downReason,
     onChange: (listener) => changes.on(listener),
     url: () => active?.handle?.url(),
+    database: () => active?.handle?.database,
     snapshot: () => ({
       id: spec.id,
       type: spec.type,

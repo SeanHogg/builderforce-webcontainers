@@ -4,8 +4,9 @@
  * in one process is reachable from another (`fetch('http://localhost:3000')`)
  * and from the preview service worker (`/__bfwc/<id>/__port/3000/`).
  */
-import type { ByteChannel, HttpHandler, HttpRequestData, HttpResponseData, HttpStreamResponse, UpgradeHandler } from './types.js';
-import { bufferResponse, createChannelPair } from './httpStream.js';
+import type { ByteChannel, ConnectionHandler, HttpHandler, HttpRequestData, HttpResponseData, HttpStreamResponse, UpgradeHandler } from './types.js';
+import { bufferResponse } from './httpStream.js';
+import { acceptConnection, createChannelPair } from './byteChannel.js';
 
 export interface PortEvent {
   type: 'open' | 'close';
@@ -17,10 +18,12 @@ const EPHEMERAL_START = 49152;
 export class PortRegistry {
   private readonly handlers = new Map<number, HttpHandler>();
   private readonly upgrades = new Map<number, UpgradeHandler>();
+  private readonly connections = new Map<number, ConnectionHandler>();
   private readonly listeners = new Set<(event: PortEvent) => void>();
   private nextEphemeral = EPHEMERAL_START;
 
-  listen(port: number, handler: HttpHandler, upgrade?: UpgradeHandler): { port: number; close(): void } {
+  /** `connection` takes raw TCP connections (a `net.Server`, a database gateway). */
+  listen(port: number, handler: HttpHandler, upgrade?: UpgradeHandler, connection?: ConnectionHandler): { port: number; close(): void } {
     let actual = port;
     if (!actual) {
       while (this.handlers.has(this.nextEphemeral)) this.nextEphemeral++;
@@ -31,6 +34,7 @@ export class PortRegistry {
     }
     this.handlers.set(actual, handler);
     if (upgrade) this.upgrades.set(actual, upgrade);
+    if (connection) this.connections.set(actual, connection);
     this.emit({ type: 'open', port: actual });
     let open = true;
     return {
@@ -40,6 +44,7 @@ export class PortRegistry {
         open = false;
         this.handlers.delete(actual);
         this.upgrades.delete(actual);
+        this.connections.delete(actual);
         this.emit({ type: 'close', port: actual });
       },
     };
@@ -72,6 +77,16 @@ export class PortRegistry {
     const [client, server] = createChannelPair();
     upgrade(request, server);
     return client;
+  }
+
+  /**
+   * Open a raw TCP connection to whatever listens on `port`; returns the client
+   * end, or undefined when nothing listens (`ECONNREFUSED`). A port that serves
+   * only HTTP accepts and drops the connection (see `acceptConnection`).
+   */
+  connect(port: number): ByteChannel | undefined {
+    if (!this.handlers.has(port)) return undefined;
+    return acceptConnection(this.connections.get(port));
   }
 
   watch(listener: (event: PortEvent) => void): () => void {

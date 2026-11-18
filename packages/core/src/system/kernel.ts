@@ -56,7 +56,8 @@ export class Kernel {
       fs: this.fs,
       fetch: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
       spawn: (command, args, spawnOptions) => this.spawnChild(command, args, spawnOptions),
-      listen: (port, handler, upgrade) => this.ports.listen(port, handler, upgrade),
+      listen: (port, handler, upgrade, connection) => this.ports.listen(port, handler, upgrade, connection),
+      connect: async (port) => this.ports.connect(port),
       loopback: (port, request) => this.ports.request(port, request),
       serverUrl,
       announceServer: (port, url) => this.servers.announce({ port, url }),
@@ -98,6 +99,11 @@ export class Kernel {
   /** Open an upgraded connection (a WebSocket, via `connectWebSocket`); undefined when nothing on `port` takes upgrades. */
   upgrade(port: number, request: Partial<HttpRequestData> & { url: string }): ByteChannel | undefined {
     return this.ports.upgrade(port, withDefaults(request));
+  }
+
+  /** Open a raw TCP connection to the server on `port`; undefined when nothing listens there. */
+  connect(port: number): ByteChannel | undefined {
+    return this.ports.connect(port);
   }
 }
 

@@ -40,13 +40,28 @@ export function serviceMap(spec: ApplicationSpec): Record<string, string> {
   return map;
 }
 
-/** `postgres://user:password@localhost:<port>/<name>`, or undefined for an engine without a URL scheme or a database without a port. */
+/**
+ * Connection defaults per database provider, for what the spec leaves unset.
+ * PGlite has one database, `postgres`, and its gateway trusts every connection,
+ * so its URL names that database and carries no password.
+ */
+export const DATABASE_PROVIDER_DEFAULTS: Readonly<Record<string, { name?: string; passwordless?: boolean }>> = {
+  pglite: { name: 'postgres', passwordless: true },
+};
+
+/**
+ * `postgres://user[:password]@localhost:<port>/<name>`, or undefined for an
+ * engine without a URL scheme or a database without a port. Unset parts come
+ * from the provider's defaults, then `postgres` / `postgres` / the service id.
+ */
 export function databaseUrl(service: ServiceSpec, database: DatabaseSpec): string | undefined {
   const scheme = DATABASE_URL_SCHEMES[database.engine.toLowerCase()];
   if (!scheme || service.port === undefined) return undefined;
+  const defaults = DATABASE_PROVIDER_DEFAULTS[database.provider] ?? {};
   const user = encodeURIComponent(database.user ?? 'postgres');
-  const password = encodeURIComponent(database.password ?? 'postgres');
-  return `${scheme}://${user}:${password}@localhost:${service.port}/${encodeURIComponent(database.name ?? service.id)}`;
+  const password = database.password ?? (defaults.passwordless ? undefined : 'postgres');
+  const credentials = password === undefined ? user : `${user}:${encodeURIComponent(password)}`;
+  return `${scheme}://${credentials}@localhost:${service.port}/${encodeURIComponent(database.name ?? defaults.name ?? service.id)}`;
 }
 
 /** May this service receive database credentials? */

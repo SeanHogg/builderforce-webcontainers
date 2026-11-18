@@ -13,9 +13,12 @@ import {
   exportZip,
   importZip,
   normalizePath,
+  textResponse,
   type BuildResult,
   type Bundler,
+  type ByteChannel,
   type ComponentCompilers,
+  type ConnectionHandler,
   type FileTree,
   type HttpRequestData,
   type HttpResponseData,
@@ -31,7 +34,8 @@ import {
   type ZipImportLimits,
 } from '@seanhogg/builderforce-webcontainers-core';
 import { PREVIEW_ID, isPortPath, isWireCancel, isWireRequest, previewBase, type WireReply, type WireResponse } from './protocol.js';
-import { createPortResponder, createProcessHost, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
+import { createPortResponder, createProcessHost, databaseWorkerFactory, trackWorkers, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
+import type { WorkerLike } from './node/processHost.js';
 import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from './previewMessages.js';
 import { listenToPreviewBridge } from './previewBridge.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
@@ -172,6 +176,20 @@ export interface PreviewRuntime {
    */
   request(port: number, request: Partial<HttpRequestData> & { url: string }): Promise<HttpResponseData | undefined>;
   /**
+   * Serve raw TCP on a virtual port from the page (the database gateway does):
+   * processes reach it with `net.connect(port)`; an HTTP request to it gets a
+   * 502. Throws `EADDRINUSE`.
+   */
+  listenTcp(port: number, accept: ConnectionHandler): { port: number; close(): void };
+  /** Open a raw TCP connection to whatever listens on `port`; undefined when nothing does. */
+  connect(port: number): ByteChannel | undefined;
+  /**
+   * A database Worker, always on the HOST origin (relay mode included), so the
+   * code a project runs — on the preview origin — has no path to the database's
+   * storage; only gateway bytes cross. `dispose()` terminates the ones running.
+   */
+  createDatabaseWorker(): WorkerLike;
+  /**
    * Cookies virtual servers set, per port. A service worker cannot set cookies,
    * so the runtime keeps them and sends them back on later requests (and
    * WebSocket handshakes); inspect or `clear()` them here.
@@ -241,6 +259,8 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   // In relay mode processes run on the preview origin (the relay starts them), never the host's.
   const node = { ...options.node, createWorker: options.node?.createWorker ?? transport.createWorker?.bind(transport) };
   const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, previewUrl, options: node });
+  // Databases never run where processes do in relay mode: their Workers start on this (host) origin.
+  const databaseWorkers = trackWorkers(databaseWorkerFactory(options.node));
 
   const cookies = new PortCookieJars();
   let responder: ReturnType<typeof createPortResponder> | undefined;
@@ -306,11 +326,15 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     onPortChange: (listener) => processes.servers.onPortChange(listener),
     listProcesses: () => processes.list().map((info) => ({ ...info, cwd: baseToProject(root, info.cwd) ?? info.cwd })),
     request: (port, request) => processes.request(port, { method: 'GET', headers: {}, body: null, ...request }),
+    listenTcp: (port, accept) => processes.ports.listen(port, async () => textResponse(502, 'Not an HTTP server'), undefined, accept),
+    connect: (port) => processes.ports.connect(port),
+    createDatabaseWorker: () => databaseWorkers.create(),
     cookies,
     dispose() {
       bridge.dispose();
       responder?.dispose();
       processes.dispose();
+      databaseWorkers.terminateAll();
       previewMessages.dispose();
       stopWatching?.();
       stopReattach();

@@ -15,13 +15,15 @@ export type {
   HttpHandler,
   ByteChannel,
   UpgradeHandler,
+  ConnectionHandler,
   ThreadInfo,
   StdioChunk,
 } from './types.js';
 export { createIpcEndpoint, createIpcPair } from './ipc.js';
 export type { IpcEndpoint } from './ipc.js';
 export { PortRegistry, parsePortPath } from './ports.js';
-export { pushStream, bytesStream, textResponse, readBody, bufferResponse, headOf, drainBody, createChannelPair } from './httpStream.js';
+export { pushStream, bytesStream, textResponse, readBody, bufferResponse, headOf, drainBody } from './httpStream.js';
+export { createChannelPair, acceptConnection } from './byteChannel.js';
 export type { PushStream } from './httpStream.js';
 export { connectWebSocket } from './webSocketClient.js';
 export type { WebSocketConnection, WebSocketConnectOptions, WebSocketCloseInfo } from './webSocketClient.js';

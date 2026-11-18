@@ -1,15 +1,11 @@
 /**
- * The `http`, `https` and `net` module objects. `https.createServer` is the
- * same virtual server (TLS is the preview origin's job); `net` offers just
- * enough — `isIP*` and a port-reserving `createServer` — for the port-probing
- * helpers (get-port, detect-port) dev tools run before listening.
+ * The `http` and `https` module objects. `https.createServer` is the same
+ * virtual server (TLS is the preview origin's job). `net` is `../net/`.
  */
 import { EventEmitterBase } from '../events.js';
 import { ClientRequest, createFetch, type ClientDeps } from './client.js';
-import { FakeSocket, IncomingMessage, OutgoingHeaders, Server, ServerResponse } from './server.js';
+import { IncomingMessage, OutgoingHeaders, Server, ServerResponse } from './server.js';
 import { METHODS, STATUS_CODES } from './status.js';
-import { textResponse } from '../../system/httpStream.js';
-import { queueCallback } from '../processExit.js';
 
 export { createFetch };
 
@@ -61,64 +57,3 @@ export function createHttpModule(deps: ClientDeps, protocol: 'http:' | 'https:')
   };
 }
 
-const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
-const IPV6 = /^(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}$/i;
-
-export function createNetModule(deps: ClientDeps): Record<string, unknown> {
-  /** A TCP server cannot exist here; one that only RESERVES its port keeps port probes truthful. */
-  class NetServer extends EventEmitterBase {
-    private reservation?: { port: number; close(): void };
-    private release?: () => void;
-    listening = false;
-    listen(...args: unknown[]): this {
-      const callback = typeof args[args.length - 1] === 'function' ? (args.pop() as () => void) : undefined;
-      const first = args[0];
-      const port = typeof first === 'object' && first ? Number((first as { port?: number }).port ?? 0) : Number(first ?? 0);
-      if (callback) this.once('listening', callback);
-      try {
-        this.reservation = deps.system.listen(port, async () => textResponse(502, 'Not an HTTP server'));
-      } catch (error) {
-        queueCallback(() => this.emit('error', error));
-        return this;
-      }
-      this.listening = true;
-      this.release = deps.loop.hold();
-      queueCallback(() => this.emit('listening'));
-      return this;
-    }
-    address() {
-      return this.reservation ? { address: '::', family: 'IPv6', port: this.reservation.port } : null;
-    }
-    close(callback?: () => void): this {
-      this.reservation?.close();
-      this.reservation = undefined;
-      this.listening = false;
-      this.release?.();
-      if (callback) this.once('close', callback);
-      queueCallback(() => this.emit('close'));
-      return this;
-    }
-    ref(): this { return this; }
-    unref(): this {
-      this.release?.();
-      this.release = undefined;
-      return this;
-    }
-  }
-  const noTcp = () => {
-    throw Object.assign(new Error('Raw TCP sockets are not available in the browser runtime'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' });
-  };
-  return {
-    createServer: () => new NetServer(),
-    Server: NetServer,
-    Socket: FakeSocket,
-    Stream: FakeSocket,
-    connect: noTcp,
-    createConnection: noTcp,
-    isIP: (s: string) => (IPV4.test(s) ? 4 : IPV6.test(s) ? 6 : 0),
-    isIPv4: (s: string) => IPV4.test(s),
-    isIPv6: (s: string) => IPV6.test(s),
-    getDefaultAutoSelectFamily: () => true,
-    setDefaultAutoSelectFamily: () => undefined,
-  };
-}

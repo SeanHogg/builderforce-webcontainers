@@ -4,7 +4,7 @@
  * entry and resolves `exit` with the code once the process exits — by
  * `process.exit()`, an uncaught exception, being killed, or the loop going idle.
  */
-import type { ProgramIO, System, ThreadInfo } from '../system/types.js';
+import type { ByteChannel, ProgramIO, System, ThreadInfo } from '../system/types.js';
 import type { IpcEndpoint } from '../system/ipc.js';
 import { signalExitCode } from '../system/signals.js';
 import { attachProcessChannel } from './ipc.js';
@@ -67,12 +67,24 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
   const exit = new Promise<number>((resolve) => (resolveExit = resolve));
   let finished = false;
   const servers = new Set<{ close(): void }>();
+  /** Raw TCP connections this process holds an end of (dialled, or accepted by its servers). */
+  const connections = new Set<ByteChannel>();
+  const track = (channel: ByteChannel) => {
+    connections.add(channel);
+    channel.onClose(() => connections.delete(channel));
+    return channel;
+  };
 
-  // Servers die with the process: wrap listen so exit can close what is left open.
+  // Servers and connections die with the process: wrap listen and connect so exit can close what is left open.
   const processSystem: System = {
     ...system,
-    listen(port, handler, upgrade) {
-      const registration = system.listen(port, handler, upgrade);
+    async connect(port) {
+      const channel = await system.connect(port);
+      if (channel && finished) channel.close();
+      return channel && !finished ? track(channel) : undefined;
+    },
+    listen(port, handler, upgrade, connection) {
+      const registration = system.listen(port, handler, upgrade, connection && ((socket) => connection(track(socket))));
       const tracked = {
         port: registration.port,
         close() {
@@ -90,6 +102,8 @@ export async function startNode(options: NodeOptions): Promise<NodeInstance> {
     finished = true;
     loop.stop();
     for (const server of [...servers]) server.close();
+    for (const channel of [...connections]) channel.close();
+    connections.clear();
     resolveExit(code);
   };
 

@@ -190,3 +190,97 @@ Runtimes plug in as `RuntimeProvider`s (`{ id, accepts(service), start(service, 
 declined, nothing starts and `start()` rejects with the reasons (phase
 `declined`) — never a half-started app. `validateSpec`, `serviceGraph`,
 `serviceEnv` and the lifecycle state machine are exported too, as pure functions.
+
+### Databases (PGlite)
+
+A `database` service with `runtime: 'pglite'` runs Postgres (PGlite) in its own
+Worker, behind a Postgres wire gateway on the service's port. Services reach it
+with an unmodified driver (`pg`, `postgres`, Drizzle, Prisma driver adapters) at
+`DATABASE_URL=postgres://postgres@localhost:<port>/postgres`:
+
+```ts
+import { createNodeProvider, createPgliteProvider, startApplicationRuntime } from '@seanhogg/builderforce-webcontainers/app';
+
+const app = startApplicationRuntime(
+  {
+    projectId,
+    services: [
+      { id: 'db', type: 'database', runtime: 'pglite', port: 5432, readiness: { kind: 'query' },
+        database: { engine: 'postgres', provider: 'pglite', persistent: true } },
+      { id: 'api', type: 'application', runtime: 'node', root: '/api', command: 'node', args: ['server.js'],
+        port: 8000, dependsOn: ['db'], readiness: { kind: 'http', path: '/health' } },
+    ],
+  },
+  { providers: [createNodeProvider(runtime), createPgliteProvider(runtime)] },
+);
+await app.start();                          // db ready once SELECT 1 succeeds, then api
+const backup = await app.database('db').export();   // a data-directory tarball (Blob)
+await app.database('db').import(backup);            // or .reset() to empty
+```
+
+- **Storage.** `persistent: true` keeps the data in IndexedDB, one store per
+  project and database id (`pgliteDataDir`), outside the project files: it
+  survives reloads and never lands in `exportZip`. `persistent: false` is in memory.
+- **Lifetime.** The database outlives restarts of the services using it and
+  closes (flushed) with the application. A stop (`SIGTERM`) hangs up its
+  clients, flushes and closes PGlite, and terminates the Worker if that takes
+  longer than `closeTimeoutMs` (5 s); `SIGKILL` terminates it at once.
+  `import`/`reset` close its open connections; pools reconnect. An `import` is
+  opened and checked in a scratch in-memory PGlite first: a corrupt snapshot is
+  refused and the current data stays.
+- **Connections.** Any number of clients; they share PGlite's single session,
+  taking turns. A client keeps the engine until a reply says its session is idle
+  again — through `BEGIN … COMMIT`, through an extended-protocol exchange up to
+  its `Sync`, through `COPY` — so no other client's statement lands inside it.
+  A client that disconnects mid-transaction is rolled back. One that holds the
+  engine and goes quiet for `idleInTransactionTimeoutMs` (30 s; 0 = never) is
+  rolled back and disconnected with `FATAL 25P03`, as Postgres's
+  `idle_in_transaction_session_timeout` does.
+- **Deadlock to avoid.** Because there is one session, a client that waits,
+  inside its own transaction, on ANOTHER connection — `await pool.query(…)`
+  while holding a `pool.connect()` client in `BEGIN` — waits for itself: the
+  second connection's turn comes only after the first commits. Run every
+  statement of a transaction on the transaction's client. The idle timeout ends
+  such a deadlock by rolling the transaction back.
+- **Limits of the shared session.** `SET`, named prepared statements, temp
+  tables and `LISTEN` are visible to every connection; query cancellation is not
+  supported; the gateway trusts every connection (no password) and serves no TLS
+  (`sslmode=disable`). A protocol violation (bad or oversized packet, HTTP sent
+  to the port) gets `FATAL 08P01` and a hang-up.
+- **Backpressure.** The gateway credits a client's bytes as it runs them (past a
+  256 KB queue) and runs a client's next batch only once it has read its replies
+  to within 256 KB, so neither a flooding writer nor a slow reader piles up memory.
+- **Isolation.** The database Worker always runs on the HOST origin
+  (`runtime.createDatabaseWorker()`), relay mode included: the code a project
+  runs lives on the preview origin and has no path to the database's IndexedDB
+  storage; only gateway bytes cross between its processes and the database.
+  Preview pages reach services over HTTP only, never the database port.
+  `runtime.dispose()` terminates database Workers still running.
+- **Tabs.** The origin's tabs share one database: the tab holding its Web Lock
+  runs it, and every other tab proxies its clients to that tab over a
+  BroadcastChannel and waits in line. When the owner closes it (or its tab
+  dies), the next tab takes over from IndexedDB; clients connected through other
+  tabs see their connection close, and reconnect. Persistent databases need Web
+  Locks (`navigator.locks`): without it they are refused with
+  `DatabaseCoordinationError` rather than risk two owners writing the same files
+  (a BroadcastChannel claim cannot tell a frozen tab from a gone one).
+- **PGlite itself** is imported by the database Worker at run time from
+  `pgliteUrl` (default: the pinned build on jsDelivr, `DEFAULT_PGLITE_URL`), so
+  neither the page nor the process Worker bundle carries Postgres.
+
+### Virtual TCP (`net`)
+
+Processes talk raw TCP to each other on localhost: `net.createServer().listen(port)`
+takes connections and `net.connect(port)` / `new net.Socket().connect()` reach a
+listener in any process of the runtime (or on the page: `runtime.listenTcp`,
+`runtime.connect`). `'connect'`, `'data'`, `'end'`, `'close'`, `ECONNREFUSED` when
+nothing listens, write callbacks, corked writes leaving as one send
+(`_writev`), and backpressure (`write()` returns false, then `'drain'`) behave
+as in Node. Flow control is credit-based: a page-side listener that never
+credits what it reads (`runtime.listenTcp`'s `accept`) is credited
+automatically on delivery, so it cannot stall a writer; one that wants to push
+back calls `socket.manualFlowControl()` and credits with `socket.consumed(n)`.
+Bytes travel over postMessage, never
+SharedArrayBuffer. Hosts other than localhost are refused, never dialled on the
+network. Not modelled: half-open connections (`end()` closes both directions),
+and HTTP over a raw connection to an HTTP-only port (it connects, then closes).
