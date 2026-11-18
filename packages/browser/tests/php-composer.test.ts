@@ -269,18 +269,21 @@ describe('composer + Slim 4 against PGlite (online)', () => {
     };
     const runtime = { run: processes.run.bind(processes), onServerListening: (l: never) => processes.servers.onListening(l), onPortChange: (l: never) => processes.servers.onPortChange(l), listProcesses: () => processes.list() };
     const app = startApplicationRuntime(spec, { runtime: processes, providers: [createPhpProvider(runtime, { probeIntervalMs: 50 }), createPgliteProvider(databases, { locks: fakeLocks() })], readinessTimeoutMs: 120_000 });
-    await app.start();
-    const call = async (method: string, url: string, body?: unknown) => {
-      const response = await request(processes.ports, 8000, method, url, body === undefined ? undefined : JSON.stringify(body), { 'content-type': 'application/json' });
-      return { status: response.status, body: jsonOf(response.text) };
-    };
-    expect(await call('POST', '/notes', { body: 'first' })).toEqual({ status: 201, body: { id: 1 } });
-    expect(await call('POST', '/notes', { body: 'second' })).toEqual({ status: 201, body: { id: 2 } });
-    expect(await call('PUT', '/notes/1', { body: 'first, edited' })).toEqual({ status: 200, body: { updated: 1 } });
-    expect(await call('POST', '/transfer')).toEqual({ status: 409, body: { rolledBack: true, sqlstate: '23502', inTransaction: false } });
-    expect(await call('DELETE', '/notes/2')).toEqual({ status: 200, body: { deleted: 1 } });
-    expect(await call('GET', '/notes')).toEqual({ status: 200, body: [{ id: 1, body: 'first, edited' }] });
-    await app.dispose();
-    processes.dispose();
+    try {
+      await app.start();
+      const call = async (method: string, url: string, body?: unknown) => {
+        const response = await request(processes.ports, 8000, method, url, body === undefined ? undefined : JSON.stringify(body), { 'content-type': 'application/json' });
+        return { status: response.status, body: jsonOf(response.text) };
+      };
+      expect(await call('POST', '/notes', { body: 'first' })).toEqual({ status: 201, body: { id: 1 } });
+      expect(await call('POST', '/notes', { body: 'second' })).toEqual({ status: 201, body: { id: 2 } });
+      expect(await call('PUT', '/notes/1', { body: 'first, edited' })).toEqual({ status: 200, body: { updated: 1 } });
+      expect(await call('POST', '/transfer')).toEqual({ status: 409, body: { rolledBack: true, sqlstate: '23502', inTransaction: false } });
+      expect(await call('DELETE', '/notes/2')).toEqual({ status: 200, body: { deleted: 1 } });
+      expect(await call('GET', '/notes')).toEqual({ status: 200, body: [{ id: 1, body: 'first, edited' }] });
+    } finally {
+      await app.dispose();
+      processes.dispose();
+    }
   });
 });
