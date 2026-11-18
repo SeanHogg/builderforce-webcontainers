@@ -5,8 +5,9 @@
  */
 export { typecheckProject } from './typecheck.js';
 export type { TypecheckOptions, TypecheckResult } from './typecheck.js';
-export { toCheckDiagnostic, formatDiagnostic, sortDiagnostics } from './diagnostics.js';
-export type { CheckDiagnostic, DiagnosticCategory } from './diagnostics.js';
+export { toCheckDiagnostic, formatDiagnostic, sortDiagnostics, diagnosticCode } from './diagnostics.js';
+export type { CheckDiagnostic, DiagnosticCategory, DiagnosticSource } from './diagnostics.js';
+export { angularDiagnostics, ANGULAR_DIAGNOSTIC } from './angular.js';
 export { acquireTypes, acquireExtendedConfigs } from './acquire.js';
 export type { FetchLike, FetchResponseLike, AcquireRequest, AcquireOptions } from './acquire.js';
 export { resolveCheckProjects, defaultCompilerOptions, createParseConfigHost } from './projects.js';

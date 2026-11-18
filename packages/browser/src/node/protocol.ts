@@ -1,7 +1,8 @@
 /**
  * Messages between the page (the process host, which owns the master file
  * system and the port table) and one process Worker. Everything is plain
- * structured-clone data; file contents travel as strings or bytes.
+ * structured-clone data; file contents travel as strings or bytes, except in
+ * the start snapshot, whose files travel packed in one ArrayBuffer.
  *
  * HTTP responses stream in both directions with the same three messages: a
  * `response-head`, `response-chunk`s as the server writes, a `response-end`.
@@ -14,9 +15,10 @@
  * process and the page (its parent's side), and `child-ipc` /
  * `child-ipc-disconnect` between a parent process and the page (its child's side).
  */
-import type { FileContent, HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo } from '@seanhogg/builderforce-webcontainers-core';
+import type { HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo, VfsOp, VfsSnapshot } from '@seanhogg/builderforce-webcontainers-core';
 
-export type FsOp = { op: 'write'; path: string; content: FileContent } | { op: 'remove'; path: string } | { op: 'mkdir'; path: string };
+/** One file-system change, either way (the core journal's op). */
+export type FsOp = VfsOp;
 
 export interface StartMessage {
   type: 'start';
@@ -29,8 +31,8 @@ export interface StartMessage {
   /** A message channel to the parent is open (`process.send`, a thread's `parentPort`). */
   ipc?: boolean;
   thread?: ThreadInfo;
-  files: Array<[string, FileContent]>;
-  dirs: string[];
+  /** The file system: the host's cached pack (one ArrayBuffer, shared by every spawn until it is rebuilt) plus the changes since it. */
+  snapshot: VfsSnapshot;
   /** Ports already listening anywhere in the runtime (so `listen` can fail fast with EADDRINUSE). */
   ports: number[];
   /** `/__bfwc/<id>/` on the preview origin, for `serverUrl`. */

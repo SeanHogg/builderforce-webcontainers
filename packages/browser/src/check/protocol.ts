@@ -21,8 +21,8 @@ export type CheckReply =
   | { type: typeof CHECK_RESULT; id: number; result: TypecheckResult; durationMs: number }
   | { type: typeof CHECK_ERROR; id: number; message: string };
 
-/** Paths whose contents can affect type-checking. */
-const CHECKED = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|json)$/i;
+/** Paths whose contents can affect checking: sources and config, plus HTML (Angular `templateUrl` templates are scanned). */
+const CHECKED = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|json|html)$/i;
 
 export function isCheckInput(path: string): boolean {
   return CHECKED.test(path) && !/(^|\/)(node_modules|dist)\//.test(path);

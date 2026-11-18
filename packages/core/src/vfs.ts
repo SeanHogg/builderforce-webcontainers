@@ -25,7 +25,24 @@ export interface FsChange {
   path: string;
   /** For a write: the file did not exist before. A new file can change how imports resolve. */
   created?: boolean;
+  /**
+   * For a mkdir: the directory already existed because it held files, and is now
+   * explicit (it outlives its last file). Only watchers that ask for `promotions`
+   * see these; to everyone else `mkdir` of an existing directory is silent.
+   */
+  promoted?: boolean;
 }
+
+/** Options for {@link VirtualFileSystem.watch}. */
+export interface WatchOptions {
+  /** Only changes at or below this path. */
+  under?: string;
+  /** Also report an existing directory made explicit by `mkdir` (`promoted: true`). For mirrors that must replay every state change. */
+  promotions?: boolean;
+}
+
+/** A file's contents, or a function returning them on first read (a snapshot not yet copied out). */
+export type SeedContent = FileContent | (() => FileContent);
 
 const decoder = new TextDecoder();
 
@@ -41,17 +58,31 @@ const decoder = new TextDecoder();
  *
  * Every write bumps a per-file version, so a transform cache can key on
  * (path, version) instead of hashing contents.
+ *
+ * Files loaded with `seed` may hold their contents behind a function, called on
+ * the first read and replaced by its result (copy-on-read): a process starts
+ * from a snapshot without copying the files it never opens.
  */
 export class VirtualFileSystem {
-  private readonly files = new Map<string, FileContent>();
+  private readonly files = new Map<string, SeedContent>();
   private readonly versions = new Map<string, number>();
   private readonly mtimes = new Map<string, number>();
   /** dir → names of its direct children (files and directories). */
   private readonly children = new Map<string, Set<string>>([['/', new Set()]]);
   /** Directories created with `mkdir`: they outlive their last file. */
   private readonly explicit = new Set<string>();
-  private readonly listeners = new Set<(change: FsChange) => void>();
+  /** Listener → whether it wants directory promotions too. */
+  private readonly listeners = new Map<(change: FsChange) => void, boolean>();
   private clock = 0;
+
+  /** A stored file's contents, copying a seeded file out of its snapshot on first read. (A property, not a method: subclasses map methods only.) */
+  private readonly content = (key: string): FileContent | undefined => {
+    const stored = this.files.get(key);
+    if (typeof stored !== 'function') return stored;
+    const contents = stored();
+    this.files.set(key, contents);
+    return contents;
+  };
 
   writeFile(path: string, contents: FileContent): void {
     const key = normalizePath(path);
@@ -65,7 +96,7 @@ export class VirtualFileSystem {
   }
 
   readFile(path: string): FileContent | undefined {
-    return this.files.get(normalizePath(path));
+    return this.content(normalizePath(path));
   }
 
   readText(path: string): string | undefined {
@@ -92,10 +123,38 @@ export class VirtualFileSystem {
     if (this.files.has(key)) throw new Error(`EEXIST: file already exists, mkdir '${key}'`);
     if (key === '/') return;
     const existed = this.children.has(key);
+    const promoted = existed && !this.explicit.has(key);
     this.explicit.add(key);
-    if (existed) return;
+    if (existed) {
+      if (promoted) for (const [listener, promotions] of this.listeners) if (promotions) listener({ type: 'mkdir', path: key, promoted: true });
+      return;
+    }
     this.ensureDir(key);
     this.emit({ type: 'mkdir', path: key });
+  }
+
+  /**
+   * Load a snapshot without change events: explicit directories, then files. A
+   * function is a file's contents, called on its first read (copy-on-read).
+   * Paths are absolute; an existing file at a path is replaced.
+   */
+  seed(files: Iterable<readonly [string, SeedContent]>, dirs: Iterable<string> = []): void {
+    for (const dir of dirs) {
+      const key = normalizePath(dir);
+      if (key === '/') continue;
+      if (this.files.has(key)) throw new Error(`EEXIST: file already exists, mkdir '${key}'`);
+      this.explicit.add(key);
+      this.ensureDir(key);
+    }
+    const now = Date.now();
+    for (const [path, contents] of files) {
+      const key = normalizePath(path);
+      if (key === '/' || this.children.has(key)) throw new Error(`EISDIR: illegal operation on a directory, open '${key}'`);
+      if (!this.files.has(key)) this.link(key);
+      this.files.set(key, contents);
+      this.versions.set(key, ++this.clock);
+      this.mtimes.set(key, now);
+    }
   }
 
   /** Direct children of a directory (files and sub-directories), sorted. */
@@ -122,13 +181,13 @@ export class VirtualFileSystem {
     if (this.exists(target)) throw new Error(`EEXIST: file already exists, rename '${source}' -> '${target}'`);
     if (target.startsWith(source + '/')) throw new Error(`EINVAL: cannot move '${source}' into itself`);
     if (this.files.has(source)) {
-      const contents = this.files.get(source)!;
+      const contents = this.content(source)!;
       this.removeFile(source);
       this.writeFile(target, contents);
       return;
     }
     const prefix = source + '/';
-    const moved = [...this.files].filter(([path]) => path.startsWith(prefix));
+    const moved = [...this.files.keys()].filter((path) => path.startsWith(prefix)).map((path) => [path, this.content(path)!] as const);
     const dirs = [...this.explicit].filter((dir) => dir === source || dir.startsWith(prefix));
     this.rm(source);
     this.mkdir(target);
@@ -186,17 +245,17 @@ export class VirtualFileSystem {
   /** Flat snapshot keyed without the leading slash (`src/main.tsx`). */
   toFlat(): FlatFiles {
     const out: FlatFiles = {};
-    for (const [path, contents] of this.files) out[path.slice(1)] = contents;
+    for (const path of this.files.keys()) out[path.slice(1)] = this.content(path)!;
     return out;
   }
 
   /** Every change, or with `under` only changes at or below that path. */
-  watch(listener: (change: FsChange) => void, options: { under?: string } = {}): () => void {
+  watch(listener: (change: FsChange) => void, options: WatchOptions = {}): () => void {
     const root = options.under === undefined ? undefined : normalizePath(options.under);
     const filtered = root === undefined || root === '/'
       ? listener
       : (change: FsChange) => (change.path === root || change.path.startsWith(root + '/')) && listener(change);
-    this.listeners.add(filtered);
+    this.listeners.set(filtered, !!options.promotions);
     return () => this.listeners.delete(filtered);
   }
 
@@ -237,6 +296,6 @@ export class VirtualFileSystem {
   }
 
   private emit(change: FsChange): void {
-    for (const listener of this.listeners) listener(change);
+    for (const listener of this.listeners.keys()) listener(change);
   }
 }

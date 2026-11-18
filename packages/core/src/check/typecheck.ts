@@ -3,6 +3,7 @@ import { VirtualFileSystem, type FileTree } from '../vfs.js';
 import { readProjectConfig } from '../projectConfig.js';
 import { isBareSpecifier, resolveAlias, splitPackageSpecifier } from '../resolve.js';
 import { acquireExtendedConfigs, acquireTypes, type FetchLike } from './acquire.js';
+import { angularDiagnostics } from './angular.js';
 import { createVirtualHost } from './compilerHost.js';
 import { sortDiagnostics, toCheckDiagnostic, type CheckDiagnostic } from './diagnostics.js';
 import { resolveCheckProjects, type CheckProject } from './projects.js';
@@ -112,7 +113,8 @@ export async function typecheckProject(
   const projectDeclarations = fs.list().filter((path) => path.endsWith('.d.ts')).map((path) => fs.readText(path) ?? '');
   const shim = ambientShim({ existing: [...projectDeclarations, ...store.files.values()], untyped: untypedPackages });
 
-  const diagnostics: CheckDiagnostic[] = [];
+  // Angular constructs the run would reject (or silently drop), reported alongside the type errors.
+  const diagnostics: CheckDiagnostic[] = angularDiagnostics(fs);
   const checked = new Set<string>();
   for (const project of projects) {
     for (const error of project.errors) diagnostics.push(toCheckDiagnostic(ts, error));

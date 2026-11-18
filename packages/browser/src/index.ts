@@ -10,7 +10,7 @@ export type {
 export { listenToPreview } from './previewMessages.js';
 export { createSnapshotStore } from './snapshotStore.js';
 export type { SnapshotStore, SnapshotStoreOptions } from './snapshotStore.js';
-export type { PreviewError, PreviewConsoleMessage, ConsoleLevel, PreviewMessages } from './previewMessages.js';
+export type { PreviewError, PreviewErrorSource, PreviewConsoleMessage, ConsoleLevel, PreviewMessages } from './previewMessages.js';
 export { listenToPreviewBridge } from './previewBridge.js';
 export type { PreviewBridge, PreviewBridgeOptions, BridgePort } from './previewBridge.js';
 export type { PreviewTransport } from './transport.js';

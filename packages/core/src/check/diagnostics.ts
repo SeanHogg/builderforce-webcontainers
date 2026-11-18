@@ -13,9 +13,18 @@ export interface CheckDiagnostic {
   line: number;
   column: number;
   message: string;
-  /** TypeScript's code (2322 for TS2322). */
+  /** TypeScript's code (2322 for TS2322); for `source: 'angular'`, this runtime's own (1 for BFWC-NG001). */
   code: number;
   category: DiagnosticCategory;
+  /** Who reported it. Absent means TypeScript; `'angular'` is the Angular pre-run scan (check/angular.ts). */
+  source?: DiagnosticSource;
+}
+
+export type DiagnosticSource = 'typescript' | 'angular';
+
+/** `TS2322`, or `BFWC-NG001` for the Angular scan. */
+export function diagnosticCode(diagnostic: CheckDiagnostic): string {
+  return diagnostic.source === 'angular' ? `BFWC-NG${String(diagnostic.code).padStart(3, '0')}` : `TS${diagnostic.code}`;
 }
 
 const CATEGORIES: Record<number, DiagnosticCategory> = { 0: 'warning', 1: 'error', 2: 'suggestion', 3: 'message' };
@@ -31,7 +40,7 @@ export function toCheckDiagnostic(ts: typeof TS, diagnostic: TS.Diagnostic): Che
 /** `src/App.tsx(3,7): error TS2322: Type 'number' is not assignable to type 'string'.` — tsc's own format. */
 export function formatDiagnostic(diagnostic: CheckDiagnostic): string {
   const where = diagnostic.file ? `${diagnostic.file}(${diagnostic.line},${diagnostic.column}): ` : '';
-  return `${where}${diagnostic.category} TS${diagnostic.code}: ${diagnostic.message}`;
+  return `${where}${diagnostic.category} ${diagnosticCode(diagnostic)}: ${diagnostic.message}`;
 }
 
 /** Stable order (file, then position) and no duplicates — a file in two tsconfig projects reports once. */
@@ -39,7 +48,7 @@ export function sortDiagnostics(diagnostics: CheckDiagnostic[]): CheckDiagnostic
   const seen = new Set<string>();
   return diagnostics
     .filter((d) => {
-      const key = `${d.file ?? ''}:${d.line}:${d.column}:${d.code}:${d.message}`;
+      const key = `${d.file ?? ''}:${d.line}:${d.column}:${diagnosticCode(d)}:${d.message}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;

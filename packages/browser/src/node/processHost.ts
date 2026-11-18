@@ -1,7 +1,8 @@
 /**
  * The page side of the Node runtime: one Web Worker per process. The page owns
  * the master file system and the port table; each worker gets a snapshot of
- * the files at start, and writes flow both ways as batched ops (a worker's
+ * the files at start — a pack cached across spawns plus the journal ops since
+ * it (core vfs/snapshots.ts) — and writes flow both ways as batched ops (a worker's
  * write reaches the page, then every other worker). Children a worker spawns
  * (the shell running `node`, `child_process`) are started here too, so every
  * process — however deep — can be killed by terminating its worker. Ending a
@@ -15,7 +16,10 @@ import {
   DEFAULT_ENV,
   PortRegistry,
   ServerEvents,
+  VfsSnapshots,
   allocatePid,
+  applyOps,
+  changeToOp,
   createIpcEndpoint,
   runArguments,
   signalExitCode,
@@ -110,8 +114,11 @@ export class ProcessHost {
   private nextConn = 1;
   private readonly unwatch: () => void;
   private readonly stopPorts: () => void;
+  /** What each new process starts from: one pack reused until the project outgrows it, plus the ops since. */
+  readonly snapshots: VfsSnapshots;
 
   constructor(private readonly options: ProcessHostOptions) {
+    this.snapshots = new VfsSnapshots(options.fs);
     this.unwatch = options.fs.watch((change) => this.onFsChange(change));
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
@@ -168,7 +175,6 @@ export class ProcessHost {
       for (const l of proc.stderr) l(`Process worker failed: ${event?.message ?? 'unknown error'}\n`);
       proc.resolveExit(1);
     };
-    const { fs } = this.options;
     this.post(proc, {
       type: 'start',
       pid,
@@ -179,8 +185,7 @@ export class ProcessHost {
       terminal: options.terminal,
       ipc: options.ipc,
       thread: options.thread,
-      files: fs.list().map((path) => [path, fs.readFile(path)!]),
-      dirs: fs.explicitDirectories(),
+      snapshot: this.snapshots.snapshot(),
       ports: this.ports.ports(),
       previewOrigin: this.options.previewOrigin,
       previewBase: this.options.previewBase,
@@ -226,6 +231,7 @@ export class ProcessHost {
     for (const proc of [...this.procs]) this.terminate(proc, signalExitCode('SIGKILL'));
     this.unwatch();
     this.stopPorts();
+    this.snapshots.dispose();
   }
 
   private kill(proc: Proc, signal: string): void {
@@ -266,7 +272,7 @@ export class ProcessHost {
   }
 
   private onFsChange(change: FsChange): void {
-    const op: FsOp = change.type === 'write' ? { op: 'write', path: change.path, content: this.options.fs.readFile(change.path)! } : { op: change.type, path: change.path };
+    const op: FsOp = changeToOp(this.options.fs, change);
     for (const proc of this.procs) if (proc !== this.applyingFrom) proc.outbox.push(op);
     if (this.flushScheduled) return;
     this.flushScheduled = true;
@@ -298,11 +304,7 @@ export class ProcessHost {
       case 'fs': {
         this.applyingFrom = proc;
         try {
-          for (const op of message.ops) {
-            if (op.op === 'write') this.options.fs.writeFile(op.path, op.content);
-            else if (op.op === 'mkdir') this.options.fs.mkdir(op.path);
-            else this.options.fs.rm(op.path);
-          }
+          applyOps(this.options.fs, message.ops);
         } finally {
           this.applyingFrom = undefined;
         }

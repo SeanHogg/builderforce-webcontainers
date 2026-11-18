@@ -1,10 +1,12 @@
 import type { VirtualFileSystem } from './vfs.js';
 import { RESOLVE_EXTENSIONS } from './resolve.js';
+import { PUBLIC_DIR, type StaticDir } from './staticDirs.js';
+import { angularProfile, isAngularProject } from './angular/profile.js';
 
-export type ProjectKind = 'vite' | 'cra' | 'static';
+export type ProjectKind = 'vite' | 'cra' | 'static' | 'angular';
 
 /** The UI framework, when the project uses one this runtime compiles. */
-export type ProjectFramework = 'react' | 'vue' | 'svelte';
+export type ProjectFramework = 'react' | 'vue' | 'svelte' | 'angular';
 
 export interface ProjectProfile {
   supported: boolean;
@@ -12,10 +14,16 @@ export interface ProjectProfile {
   framework?: ProjectFramework;
   /** The HTML document served at `/`. */
   htmlPath?: string;
-  /** Script injected when the HTML has no module entry of its own (CRA). */
+  /** Script injected when the HTML has no module entry of its own (CRA, Angular). */
   entry?: string;
-  /** Files served from the site root, Vite/CRA `public/` convention. */
-  publicDir: string;
+  /**
+   * Specifiers the entry module imports, in order, before its own imports
+   * (Angular: polyfills, global styles, the JIT compiler). Absolute paths are
+   * VFS files; anything else is a package.
+   */
+  preludes?: readonly string[];
+  /** Files served as-is: Vite/CRA `public/` at the site root, Angular `assets`. */
+  staticDirs: readonly StaticDir[];
   /** Why the project needs a full Node runtime instead — shown to the user. */
   reason?: string;
 }
@@ -47,6 +55,7 @@ function readDependencyNames(fs: VirtualFileSystem): Set<string> {
 }
 
 function detectFramework(deps: Set<string>): ProjectFramework | undefined {
+  if (deps.has('@angular/core')) return 'angular';
   if (deps.has('vue')) return 'vue';
   if (deps.has('svelte')) return 'svelte';
   if (deps.has('react')) return 'react';
@@ -68,18 +77,23 @@ export function ownServerReason(fs: VirtualFileSystem): string | undefined {
 
 export function detectProject(fs: VirtualFileSystem): ProjectProfile {
   const blocker = ownServerReason(fs);
-  if (blocker) return { supported: false, publicDir: '/public', reason: blocker };
+  if (blocker) return { supported: false, staticDirs: PUBLIC_DIR, reason: blocker };
   const deps = readDependencyNames(fs);
 
   const framework = detectFramework(deps);
+  if (isAngularProject(fs, deps)) {
+    const angular = angularProfile(fs, deps);
+    // An Angular app without the CLI's page (a Vite-based setup) falls through to the rules below.
+    if (fs.isFile(angular.htmlPath)) return { supported: true, kind: 'angular', framework, ...angular };
+  }
   if (fs.isFile('/index.html')) {
-    return { supported: true, kind: deps.has('vite') ? 'vite' : 'static', framework, htmlPath: '/index.html', publicDir: '/public' };
+    return { supported: true, kind: deps.has('vite') ? 'vite' : 'static', framework, htmlPath: '/index.html', staticDirs: PUBLIC_DIR };
   }
   if (fs.isFile('/public/index.html')) {
-    return { supported: true, kind: 'cra', framework, htmlPath: '/public/index.html', entry: findEntry(fs), publicDir: '/public' };
+    return { supported: true, kind: 'cra', framework, htmlPath: '/public/index.html', entry: findEntry(fs), staticDirs: PUBLIC_DIR };
   }
   if (SERVER_ONLY.some((name) => deps.has(name))) {
-    return { supported: false, publicDir: '/public', reason: 'This is a Node server app with no browser entry page.' };
+    return { supported: false, staticDirs: PUBLIC_DIR, reason: 'This is a Node server app with no browser entry page.' };
   }
-  return { supported: false, publicDir: '/public', reason: 'No index.html found at the project root or in public/.' };
+  return { supported: false, staticDirs: PUBLIC_DIR, reason: 'No index.html found at the project root or in public/.' };
 }

@@ -12,6 +12,41 @@ export interface TransformRequest {
   /** Compile-time replacements, esbuild `define` semantics (values are JS source). */
   define: Record<string, string>;
   jsx: { runtime: 'automatic' | 'classic'; importSource: string };
+  /** The project's TypeScript options, with any per-module override applied. */
+  typescript?: TypeScriptOptions;
+}
+
+/**
+ * The TypeScript compiler options that change emitted code, read from the
+ * project's tsconfig (and overridden per module by a component compiler —
+ * Angular needs legacy decorators).
+ */
+export interface TypeScriptOptions {
+  experimentalDecorators?: boolean;
+  useDefineForClassFields?: boolean;
+  /** An esbuild target (`es2022`, `esnext`). */
+  target?: string;
+  /**
+   * Downlevel `async`/`await` (and async iteration) to generators. zone.js cannot
+   * patch native async functions, so the Angular CLI lowers them for zone apps.
+   */
+  lowerAsync?: boolean;
+}
+
+/** The esbuild options a {@link TypeScriptOptions} maps to (shared by the transformer and the bundler). */
+export interface EsbuildTypeScriptOptions {
+  tsconfigRaw?: { compilerOptions: { experimentalDecorators?: boolean; useDefineForClassFields?: boolean } };
+  supported?: Record<string, boolean>;
+}
+
+export function esbuildTypeScriptOptions(typescript: TypeScriptOptions | undefined): EsbuildTypeScriptOptions {
+  const out: EsbuildTypeScriptOptions = {};
+  const compilerOptions: { experimentalDecorators?: boolean; useDefineForClassFields?: boolean } = {};
+  if (typescript?.experimentalDecorators !== undefined) compilerOptions.experimentalDecorators = typescript.experimentalDecorators;
+  if (typescript?.useDefineForClassFields !== undefined) compilerOptions.useDefineForClassFields = typescript.useDefineForClassFields;
+  if (Object.keys(compilerOptions).length) out.tsconfigRaw = { compilerOptions };
+  if (typescript?.lowerAsync) out.supported = { 'async-await': false, 'async-generator': false, 'for-await': false };
+  return out;
 }
 
 export interface Transformer {
@@ -31,7 +66,7 @@ export interface EsbuildLike {
       jsx: 'automatic' | 'transform';
       jsxImportSource?: string;
       sourcemap: 'inline';
-    },
+    } & EsbuildTypeScriptOptions,
   ): Promise<{ code: string }>;
 }
 
@@ -43,11 +78,12 @@ export function createEsbuildTransformer(esbuild: EsbuildLike): Transformer {
         loader: request.loader,
         sourcefile: request.sourcefile,
         format: 'esm',
-        target: 'es2020',
+        target: request.typescript?.target ?? 'es2020',
         define: request.define,
         jsx: request.jsx.runtime === 'automatic' ? 'automatic' : 'transform',
         ...(request.jsx.runtime === 'automatic' ? { jsxImportSource: request.jsx.importSource } : {}),
         sourcemap: 'inline',
+        ...esbuildTypeScriptOptions(request.typescript),
       });
     },
   };

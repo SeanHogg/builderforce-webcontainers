@@ -1,5 +1,6 @@
 /**
- * The worker side of one process: mirror the file system, build a `System`
+ * The worker side of one process: mirror the file system (mounted from the
+ * start snapshot's pack, contents read on first open), build a `System`
  * whose spawn/listen/loopback are relayed to the page, run the program, and
  * stream its output back. Its servers' responses stream to the page as they
  * are written, and connections the page upgrades reach the server's `upgrade`
@@ -9,10 +10,13 @@
  */
 import {
   VirtualFileSystem,
+  applyOps,
+  changeToOp,
   commandNotFound,
   createChannelPair,
   createIpcEndpoint,
   defaultPrograms,
+  mountSnapshot,
   resolveCommand,
   runProgram,
   textResponse,
@@ -73,26 +77,23 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
 
   fs.watch((change: FsChange) => {
     if (applying) return;
-    if (change.type === 'write') pending.push({ op: 'write', path: change.path, content: fs.readFile(change.path)! });
-    else pending.push({ op: change.type, path: change.path });
+    pending.push(changeToOp(fs, change));
     if (!flushScheduled) {
       flushScheduled = true;
       queueMicrotask(flush);
     }
   });
 
-  const apply = (ops: FsOp[]) => {
+  /** Apply the page's changes (or mount the start snapshot) without echoing them back. */
+  const quietly = (load: () => void) => {
     applying = true;
     try {
-      for (const op of ops) {
-        if (op.op === 'write') fs.writeFile(op.path, op.content);
-        else if (op.op === 'mkdir') fs.mkdir(op.path);
-        else fs.rm(op.path);
-      }
+      load();
     } finally {
       applying = false;
     }
   };
+  const apply = (ops: FsOp[]) => quietly(() => applyOps(fs, ops));
 
   function remoteChild(command: string, args: string[], options: ProcessOptions = {}): ChildHandle {
     flush(); // the child must see every write made so far
@@ -120,10 +121,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
   }
 
   function start(message: StartMessage): void {
-    applying = true;
-    for (const dir of message.dirs) fs.mkdir(dir);
-    for (const [path, content] of message.files) fs.writeFile(path, content);
-    applying = false;
+    quietly(() => mountSnapshot(fs, message.snapshot));
     for (const port of message.ports) knownPorts.add(port);
 
     const system: System = {

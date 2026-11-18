@@ -1,5 +1,7 @@
 import type { VirtualFileSystem } from './vfs.js';
+import type { TypeScriptOptions } from './transformer.js';
 import { join, normalizePath } from './paths.js';
+import { applyPinGroups } from './pinGroups.js';
 
 /**
  * What the dev server needs to know about a project, read from its own files:
@@ -19,6 +21,7 @@ export const CONFIG_FILES = [
   '/.env.development.local',
   '/.env.production',
   '/.env.production.local',
+  '/angular.json',
 ] as const;
 
 /** Which `.env.<mode>` files apply: the dev server reads development, a build production. */
@@ -38,8 +41,14 @@ export interface PathAlias {
 }
 
 export interface ProjectConfig {
-  /** dependencies + devDependencies, name → version range. */
+  /**
+   * dependencies + devDependencies, name → version range, with the framework pin
+   * groups applied (see {@link applyPinGroups}): the one set the package CDN and
+   * the component compilers see.
+   */
   dependencies: Record<string, string>;
+  /** The tsconfig compiler options that change emitted code. */
+  typescript: TypeScriptOptions;
   aliases: PathAlias[];
   /** Bare package names served as another package (`react-native` → `react-native-web`). */
   packageAliases: Record<string, string>;
@@ -185,11 +194,30 @@ function readEnv(fs: VirtualFileSystem, mode: BuildMode): Record<string, string>
   return env;
 }
 
+/** tsconfig `target` → an esbuild target. ES3/ES5 are below what esbuild can lower to, so they become es2015. */
+function esbuildTarget(target: unknown): string | undefined {
+  if (typeof target !== 'string') return undefined;
+  const lower = target.toLowerCase();
+  if (lower === 'es3' || lower === 'es5') return 'es2015';
+  if (lower === 'es6') return 'es2015';
+  return /^es(next|20\d\d)$/.test(lower) ? lower : undefined;
+}
+
+function readTypeScript(options: Record<string, unknown>): TypeScriptOptions {
+  const out: TypeScriptOptions = {};
+  if (typeof options.experimentalDecorators === 'boolean') out.experimentalDecorators = options.experimentalDecorators;
+  if (typeof options.useDefineForClassFields === 'boolean') out.useDefineForClassFields = options.useDefineForClassFields;
+  const target = esbuildTarget(options.target);
+  if (target) out.target = target;
+  return out;
+}
+
 export function readProjectConfig(fs: VirtualFileSystem, mode: BuildMode = 'development'): ProjectConfig {
   const options = readCompilerOptions(fs);
-  const dependencies = readDependencies(fs);
+  const dependencies = applyPinGroups(readDependencies(fs));
   return {
     dependencies,
+    typescript: readTypeScript(options),
     aliases: readAliases(options),
     packageAliases: readPackageAliases(dependencies),
     jsx: readJsx(options),

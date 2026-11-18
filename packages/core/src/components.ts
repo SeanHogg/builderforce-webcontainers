@@ -1,22 +1,44 @@
-import type { Loader } from './transformer.js';
+import type { Loader, TypeScriptOptions } from './transformer.js';
+import { extname } from './paths.js';
 
 /**
- * Single-file components (`.vue`, `.svelte`) as a PORT, like the Transformer. A
- * component compiler turns one file into a script module plus the CSS it owns;
- * the dev server injects that CSS with a <style> tag and the build extracts it
- * into the CSS bundle, so the compilers themselves never touch the DOM.
+ * Framework source files as a PORT, like the Transformer. A component compiler
+ * turns one file into a script module plus the CSS it owns; the dev server
+ * injects that CSS with a <style> tag and the build extracts it into the CSS
+ * bundle, so the compilers themselves never touch the DOM.
  *
- * The core never imports a framework compiler. The browser runtime loads the
- * official ones from a CDN on first use, pinned to the project's own framework
- * version (a Svelte compiler must match its runtime exactly); Node tests pass the
- * npm packages in.
+ * Which compiler a file needs is a {@link ComponentKind}: Vue and Svelte by their
+ * single-file extensions, Angular for the TypeScript of a project that depends on
+ * `@angular/core` (see {@link componentKindFor}).
+ *
+ * The core never imports a framework compiler it cannot implement itself. The
+ * browser runtime loads the official ones from a CDN on first use, pinned to the
+ * project's own framework version (a Svelte compiler must match its runtime
+ * exactly); Node tests pass the npm packages in.
  */
 export type ComponentExtension = '.vue' | '.svelte';
 
-export const COMPONENT_EXTENSIONS: readonly ComponentExtension[] = ['.vue', '.svelte'];
+export type ComponentKind = ComponentExtension | 'angular';
 
-export function componentExtension(ext: string): ComponentExtension | undefined {
-  return (COMPONENT_EXTENSIONS as readonly string[]).includes(ext) ? (ext as ComponentExtension) : undefined;
+/**
+ * Which files each kind compiles. Data, not branches: another framework is
+ * another row. A row with `dependency` applies only to projects declaring it;
+ * `exclude` keeps declaration files and installed packages out.
+ */
+const COMPONENT_KINDS: ReadonlyArray<{ kind: ComponentKind; extensions: readonly string[]; dependency?: string; exclude?: RegExp }> = [
+  { kind: '.vue', extensions: ['.vue'] },
+  { kind: '.svelte', extensions: ['.svelte'] },
+  { kind: 'angular', extensions: ['.ts', '.mts'], dependency: '@angular/core', exclude: /\.d\.[mc]?ts$|\/node_modules\// },
+];
+
+/** The compiler a file needs, or undefined for a file served as plain TS/JS (or not a script at all). */
+export function componentKindFor(path: string, dependencies: Readonly<Record<string, string>>): ComponentKind | undefined {
+  const ext = extname(path);
+  return COMPONENT_KINDS.find((row) =>
+    row.extensions.includes(ext) &&
+    (!row.dependency || Object.hasOwn(dependencies, row.dependency)) &&
+    !row.exclude?.test(path),
+  )?.kind;
 }
 
 export interface ComponentRequest {
@@ -29,6 +51,18 @@ export interface ComponentRequest {
    * beside the component). Without it, such a block is an error.
    */
   preprocessStyle?: (lang: string, source: string) => Promise<string>;
+  /**
+   * Reads a file the component references (an Angular `templateUrl`), resolved
+   * against the component's directory; undefined when it does not exist. The
+   * module is rebuilt when the file changes.
+   */
+  readResource?: (relativeOrAbsolutePath: string) => string | undefined;
+  /**
+   * Compiles a stylesheet file the component references (`.css`, `.scss`, `.sass`,
+   * `.less`; resolved like {@link readResource}) to CSS, with the project's own
+   * stylesheet compilers.
+   */
+  compileStylesheet?: (relativeOrAbsolutePath: string) => Promise<string>;
 }
 
 export interface CompiledComponent {
@@ -37,6 +71,8 @@ export interface CompiledComponent {
   loader: Loader;
   /** The component's styles, already scoped. Empty when it has none. */
   css: string;
+  /** TypeScript options this module needs, over the project's own (Angular: legacy decorators). */
+  typescript?: TypeScriptOptions;
 }
 
 export interface ComponentCompiler {
@@ -44,19 +80,19 @@ export interface ComponentCompiler {
 }
 
 /**
- * Supplies the compiler for an extension. Given the project's dependency ranges
- * so a loader can fetch the compiler version that matches the project's runtime.
+ * Supplies the compiler for a kind. Given the project's dependency ranges so a
+ * loader can fetch the compiler version that matches the project's runtime.
  */
 export type ComponentCompilers = (
-  extension: ComponentExtension,
+  kind: ComponentKind,
   dependencies: Readonly<Record<string, string>>,
 ) => Promise<ComponentCompiler>;
 
-/** Compilers already in hand (tests, a host that bundles them), keyed by extension. */
-export function staticComponentCompilers(compilers: Partial<Record<ComponentExtension, ComponentCompiler>>): ComponentCompilers {
-  return (extension) => {
-    const compiler = compilers[extension];
-    return compiler ? Promise.resolve(compiler) : Promise.reject(new Error(`No compiler for ${extension} files is configured.`));
+/** Compilers already in hand (tests, a host that bundles them), keyed by kind. */
+export function staticComponentCompilers(compilers: Partial<Record<ComponentKind, ComponentCompiler>>): ComponentCompilers {
+  return (kind) => {
+    const compiler = compilers[kind];
+    return compiler ? Promise.resolve(compiler) : Promise.reject(new Error(`No compiler for ${kind === 'angular' ? 'Angular' : kind} files is configured.`));
   };
 }
 

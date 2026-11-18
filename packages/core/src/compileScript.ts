@@ -3,7 +3,9 @@ import type { BuildMode, ProjectConfig } from './projectConfig.js';
 import type { PackageCdn } from './packageCdn.js';
 import type { Loader, Transformer } from './transformer.js';
 import type { ComponentCompilers } from './components.js';
-import { componentExtension } from './components.js';
+import { componentKindFor } from './components.js';
+import type { TypeScriptOptions } from './transformer.js';
+import { withPreludes, type PreludeProfile } from './preludes.js';
 import { loaderFor } from './transformer.js';
 import { dirname, extname } from './paths.js';
 import { isBareSpecifier, resolveAlias, resolveLocal, resolvePackage } from './resolve.js';
@@ -35,7 +37,7 @@ export type ImportQuery = 'import' | 'raw' | 'url';
 /** A file served as a script module: TS/JS, or a component compiled to one. */
 export function isScriptPath(path: string): boolean {
   const ext = extname(path);
-  return loaderFor(ext) !== undefined || componentExtension(ext) !== undefined;
+  return loaderFor(ext) !== undefined || componentKindFor(path, {}) !== undefined;
 }
 
 /**

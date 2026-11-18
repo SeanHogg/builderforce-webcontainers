@@ -13,7 +13,7 @@
  * A subclass so it is accepted wherever a `VirtualFileSystem` is; every public
  * method is mapped (rootedFs.test.ts fails on one that is not).
  */
-import { VirtualFileSystem, type DirectoryEntry, type FileContent, type FlatFiles, type FsChange } from './vfs.js';
+import { VirtualFileSystem, type DirectoryEntry, type FileContent, type FlatFiles, type FsChange, type SeedContent, type WatchOptions } from './vfs.js';
 import { normalizePath } from './paths.js';
 
 /**
@@ -113,10 +113,18 @@ class RootedFileSystem extends VirtualFileSystem {
     return out;
   }
 
-  override watch(listener: (change: FsChange) => void, options: { under?: string } = {}): () => void {
+  override seed(files: Iterable<readonly [string, SeedContent]>, dirs: Iterable<string> = []): void {
+    const real = (path: string) => this.real(path);
+    this.base.seed(
+      [...files].map(([path, contents]) => [real(path), contents] as const),
+      [...dirs].map(real),
+    );
+  }
+
+  override watch(listener: (change: FsChange) => void, options: WatchOptions = {}): () => void {
     return this.base.watch((change) => {
       if (change.path !== this.root) listener({ ...change, path: this.local(change.path) });
-    }, { under: this.real(options.under ?? '/') });
+    }, { under: this.real(options.under ?? '/'), promotions: options.promotions });
   }
 }
 

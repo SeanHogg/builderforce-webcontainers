@@ -10,7 +10,7 @@ import { VirtualFileSystem, type FlatFiles } from '@seanhogg/builderforce-webcon
 import type { TypeSources, TypecheckResult } from '@seanhogg/builderforce-webcontainers-core/check';
 import { CHECK, CHECK_RESULT, isCheckInput, isCheckReply, type CheckReply } from './protocol.js';
 
-export type { CheckDiagnostic, DiagnosticCategory, TypecheckResult } from '@seanhogg/builderforce-webcontainers-core/check';
+export type { CheckDiagnostic, DiagnosticCategory, DiagnosticSource, TypecheckResult } from '@seanhogg/builderforce-webcontainers-core/check';
 export { formatDiagnostic } from '@seanhogg/builderforce-webcontainers-core/check';
 
 /**

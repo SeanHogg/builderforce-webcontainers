@@ -20,23 +20,35 @@ export const ERROR_MESSAGE_TYPE = 'bfwc:error';
 export const CONSOLE_MESSAGE_TYPE = 'bfwc:console';
 /** Console messages forwarded per page load; past this the bridge goes quiet (a log loop must not flood the host). */
 export const CONSOLE_MESSAGE_LIMIT = 1000;
+/** Error messages forwarded per page load, counted apart from console output; an error loop must not flood the host either. */
+export const ERROR_MESSAGE_LIMIT = 100;
+/** What raised a forwarded error: an uncaught throw, an unhandled rejection, or an Error object passed to `console.error`. */
+export type PreviewErrorSource = 'error' | 'rejection' | 'console';
 
 /**
  * Runs first in the preview. Forwards uncaught errors and rejections, and the
  * app's console output, to the host page (`window.parent`): how an editor — or
  * an agent — learns what the app did without scraping the iframe. Console
  * arguments are flattened to text (errors with their stack, objects as JSON),
- * each message capped at 4,000 characters. Each carries `nonce`, the runtime's
- * (see previewBridge.ts), which the host checks.
+ * each message capped at 4,000 characters. A `console.error` given an Error
+ * object is also forwarded as an error (`source: 'console'`): that is how a
+ * failed `bootstrapApplication(...).catch(err => console.error(err))` or
+ * Angular's ErrorHandler reports, with no uncaught error at all. Plain-string
+ * `console.error` calls stay console output. Errors are posted raw; the host
+ * extracts framework codes (see previewErrorText.ts). Each message carries
+ * `nonce`, the runtime's (see previewBridge.ts), which the host checks.
  */
 export function errorBridgeScript(nonce = ''): string {
   return `<script>(function(){
   var NONCE = ${scriptLiteral(nonce)};
-  var send = function (message, stack) {
-    try { parent.postMessage({ type: ${JSON.stringify(ERROR_MESSAGE_TYPE)}, message: String(message), stack: stack ? String(stack) : undefined, href: location.href, nonce: NONCE }, '*'); } catch (_) {}
+  var errors = 0;
+  var send = function (message, stack, source) {
+    if (errors >= ${ERROR_MESSAGE_LIMIT}) return;
+    errors++;
+    try { parent.postMessage({ type: ${JSON.stringify(ERROR_MESSAGE_TYPE)}, source: source, message: String(message), stack: stack ? String(stack) : undefined, href: location.href, nonce: NONCE }, '*'); } catch (_) {}
   };
-  addEventListener('error', function (e) { send(e.message, e.error && e.error.stack); });
-  addEventListener('unhandledrejection', function (e) { var r = e.reason; send(r && r.message ? r.message : r, r && r.stack); });
+  addEventListener('error', function (e) { send(e.message, e.error && e.error.stack, 'error'); });
+  addEventListener('unhandledrejection', function (e) { var r = e.reason; send(r && r.message ? r.message : r, r && r.stack, 'rejection'); });
   var sent = 0;
   var text = function (value) {
     if (typeof value === 'string') return value;
@@ -49,6 +61,11 @@ export function errorBridgeScript(nonce = ''): string {
       if (sent < ${CONSOLE_MESSAGE_LIMIT}) {
         sent++;
         try { parent.postMessage({ type: ${JSON.stringify(CONSOLE_MESSAGE_TYPE)}, level: level, text: Array.prototype.map.call(arguments, text).join(' ').slice(0, 4000), href: location.href, nonce: NONCE }, '*'); } catch (_) {}
+      }
+      if (level === 'error') {
+        for (var i = 0; i < arguments.length; i++) {
+          if (arguments[i] instanceof Error) { send(arguments[i].message, arguments[i].stack, 'console'); break; }
+        }
       }
       return original.apply(console, arguments);
     };

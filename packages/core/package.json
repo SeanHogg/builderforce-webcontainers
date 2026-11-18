@@ -13,6 +13,10 @@
     "./check": {
       "types": "./dist/check/index.d.ts",
       "import": "./dist/check/index.js"
+    },
+    "./app": {
+      "types": "./dist/app/index.d.ts",
+      "import": "./dist/app/index.js"
     }
   },
   "type": "module",

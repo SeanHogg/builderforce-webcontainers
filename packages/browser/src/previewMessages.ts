@@ -1,5 +1,6 @@
 /**
- * What a preview reports to the host page: uncaught errors and console output,
+ * What a preview reports to the host page: errors (uncaught, rejected, or
+ * Error objects given to console.error — normalised by previewErrorText) and console output,
  * posted by the bridge script every served page starts with. One window
  * listener per runtime, accepting only messages from the preview origin whose
  * page sits under this runtime's base, so two runtimes on one page never hear
@@ -7,13 +8,22 @@
  * also requires it on every message: the bridge it injects carries it, so a
  * frame on the preview origin cannot claim another runtime's base by `href`.
  */
-import { CONSOLE_MESSAGE_TYPE, ERROR_MESSAGE_TYPE } from '@seanhogg/builderforce-webcontainers-core';
+import { CONSOLE_MESSAGE_TYPE, ERROR_MESSAGE_TYPE, previewErrorText, type PreviewErrorSource } from '@seanhogg/builderforce-webcontainers-core';
+
+export type { PreviewErrorSource };
 
 export interface PreviewError {
+  /** Plain text; for a framework error, the line naming its code (`NG0303: Can't bind to 'foo' …`). */
   message: string;
   stack?: string;
   href: string;
+  /** An uncaught throw, an unhandled rejection, or an Error object passed to `console.error`. */
+  source: PreviewErrorSource;
+  /** The framework error code (`NG0202`), when the error names one. */
+  code?: string;
 }
+
+const SOURCES = new Set<string>(['error', 'rejection', 'console']);
 
 export type ConsoleLevel = 'log' | 'info' | 'warn' | 'error' | 'debug';
 
@@ -61,9 +71,13 @@ export function listenToPreview(target: Pick<Window, 'addEventListener' | 'remov
 
   const onMessage = (event: MessageEvent) => {
     if (!previewPageOf(event, origin, base, nonce)) return;
-    const data = event.data as { type?: unknown; href: string; message?: unknown; stack?: unknown; level?: unknown; text?: unknown };
+    const data = event.data as { type?: unknown; href: string; message?: unknown; stack?: unknown; source?: unknown; level?: unknown; text?: unknown };
     if (data.type === ERROR_MESSAGE_TYPE) {
-      const error: PreviewError = { message: String(data.message ?? ''), stack: typeof data.stack === 'string' ? data.stack : undefined, href: data.href };
+      const stack = typeof data.stack === 'string' ? data.stack : undefined;
+      const { message, code } = previewErrorText(String(data.message ?? ''), stack);
+      // A bridge from before `source` existed only reported uncaught errors and rejections.
+      const source = typeof data.source === 'string' && SOURCES.has(data.source) ? (data.source as PreviewErrorSource) : 'error';
+      const error: PreviewError = { message, stack, href: data.href, source, ...(code ? { code } : {}) };
       for (const listener of errors) listener(error);
     } else if (data.type === CONSOLE_MESSAGE_TYPE && typeof data.level === 'string' && LEVELS.has(data.level)) {
       const message: PreviewConsoleMessage = { level: data.level as ConsoleLevel, text: String(data.text ?? ''), href: data.href };
