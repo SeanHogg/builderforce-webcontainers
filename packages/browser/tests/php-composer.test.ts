@@ -131,7 +131,7 @@ describe('composer (offline: a local Packagist)', () => {
     const proc = processes.run('composer', ['require', 'acme/native']);
     const output = await readAll(proc.combinedOutput);
     expect(await proc.wait()).toBe(2);
-    expect(output).toContain('acme/native 1.0.0 is declined: ext-pgsql');
+    expect(output).toContain('acme/native 1.0.0 is declined: acme/native requires ext-pgsql *');
     expect(output).toContain('Bfwc\\Pgsql\\PDO');
     expect(fs.exists('/vendor/acme/native')).toBe(false);
     expect(fs.readText('/composer.json')).toBe(original);

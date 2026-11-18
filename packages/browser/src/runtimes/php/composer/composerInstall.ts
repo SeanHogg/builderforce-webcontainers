@@ -109,8 +109,12 @@ export async function runComposer(request: ComposerRequest, context: ComposerCon
         let constraint = written;
         if (!constraint) {
           // The newest release the running PHP can run (unless platform requirements are ignored).
-          const versions = (await context.source.versions(name))?.filter((pkg) => request.ignorePlatformReqs || !platformDeclines({}, [pkg], false, context.platform).length);
+          const all = await context.source.versions(name);
+          const versions = all?.filter((pkg) => request.ignorePlatformReqs || !platformDeclines({}, [pkg], false, context.platform).length);
           const best = versions && pickVersion(versions, [], options);
+          const newest = !best && all && pickVersion(all, [], options);
+          // Every release needs what the running PHP lacks: say what, by name.
+          if (newest) throw new ResolveError(`${newest.name} ${newest.version} is declined: ${platformDeclines({}, [newest], false, context.platform).join('; ')}`);
           const parsed = best && parseVersion(best.version_normalized ?? best.version);
           if (!parsed || parsed.branch) throw new ResolveError(`Could not find a stable version of package ${name}.`);
           constraint = `^${parsed.parts[0]}.${parsed.parts[1]}`;
