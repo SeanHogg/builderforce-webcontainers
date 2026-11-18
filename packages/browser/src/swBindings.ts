@@ -1,0 +1,176 @@
+/**
+ * Who may hand the preview service worker a port (the attacher rules and the
+ * preview id → attaching client binding), and the bounded maps the guard
+ * (`swGuard`) keeps its client bindings in. Pure (no worker globals), so the
+ * rules are tested with fakes. Decided on the worker side because preview
+ * documents run the app's code and nothing they say is trusted. A live attach
+ * binding is never replaced by another client; it moves only when the bound
+ * client is gone (its tab closed).
+ *
+ * NOT A BOUNDARY YET. Until W10 control 1 (origin separation) ships, every
+ * preview, the relay page and the process workers share one origin, so app code
+ * in a preview document can script any same-origin window: it can reach its
+ * sibling relay frame through `parent[i]` and post ATTACH as the relay client —
+ * which passes every check here, because it IS the relay client that owns the
+ * tab's previews — replacing their live ports and capturing every preview in the
+ * tab. `window.open` of relay.html, or `history.pushState` to another preview's
+ * path before a forgotten client is looked up again, are variants of the same
+ * hole. Origin separation is the fix; these bindings are defence in depth until
+ * then (they stop a preview document attaching or routing as itself).
+ */
+import type { ShieldReasonCode } from '@seanhogg/builderforce-webcontainers-core';
+import { previewPrefix } from './protocol.js';
+
+/** A request or attach the worker refused (telemetry; never a reason to allow). */
+export interface IngressRejection {
+  reason: ShieldReasonCode;
+  /** The preview id asked for. */
+  id: string;
+  clientId?: string;
+  /** Why an attach was refused (`ingress.attach_rejected` only). */
+  detail?: AttachRefusal;
+  /** A plain explanation for logs (not localized; the reason code is the contract). */
+  message?: string;
+}
+
+/** `bad_id`: not a preview id; `not_attacher`: not the relay/host page; `duplicate_id`: another open tab attached it. */
+export type AttachRefusal = 'bad_id' | 'not_attacher' | 'duplicate_id';
+
+export const ATTACH_MESSAGES: Record<AttachRefusal, (id: string) => string> = {
+  bad_id: (id) => `"${id}" is not a preview id.`,
+  not_attacher: (id) => `preview id '${id}' was offered by a page that may not attach previews (only the relay or host page may).`,
+  duplicate_id: (id) => `preview id '${id}' is already attached by another open tab; preview ids must be unique per tab.`,
+};
+
+/** A client as the worker sees `event.source` or `clients.get`. */
+export interface AttachClient {
+  id: string;
+  url: string;
+  /** `window`, `worker` or `sharedworker`. */
+  type: string;
+}
+
+/**
+ * Who registered the worker. `relay`: the relay page registers `sw.js?mode=relay`
+ * with scope './', and only that exact page (`<scope>relay.html`) may attach.
+ * `same-origin`: the host page registers it and attaches itself, from anywhere
+ * outside the preview namespace.
+ */
+export type AttachMode = 'relay' | 'same-origin';
+
+/** The `mode` a worker script URL carries (`sw.js?mode=relay`). */
+export function attachModeOf(scriptUrl: string): AttachMode {
+  try {
+    return new URL(scriptUrl).searchParams.get('mode') === 'relay' ? 'relay' : 'same-origin';
+  } catch {
+    return 'same-origin';
+  }
+}
+
+/** The pathname of an http(s) URL; null for about:, blob:, data: and anything unparsable. */
+export function httpPath(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.pathname : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `url` is the relay page this worker serves: `relay.html` resolved
+ * against the scope, exactly as the relay registered its scope ('./' beside
+ * itself). Not `previewPrefix`: under a root scope the relay is `/relay.html`,
+ * outside the `/__bfwc/` preview prefix.
+ */
+export function isRelayPage(url: string, scopePath: string): boolean {
+  return httpPath(url) === new URL('relay.html', new URL(scopePath, 'https://scope.invalid')).pathname;
+}
+
+/**
+ * Whether a page at `url` may attach ports (see `AttachMode`). Never an
+ * about:/blob:/data: document, and never one under the preview prefix (a preview
+ * document running app code) — except the relay page itself.
+ */
+export function isAttacherUrl(url: string, scopePath: string, mode: AttachMode): boolean {
+  const path = httpPath(url);
+  if (path === null) return false;
+  if (isRelayPage(url, scopePath)) return true;
+  if (mode === 'relay') return false;
+  return !path.startsWith(previewPrefix(scopePath));
+}
+
+/** Whether `client` may attach ports or be asked to re-attach. */
+export function isAttacher(client: AttachClient, scopePath: string, mode: AttachMode): boolean {
+  return client.type === 'window' && isAttacherUrl(client.url, scopePath, mode);
+}
+
+/**
+ * Preview id → the client id that attached it. `clientAlive` asks the browser
+ * whether a client still exists; an error is treated as alive, so a failed check
+ * never hands a live preview to a new client.
+ */
+export function createAttachOwners(clientAlive: (clientId: string) => Promise<boolean>) {
+  const owners = new Map<string, string>();
+  /** Bumped on every change to an id's owner, so a claim that awaited sees any move. */
+  const generations = new Map<string, number>();
+
+  function set(id: string, clientId: string): void {
+    owners.set(id, clientId);
+    generations.set(id, (generations.get(id) ?? 0) + 1);
+  }
+
+  async function isAlive(clientId: string): Promise<boolean> {
+    try {
+      return await clientAlive(clientId);
+    } catch {
+      return true; // fail closed: keep the existing binding
+    }
+  }
+
+  /** Bind `id` to `clientId` if it is free, already theirs, or its owner is gone. */
+  async function claim(id: string, clientId: string): Promise<boolean> {
+    for (;;) {
+      const owner = owners.get(id);
+      if (owner === undefined || owner === clientId) {
+        set(id, clientId);
+        return true;
+      }
+      const generation = generations.get(id);
+      if (await isAlive(owner)) return false;
+      // Judge again if another attach moved the binding while we asked.
+      if (generations.get(id) !== generation) continue;
+      set(id, clientId);
+      return true;
+    }
+  }
+
+  function release(id: string): void {
+    if (owners.delete(id)) generations.set(id, (generations.get(id) ?? 0) + 1);
+  }
+
+  return { claim, release, ownerOf: (id: string) => owners.get(id) };
+}
+
+/** How many clients the worker remembers; a forgotten one is looked up again, never trusted. */
+const CLIENT_CAP = 500;
+
+/** A bounded map that forgets the least recently used entry first; a hit refreshes recency. */
+export function createRecentMap<V>(cap = CLIENT_CAP) {
+  const entries = new Map<string, V>();
+  return {
+    get(key: string): V | undefined {
+      const value = entries.get(key);
+      if (value === undefined) return undefined;
+      entries.delete(key);
+      entries.set(key, value);
+      return value;
+    },
+    set(key: string, value: V): void {
+      entries.delete(key);
+      entries.set(key, value);
+      if (entries.size > cap) entries.delete(entries.keys().next().value!);
+    },
+    has: (key: string) => entries.has(key),
+  };
+}

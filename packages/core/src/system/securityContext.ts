@@ -1,0 +1,60 @@
+/**
+ * Security Shield identity contract (make.md › PRD 31 §4 W10, principle 3).
+ *
+ * Identity is ASSIGNED by the runtime on the page side at spawn, never claimed by
+ * the process: env vars (`BUILDERFORCE_SERVICE`), Postgres `application_name` and
+ * anything else app code can set are telemetry at most. Every page-side chokepoint
+ * (PortRegistry, ConnectionRelay, the database gateway, FsSync, spawnChild) decides
+ * against this record.
+ */
+
+/** Who a process, port or connection belongs to. */
+export interface SecurityContext {
+  /** The application (`startApplicationRuntime`) — or `WORKSPACE_APPLICATION` for terminal / install / instant preview. */
+  readonly applicationId: string;
+  /** The service within the application — or `WORKSPACE_SERVICE`. */
+  readonly serviceId: string;
+  readonly processId?: number;
+  readonly requestId?: string;
+  readonly connectionId?: string;
+}
+
+/** Processes started outside any application (terminal, `npm install`, instant preview). Never `platform`. */
+export const WORKSPACE_APPLICATION = 'workspace';
+export const WORKSPACE_SERVICE = 'workspace';
+
+/** Reserved for the host's own calls (`runtime.request` from the embedding page). App code can never hold it. */
+export const PLATFORM_APPLICATION = 'platform';
+export const PLATFORM_SERVICE = 'platform';
+
+export const WORKSPACE_CONTEXT: SecurityContext = Object.freeze({ applicationId: WORKSPACE_APPLICATION, serviceId: WORKSPACE_SERVICE });
+export const PLATFORM_CONTEXT: SecurityContext = Object.freeze({ applicationId: PLATFORM_APPLICATION, serviceId: PLATFORM_SERVICE });
+
+/** Same (application, service) — process/request/connection ids are ignored. */
+export function sameService(a: SecurityContext, b: SecurityContext): boolean {
+  return a.applicationId === b.applicationId && a.serviceId === b.serviceId;
+}
+
+/** Stable reason codes the runtime emits; the embedding product maps them to localized copy. */
+export type ShieldReasonCode =
+  | 'port.not_owner'
+  | 'port.edge_not_declared'
+  | 'db.auth_failed'
+  | 'db.not_owner'
+  | 'db.service_not_allowed'
+  | 'process.spawn_quota'
+  | 'process.depth_quota'
+  | 'fs.outside_app'
+  | 'fs.protected_path'
+  | 'fs.invalid_op'
+  | 'ingress.body_too_large'
+  | 'ingress.client_not_bound'
+  | 'ingress.attach_rejected';
+
+/** A page-side decision; `reject` carries the reason the caller surfaces (ECONNREFUSED, 403, EACCES…). */
+export type ShieldDecision = { readonly allow: true } | { readonly allow: false; readonly reason: ShieldReasonCode };
+
+export const ALLOW: ShieldDecision = Object.freeze({ allow: true });
+export function deny(reason: ShieldReasonCode): ShieldDecision {
+  return { allow: false, reason };
+}

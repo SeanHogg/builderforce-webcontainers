@@ -1,9 +1,19 @@
 import { PREVIEW_ID, isPortPath, isWireReply, previewPrefix, type WireCancel, type WireResponse } from './protocol.js';
+import type { AttachClient, AttachMode, IngressRejection } from './swBindings.js';
+import { createIngressGuard } from './swGuard.js';
+
+export type { LookupRequest } from './swGuard.js';
+import { DEFAULT_MAX_BODY_BYTES, readBoundedBody, type BodySource } from './swBody.js';
+
+export { attachModeOf, type AttachClient, type AttachMode, type AttachRefusal, type IngressRejection } from './swBindings.js';
+export { DEFAULT_MAX_BODY_BYTES, readBoundedBody, type BodySource } from './swBody.js';
 
 /** The part of MessagePort the router uses — a fake in tests, a real port in the worker. */
 export interface PortLike {
   postMessage(message: unknown): void;
   onmessage: ((event: { data: unknown }) => void) | null;
+  /** Closed when the worker refuses the port. */
+  close?(): void;
 }
 
 export interface PreviewTarget {
@@ -35,6 +45,16 @@ export interface SwRouterOptions {
   timeoutMs?: number;
   /** How long to wait for a page to re-attach before giving up. */
   reattachWaitMs?: number;
+  /** The largest request body a virtual server is handed (default 32 MiB); larger is 413. */
+  maxBodyBytes?: number;
+  /** Who registered the worker (`attachModeOf(scriptUrl)`); default `same-origin`. */
+  attachMode?: AttachMode;
+  /** `clients.get(id)`. Without it every unbound client is refused and a live attach binding never moves. */
+  getClient?(clientId: string): Promise<AttachClient | undefined>;
+  /** Told about every refused attach or request. Its failures are ignored. */
+  onReject?(rejection: IngressRejection): void;
+  /** The clock for cached client verdicts (tests). */
+  now?(): number;
 }
 
 const TEXT = { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' };
@@ -53,6 +73,9 @@ const TEXT = { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no
  * ReadableStream fed by them. The timeout covers only the wait for the head (an
  * event stream may stay open indefinitely); cancelling the stream (the preview
  * closed its EventSource) tells the page to hang up on the server.
+ *
+ * Routing integrity (W10 control 2) is decided by the guard (`swGuard`):
+ * `acceptAttach`, `admit` and the client lookup; `readBody` caps request bodies.
  */
 export function createSwRouter(options: SwRouterOptions) {
   const prefix = previewPrefix(options.scopePath);
@@ -63,8 +86,29 @@ export function createSwRouter(options: SwRouterOptions) {
   const pending = new Map<number, (response: WireResponse) => void>();
   const streams = new Map<number, ReadableStreamDefaultController<Uint8Array>>();
   let nextId = 0;
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const guard = createIngressGuard({
+    ...options,
+    previewIdOf: (url) => match(url)?.id ?? null,
+    // A virtual-server page the worker forgot (restart) gets its absolute-URL remap back.
+    onIdentified: (clientId, url) => {
+      const target = match(url);
+      if (target) rememberClient(clientId, target);
+    },
+    hasRemap: (clientId) => clientServers.has(clientId),
+  });
 
+  /** Drop `port` for `id`: forget it, stop listening and close it. Every removal goes through here. */
+  function releasePort(id: string, port: PortLike): void {
+    if (ports.get(id) === port) ports.delete(id);
+    port.onmessage = null;
+    port.close?.();
+  }
+
+  /** Install a port `acceptAttach` has admitted, releasing the one it replaces. */
   function attach(id: string, port: PortLike): void {
+    const previous = ports.get(id);
+    if (previous && previous !== port) releasePort(id, previous);
     ports.set(id, port);
     port.onmessage = (event) => {
       const reply = event.data;
@@ -87,6 +131,33 @@ export function createSwRouter(options: SwRouterOptions) {
     };
     for (const wake of waiters.get(id) ?? []) wake(port);
     waiters.delete(id);
+  }
+
+  /**
+   * An attach from `client` (`event.source`), decided by the guard (attacher,
+   * binding, unique id per tab). A refused port is closed.
+   */
+  async function acceptAttach(id: string, port: PortLike, client: AttachClient | null | undefined): Promise<boolean> {
+    if (await guard.checkAttach(id, client)) {
+      attach(id, port);
+      return true;
+    }
+    port.close?.();
+    return false;
+  }
+
+  /** Check a routed request against the client bindings (see the guard): 403, or `null` = go ahead. */
+  async function admit(target: PreviewTarget, clientId: string | undefined, resultingClientId: string | undefined): Promise<RoutedResponse | null> {
+    if (await guard.checkClient(target.id, clientId || undefined, resultingClientId || undefined)) return null;
+    return { status: 403, headers: TEXT, body: 'This page may not reach that preview.' };
+  }
+
+  /** A virtual server's request body, or a 413 when it is over `maxBodyBytes`. */
+  async function readBody(target: PreviewTarget, source: BodySource, clientId?: string): Promise<{ body: ArrayBuffer } | { refused: RoutedResponse }> {
+    const body = await readBoundedBody(source, maxBodyBytes);
+    if (body) return { body };
+    guard.report({ reason: 'ingress.body_too_large', id: target.id, clientId });
+    return { refused: { status: 413, headers: TEXT, body: 'The request body is too large.' } };
   }
 
   function match(url: URL): PreviewTarget | null {
@@ -142,7 +213,7 @@ export function createSwRouter(options: SwRouterOptions) {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         pending.delete(reqId);
-        if (ports.get(target.id) === port) ports.delete(target.id);
+        releasePort(target.id, port);
         resolve({ status: 504, headers: TEXT, body: 'The preview did not answer in time.' });
       }, timeoutMs);
       pending.set(reqId, (response) => {
@@ -160,7 +231,21 @@ export function createSwRouter(options: SwRouterOptions) {
     });
   }
 
-  return { attach, match, matchForClient, rememberClient, respond, detach: (id: string) => ports.delete(id) };
+  function detach(id: string): boolean {
+    guard.release(id);
+    const port = ports.get(id);
+    if (port) releasePort(id, port);
+    return !!port;
+  }
+
+
+  /** Judge the client (rebuilding its remap if it is a virtual-server page), then route the URL for it. */
+  async function resolveForClient(url: URL, clientId: string, origin: string): Promise<PreviewTarget | null> {
+    await guard.identify(clientId);
+    return matchForClient(url, clientId, origin);
+  }
+
+  return { acceptAttach, mayAttach: guard.mayAttach, admit, readBody, match, matchForClient, needsClientLookup: guard.needsLookup, resolveForClient, rememberClient, respond, detach };
 }
 
 export type SwRouter = ReturnType<typeof createSwRouter>;

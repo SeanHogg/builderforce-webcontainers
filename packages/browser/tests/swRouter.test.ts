@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createSwRouter, type PortLike } from '../src/swRouter.js';
+import { attachModeOf, createSwRouter, readBoundedBody, type AttachClient, type AttachMode, type BodySource, type IngressRejection, type PortLike, type SwRouter } from '../src/swRouter.js';
 import { isWireRequest, previewBase, previewPrefix } from '../src/protocol.js';
+import { createRecentMap } from '../src/swBindings.js';
+
+/** The same-origin host page: the page that attaches previews in the routing tests. */
+const HOST_PAGE: AttachClient = { id: 'host', type: 'window', url: 'https://h.test/editor' };
+const attachTo = (router: SwRouter, id: string, port: PortLike) => router.acceptAttach(id, port, HOST_PAGE);
 
 /** A page-side fake: answers every request with the path it was asked for. */
 function answeringPort(): PortLike & { requests: unknown[] } {
@@ -49,7 +54,7 @@ describe('createSwRouter', () => {
 
   it('forwards a request to the attached page and returns its answer', async () => {
     const router = createSwRouter({ scopePath: '/', requestReattach() {} });
-    router.attach('p1', answeringPort());
+    await attachTo(router, 'p1', answeringPort());
     const res = await router.respond({ id: 'p1', path: '/src/App.tsx', search: '?x' });
     expect(res).toMatchObject({ status: 200, body: 'served /src/App.tsx?x' });
   });
@@ -60,7 +65,7 @@ describe('createSwRouter', () => {
       scopePath: '/',
       requestReattach(id) {
         asked.push(id);
-        setTimeout(() => router.attach(id, answeringPort()), 5);
+        setTimeout(() => void attachTo(router, id, answeringPort()), 5);
       },
     });
     const res = await router.respond({ id: 'p9', path: '/', search: '' });
@@ -81,10 +86,10 @@ describe('createSwRouter', () => {
       reattachWaitMs: 10,
       requestReattach(id) {
         reattached++;
-        router.attach(id, answeringPort());
+        void attachTo(router, id, answeringPort());
       },
     });
-    router.attach('p1', silentPort());
+    await attachTo(router, 'p1', silentPort());
     expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(504);
     expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(200);
     expect(reattached).toBe(1);
@@ -95,7 +100,7 @@ describe('virtual server routing', () => {
   it('forwards method, headers and body for /__port/ requests', async () => {
     const router = createSwRouter({ scopePath: '/', requestReattach() {} });
     const port = answeringPort();
-    router.attach('p1', port);
+    await attachTo(router, 'p1', port);
     const body = new TextEncoder().encode('x').buffer as ArrayBuffer;
     await router.respond({ id: 'p1', path: '/__port/3000/api', search: '' }, { method: 'POST', headers: { a: 'b' }, body });
     expect(port.requests[0]).toMatchObject({ path: '/__port/3000/api', method: 'POST', headers: { a: 'b' } });
@@ -132,7 +137,7 @@ describe('streamed responses', () => {
   it('answers with a ReadableStream fed by chunk messages until end', async () => {
     const router = createSwRouter({ scopePath: '/', requestReattach() {}, timeoutMs: 20 });
     const port = streamingPort();
-    router.attach('p1', port);
+    await attachTo(router, 'p1', port);
     const res = await router.respond({ id: 'p1', path: '/__port/3000/events', search: '' }, { method: 'GET', headers: {}, body: null });
     expect(res.status).toBe(200);
     expect(res.body).toBeInstanceOf(ReadableStream);
@@ -151,7 +156,7 @@ describe('streamed responses', () => {
   it('tells the page to hang up when the preview cancels the body', async () => {
     const router = createSwRouter({ scopePath: '/', requestReattach() {} });
     const port = streamingPort();
-    router.attach('p1', port);
+    await attachTo(router, 'p1', port);
     const res = await router.respond({ id: 'p1', path: '/__port/3000/events', search: '' }, { method: 'GET', headers: {}, body: null });
     const reqId = (port.sent[0] as { reqId: number }).reqId;
     await (res.body as ReadableStream<Uint8Array>).cancel();
@@ -161,10 +166,393 @@ describe('streamed responses', () => {
   it('errors the stream when the page reports a broken body', async () => {
     const router = createSwRouter({ scopePath: '/', requestReattach() {} });
     const port = streamingPort();
-    router.attach('p1', port);
+    await attachTo(router, 'p1', port);
     const res = await router.respond({ id: 'p1', path: '/__port/3000/', search: '' }, { method: 'GET', headers: {}, body: null });
     const reqId = (port.sent[0] as { reqId: number }).reqId;
     port.push({ type: 'end', reqId, error: 'The server process exited.' });
     await expect((res.body as ReadableStream<Uint8Array>).getReader().read()).rejects.toThrow('The server process exited.');
+  });
+});
+
+/** A client on the preview origin `https://p.test`, whose worker scope is `/__bfwc/`. */
+const client = (id: string, path: string, type = 'window'): AttachClient => ({ id, type, url: path.includes(':') ? path : `https://p.test${path}` });
+const relay = (id: string) => client(id, '/__bfwc/relay.html');
+
+/** A router on a dedicated `/__bfwc/` scope over a controllable set of open clients. */
+function guarded(open: AttachClient[] = [], attachMode?: AttachMode) {
+  const live = new Map(open.map((c) => [c.id, c]));
+  const rejections: IngressRejection[] = [];
+  const router = createSwRouter({
+    scopePath: '/__bfwc/',
+    requestReattach() {},
+    reattachWaitMs: 10,
+    attachMode,
+    getClient: async (clientId) => live.get(clientId),
+    onReject: (rejection) => rejections.push(rejection),
+  });
+  return { router, rejections, live };
+}
+
+function closablePort() {
+  const port = answeringPort() as ReturnType<typeof answeringPort> & { closed: boolean; close(): void };
+  port.closed = false;
+  port.close = () => void (port.closed = true);
+  return port;
+}
+
+describe('attach integrity', () => {
+  it('reads the attach mode from the worker script URL', () => {
+    expect(attachModeOf('https://p.test/__bfwc/sw.js?mode=relay')).toBe('relay');
+    expect(attachModeOf('https://h.test/__bfwc/sw.js')).toBe('same-origin');
+  });
+
+  it('accepts an attach from the relay page in either mode and serves the preview over it', async () => {
+    for (const mode of ['relay', 'same-origin'] as const) {
+      const { router } = guarded([], mode);
+      expect(await router.acceptAttach('p1', answeringPort(), relay('relay-1'))).toBe(true);
+      expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(200);
+    }
+  });
+
+  it('accepts a same-origin host page outside the preview namespace only in same-origin mode', async () => {
+    const host = client('host', '/editor');
+    expect(await guarded([], 'same-origin').router.acceptAttach('p1', answeringPort(), host)).toBe(true);
+    const relayMode = guarded([], 'relay');
+    expect(await relayMode.router.acceptAttach('p1', closablePort(), host)).toBe(false);
+    expect(relayMode.rejections[0]).toMatchObject({ reason: 'ingress.attach_rejected', detail: 'not_attacher', clientId: 'host' });
+  });
+
+  it('refuses attaches from preview documents, about:/blob: documents, workers and unknown sources, closing the port', async () => {
+    const { router, rejections } = guarded();
+    const offers: Array<AttachClient | null> = [
+      client('doc', '/__bfwc/p1/index.html'),
+      client('blank', 'about:blank'),
+      client('blob', 'blob:https://p.test/5d1c'),
+      client('w', '/__bfwc/relay.html', 'worker'),
+      null,
+    ];
+    for (const from of offers) {
+      const port = closablePort();
+      expect(await router.acceptAttach('p2', port, from)).toBe(false);
+      expect(port.closed).toBe(true);
+    }
+    expect(rejections.map((r) => [r.reason, r.detail])).toEqual(offers.map(() => ['ingress.attach_rejected', 'not_attacher']));
+    expect(rejections[0]).toMatchObject({ id: 'p2', clientId: 'doc' });
+    expect((await router.respond({ id: 'p2', path: '/', search: '' })).status).toBe(503);
+  });
+
+  it('refuses an id that is not a preview id', async () => {
+    const { router, rejections } = guarded();
+    expect(await router.acceptAttach('../x', closablePort(), relay('relay-1'))).toBe(false);
+    expect(rejections[0]?.detail).toBe('bad_id');
+  });
+
+  it('never lets a second open tab take a live preview, and says why', async () => {
+    const { router, rejections } = guarded([relay('relay-1'), relay('relay-2')]);
+    const owner = answeringPort();
+    await router.acceptAttach('p1', owner, relay('relay-1'));
+    const thief = closablePort();
+    expect(await router.acceptAttach('p1', thief, relay('relay-2'))).toBe(false);
+    expect(thief.closed).toBe(true);
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]).toMatchObject({ reason: 'ingress.attach_rejected', id: 'p1', clientId: 'relay-2', detail: 'duplicate_id' });
+    expect(rejections[0]?.message).toContain("preview id 'p1' is already attached by another open tab; preview ids must be unique per tab");
+    await router.respond({ id: 'p1', path: '/x', search: '' });
+    expect(owner.requests).toHaveLength(1);
+    expect(thief.requests).toHaveLength(0);
+  });
+
+  it('lets the owning client re-attach with a fresh port and closes the one it replaces', async () => {
+    const { router } = guarded([relay('relay-1')]);
+    const old = closablePort();
+    await router.acceptAttach('p1', old, relay('relay-1'));
+    const fresh = answeringPort();
+    expect(await router.acceptAttach('p1', fresh, relay('relay-1'))).toBe(true);
+    expect(old.closed).toBe(true);
+    expect(old.onmessage).toBeNull();
+    expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(200);
+    expect(old.requests).toHaveLength(0);
+  });
+
+  it('moves a preview to a new relay once the bound client is gone', async () => {
+    const { router, live } = guarded([relay('relay-1')]);
+    await router.acceptAttach('p1', silentPort(), relay('relay-1'));
+    live.delete('relay-1'); // the tab closed
+    const next = answeringPort();
+    expect(await router.acceptAttach('p1', next, relay('relay-2'))).toBe(true);
+    expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(200);
+    expect(next.requests).toHaveLength(1);
+  });
+
+  it('keeps the binding when the liveness check fails', async () => {
+    const router = createSwRouter({
+      scopePath: '/__bfwc/',
+      requestReattach() {},
+      getClient: async () => {
+        throw new Error('clients.get failed');
+      },
+    });
+    await router.acceptAttach('p1', answeringPort(), relay('relay-1'));
+    expect(await router.acceptAttach('p1', answeringPort(), relay('relay-2'))).toBe(false);
+  });
+
+  it('re-judges a claim whose liveness answer went stale while the binding moved and came back', async () => {
+    const calls: Array<{ clientId: string; answer(client: AttachClient | undefined): void }> = [];
+    const router = createSwRouter({
+      scopePath: '/__bfwc/',
+      requestReattach() {},
+      getClient: (clientId) => new Promise((resolve) => calls.push({ clientId, answer: resolve })),
+    });
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    await router.acceptAttach('p1', answeringPort(), relay('A'));
+    const b = router.acceptAttach('p1', closablePort(), relay('B'));
+    const c = router.acceptAttach('p1', answeringPort(), relay('C'));
+    await tick();
+    expect(calls.map((call) => call.clientId)).toEqual(['A', 'A']);
+    calls[1]!.answer(undefined); // C learns A is gone and takes p1
+    expect(await c).toBe(true);
+    const a = router.acceptAttach('p1', answeringPort(), relay('A')); // A comes back; C has gone
+    await tick();
+    calls[2]!.answer(undefined);
+    expect(await a).toBe(true);
+    calls[0]!.answer(undefined); // B's stale answer: A was gone when it asked
+    await tick();
+    expect(calls[3]?.clientId).toBe('A'); // B asks again instead of taking p1 from the live A
+    calls[3]!.answer(relay('A'));
+    expect(await b).toBe(false);
+  });
+
+  it('asks only pages that may attach to re-attach', () => {
+    const sameOrigin = guarded().router;
+    expect(sameOrigin.mayAttach(relay('r'))).toBe(true);
+    expect(sameOrigin.mayAttach(client('host', '/editor'))).toBe(true);
+    expect(sameOrigin.mayAttach(client('doc', '/__bfwc/p1/'))).toBe(false);
+    expect(sameOrigin.mayAttach(client('blank', 'about:blank'))).toBe(false);
+    const relayMode = guarded([], 'relay').router;
+    expect(relayMode.mayAttach(relay('r'))).toBe(true);
+    expect(relayMode.mayAttach(client('host', '/editor'))).toBe(false);
+  });
+});
+
+describe('client binding', () => {
+  const x = { id: 'px', path: '/', search: '' };
+  const y = { id: 'py', path: '/', search: '' };
+
+  it('binds the document a navigation creates and refuses its requests for another preview (403)', async () => {
+    const { router, rejections } = guarded();
+    // The host loads the iframe: browsers report no client for a navigation.
+    expect(await router.admit(x, '', 'doc-x')).toBeNull();
+    expect(await router.admit({ ...x, path: '/src/main.tsx' }, 'doc-x', undefined)).toBeNull();
+    expect((await router.admit(y, 'doc-x', undefined))?.status).toBe(403);
+    expect(rejections).toEqual([{ reason: 'ingress.client_not_bound', id: 'py', clientId: 'doc-x' }]);
+    // A worker the document starts belongs to the same preview.
+    expect(await router.admit({ ...x, path: '/worker.js' }, 'doc-x', 'worker-x')).toBeNull();
+    expect((await router.admit(y, 'worker-x', undefined))?.status).toBe(403);
+  });
+
+  it('rebuilds a binding from the client URL after a restart', async () => {
+    const { router } = guarded([client('doc-x', '/__bfwc/px/index.html'), client('worker-x', '/__bfwc/px/worker.js', 'worker')]);
+    expect(await router.admit(x, 'doc-x', undefined)).toBeNull();
+    expect((await router.admit(y, 'doc-x', undefined))?.status).toBe(403);
+    expect((await router.admit(y, 'worker-x', undefined))?.status).toBe(403);
+    expect(await router.admit(x, 'worker-x', undefined)).toBeNull();
+  });
+
+  it('refuses about:blank and srcdoc documents, blob: workers, process workers and unknown clients', async () => {
+    const { router, rejections } = guarded([
+      client('blank', 'about:blank'),
+      client('srcdoc', 'about:srcdoc'),
+      client('blob-worker', 'blob:https://p.test/5d1c', 'worker'),
+      client('process', '/__bfwc/process-worker.js', 'worker'),
+    ]);
+    for (const clientId of ['blank', 'srcdoc', 'blob-worker', 'process', 'never-seen']) {
+      expect((await router.admit(y, clientId, undefined))?.status).toBe(403);
+    }
+    expect(rejections.every((r) => r.reason === 'ingress.client_not_bound')).toBe(true);
+  });
+
+  it('lets a same-origin host page reach any preview without binding it', async () => {
+    const { router } = guarded([client('host', '/editor')]);
+    expect(await router.admit(x, 'host', undefined)).toBeNull();
+    expect(await router.admit(y, 'host', undefined)).toBeNull();
+  });
+
+  it('in relay mode, treats only the relay page as a host page', async () => {
+    const { router } = guarded([relay('relay'), client('stray', '/x')], 'relay');
+    expect(await router.admit(x, 'relay', undefined)).toBeNull();
+    expect((await router.admit(x, 'stray', undefined))?.status).toBe(403);
+  });
+});
+
+describe('client binding after a restart and caching', () => {
+  const x = { id: 'px', path: '/', search: '' };
+  const y = { id: 'py', path: '/', search: '' };
+
+  it('known limitation until control 1: blob: workers (Vite inline, Monaco, PDF.js) and srcdoc frames are refused', async () => {
+    const { router } = guarded([
+      client('vite-inline', 'blob:https://p.test/0b7e-vite', 'worker'),
+      client('monaco', 'blob:https://p.test/editor.worker', 'worker'),
+      client('pdfjs', 'blob:https://p.test/pdf.worker', 'worker'),
+      client('srcdoc', 'about:srcdoc'),
+    ]);
+    for (const clientId of ['vite-inline', 'monaco', 'pdfjs', 'srcdoc']) expect((await router.admit(x, clientId, undefined))?.status).toBe(403);
+  });
+
+  it('binds a shared worker served under a preview to that preview', async () => {
+    const { router } = guarded([client('shared-x', '/__bfwc/px/shared.js', 'sharedworker'), client('shared-blob', 'blob:https://p.test/1', 'sharedworker')]);
+    expect(await router.admit(x, 'shared-x', undefined)).toBeNull();
+    expect((await router.admit(y, 'shared-x', undefined))?.status).toBe(403);
+    expect((await router.admit(x, 'shared-blob', undefined))?.status).toBe(403);
+  });
+
+  it('reuses a host page verdict for a few seconds instead of looking it up on every request', async () => {
+    let time = 0;
+    let lookups = 0;
+    const host = client('host', '/editor');
+    const router = createSwRouter({
+      scopePath: '/__bfwc/',
+      requestReattach() {},
+      now: () => time,
+      getClient: async () => {
+        lookups++;
+        return host;
+      },
+    });
+    expect(await router.admit(x, 'host', undefined)).toBeNull();
+    time = 4_000;
+    expect(await router.admit(y, 'host', undefined)).toBeNull();
+    expect(lookups).toBe(1);
+    time = 6_000;
+    expect(await router.admit(x, 'host', undefined)).toBeNull();
+    expect(lookups).toBe(2);
+  });
+
+  it('rebuilds a virtual-server page remap after a restart so its absolute URLs still route', async () => {
+    const { router } = guarded([client('port-page', '/__bfwc/px/__port/3000/index.html'), client('host', '/editor')]);
+    const style = new URL('https://p.test/style.css?v=1');
+    const GET = { method: 'GET', mode: 'no-cors' };
+    expect(router.matchForClient(style, 'port-page', 'https://p.test')).toBeNull(); // forgotten
+    expect(router.needsClientLookup(style, 'port-page', 'https://p.test', GET)).toBe(true);
+    expect(await router.resolveForClient(style, 'port-page', 'https://p.test')).toEqual({ id: 'px', path: '/__port/3000/style.css', search: '?v=1' });
+    expect(router.matchForClient(new URL('https://p.test/api'), 'port-page', 'https://p.test')).toEqual({ id: 'px', path: '/__port/3000/api', search: '' });
+    // A host page is judged once and then left to the network.
+    expect(await router.resolveForClient(style, 'host', 'https://p.test')).toBeNull();
+    expect(router.needsClientLookup(style, 'host', 'https://p.test', GET)).toBe(false);
+    // Never for cross-origin or preview-prefix URLs.
+    expect(router.needsClientLookup(new URL('https://cdn.test/x.js'), 'other', 'https://p.test', GET)).toBe(false);
+    expect(router.needsClientLookup(new URL('https://p.test/__bfwc/sw.js'), 'other', 'https://p.test', GET)).toBe(false);
+  });
+
+  it('never holds a non-GET request or a navigation from a client it has not judged', () => {
+    const { router } = guarded([client('port-page', '/__bfwc/px/__port/3000/index.html')]);
+    const api = new URL('https://p.test/api');
+    expect(router.needsClientLookup(api, 'port-page', 'https://p.test', { method: 'POST', mode: 'cors' })).toBe(false);
+    expect(router.needsClientLookup(api, 'port-page', 'https://p.test', { method: 'GET', mode: 'navigate' })).toBe(false);
+    expect(router.needsClientLookup(api, 'port-page', 'https://p.test', { method: 'HEAD', mode: 'cors' })).toBe(true);
+  });
+
+  it('resolves a GET from a forgotten virtual-server page, after which its POST routes directly', async () => {
+    const { router } = guarded([client('port-page', '/__bfwc/px/__port/3000/index.html')]);
+    const api = new URL('https://p.test/api');
+    expect(router.needsClientLookup(api, 'port-page', 'https://p.test', { method: 'GET', mode: 'cors' })).toBe(true);
+    expect(await router.resolveForClient(api, 'port-page', 'https://p.test')).toEqual({ id: 'px', path: '/__port/3000/api', search: '' });
+    // Re-judged: the next request (a POST included) matches synchronously, with no hold.
+    expect(router.matchForClient(api, 'port-page', 'https://p.test')).toEqual({ id: 'px', path: '/__port/3000/api', search: '' });
+    expect(router.needsClientLookup(api, 'port-page', 'https://p.test', { method: 'POST', mode: 'cors' })).toBe(false);
+  });
+});
+
+describe('recent map', () => {
+  it('forgets the least recently used entry, and a hit counts as use', () => {
+    const map = createRecentMap<number>(2);
+    map.set('a', 1);
+    map.set('b', 2);
+    expect(map.get('a')).toBe(1);
+    map.set('c', 3);
+    expect(map.has('a')).toBe(true);
+    expect(map.has('b')).toBe(false);
+  });
+});
+
+describe('port release', () => {
+  it('closes and stops listening to a port that timed out, and to a detached one', async () => {
+    const router = createSwRouter({ scopePath: '/', requestReattach() {}, timeoutMs: 10, reattachWaitMs: 10 });
+    const silent = Object.assign(silentPort(), { closed: false, close() { silent.closed = true; } });
+    await attachTo(router, 'p1', silent);
+    expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(504);
+    expect(silent.closed).toBe(true);
+    expect(silent.onmessage).toBeNull();
+    const live = closablePort();
+    await attachTo(router, 'p2', live);
+    expect(router.detach('p2')).toBe(true);
+    expect(live.closed).toBe(true);
+    expect(live.onmessage).toBeNull();
+    expect(router.detach('p2')).toBe(false);
+  });
+});
+
+describe('request body limit', () => {
+  const stream = (...chunks: number[]) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const size of chunks) controller.enqueue(new Uint8Array(size).fill(1));
+        controller.close();
+      },
+    });
+  const source = (body: ReadableStream<Uint8Array> | null | undefined, contentLength?: number, blobSize = 0): BodySource => ({
+    headers: { get: (name) => (name === 'content-length' && contentLength !== undefined ? String(contentLength) : null) },
+    body,
+    blob: async () => ({ size: blobSize, arrayBuffer: async () => new ArrayBuffer(blobSize) }),
+  });
+  const target = { id: 'p1', path: '/__port/3000/upload', search: '' };
+
+  it('passes a body within the limit through whole', async () => {
+    const router = createSwRouter({ scopePath: '/', requestReattach() {}, maxBodyBytes: 10 });
+    const read = await router.readBody(target, source(stream(4, 6)));
+    expect('body' in read && read.body.byteLength).toBe(10);
+  });
+
+  it('answers 413 from Content-Length without reading the body', async () => {
+    const rejections: IngressRejection[] = [];
+    const router = createSwRouter({ scopePath: '/', requestReattach() {}, maxBodyBytes: 10, onReject: (r) => rejections.push(r) });
+    let pulled = false;
+    const body = new ReadableStream<Uint8Array>({ pull: () => void (pulled = true) }, { highWaterMark: 0 });
+    const read = await router.readBody(target, source(body, 11), 'doc-1');
+    expect('refused' in read && read.refused.status).toBe(413);
+    expect(pulled).toBe(false);
+    expect(rejections).toEqual([{ reason: 'ingress.body_too_large', id: 'p1', clientId: 'doc-1' }]);
+  });
+
+  it('answers 413 when the bytes read pass the limit, and stops reading', async () => {
+    const router = createSwRouter({ scopePath: '/', requestReattach() {}, maxBodyBytes: 10 });
+    let cancelled = false;
+    let sent = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent++;
+        controller.enqueue(new Uint8Array(4));
+      },
+      cancel: () => void (cancelled = true),
+    });
+    const read = await router.readBody(target, source(endless));
+    expect('refused' in read && read.refused.status).toBe(413);
+    expect(cancelled).toBe(true);
+    expect(sent).toBeLessThanOrEqual(4);
+  });
+
+  it('checks the size of a Blob where request streams are unavailable', async () => {
+    expect(await readBoundedBody(source(undefined, undefined, 11), 10)).toBeNull();
+    expect((await readBoundedBody(source(undefined, undefined, 10), 10))?.byteLength).toBe(10);
+  });
+
+  it('reads a POST whose body is not exposed as a stream (null) through the Blob, never as empty', async () => {
+    expect((await readBoundedBody(source(null, undefined, 5), 10))?.byteLength).toBe(5);
+    expect(await readBoundedBody(source(null, undefined, 11), 10)).toBeNull();
+  });
+
+  it('defaults the limit to 32 MiB', async () => {
+    const router = createSwRouter({ scopePath: '/', requestReattach() {} });
+    const read = await router.readBody(target, source(stream(1), 32 * 1024 * 1024 + 1));
+    expect('refused' in read && read.refused.status).toBe(413);
   });
 });
