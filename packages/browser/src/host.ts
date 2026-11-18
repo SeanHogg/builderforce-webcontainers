@@ -14,6 +14,8 @@ import {
   importZip,
   normalizePath,
   textResponse,
+  PLATFORM_APPLICATION,
+  WORKSPACE_APPLICATION,
   type PreviewUpdate,
   type ProcessOptions,
 } from '@seanhogg/builderforce-webcontainers-core';
@@ -27,7 +29,9 @@ import { listenToPreview } from './previewMessages.js';
 import { listenToPreviewBridge } from './previewBridge.js';
 import { openRelay, relayTransport, sameOriginTransport, type PreviewTransport } from './transport.js';
 import { attachPreview } from './previewAttach.js';
-import { checkPreviewOrigins, emitShieldEvent } from './previewOrigin.js';
+import { checkPreviewOrigins, PreviewShieldError } from './previewOrigin.js';
+import { createShieldTelemetry } from './security/shieldTelemetry.js';
+import { applicationContext } from './security/securityEvent.js';
 import { createPreviewOrigins } from './previewOrigins.js';
 import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
 import { createCdnComponentCompilers } from './componentCompilers.js';
@@ -57,9 +61,10 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const id = options.id ?? randomId();
   if (!PREVIEW_ID.test(id)) throw new Error(`Preview id "${id}" may only contain letters, digits, "_" and "-".`);
 
-  const sink = options.security?.sink;
+  // ONE telemetry per runtime: every page-side chokepoint reports to it; its sink is the embedder's.
+  const telemetry = createShieldTelemetry({ sink: options.security?.sink });
   // W10 control 10: refused before anything boots when the preview would share this page's origin.
-  checkPreviewOrigins(options, location.origin, sink);
+  checkPreviewOrigins(options, location.origin, telemetry);
   const transport = options.relayUrl
     ? await relayTransport(options.relayUrl)
     : await sameOriginTransport((options as SameOriginOptions).serviceWorkerUrl, options.scope);
@@ -96,7 +101,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     workerPolicy: options.workerPolicy,
     open: openRelay,
     onOpened: (relay, applicationId) => attachTo(relay, applicationId),
-    sink,
+    telemetry,
   });
   // In relay mode processes run on the preview origin (the relay starts them; with `previewOrigin`, the application's own relay), never the host's.
   const node = { ...options.node, createWorker: options.node?.createWorker ?? origins.createWorker };
@@ -104,7 +109,16 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const php = createPhpProcessKind(options.php, createPythonProcessKind(options.python));
   // Prebuilt wasm32-wasip1 modules (and the declined cargo/rustc) run in Rust process Workers.
   const kinds = createRustProcessKind(createDotnetProcessKind(options.dotnet, php));
-  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, originOf: origins.enabled ? origins.originOf : undefined, previewUrl, options: node, kinds });
+  // Control 1: an application gets its own preview origin, or — only with the named opt-out — shares the relay's.
+  const sharedAllowed = options.sharedPreviewOrigin === 'unprotected' || options.unprotectedSameOrigin === true;
+  const refuseShared = (applicationId: string): string => {
+    if (applicationId === WORKSPACE_APPLICATION || applicationId === PLATFORM_APPLICATION) return transport.origin;
+    const refusal = new PreviewShieldError('ingress.preview_origin_invalid', `Application "${applicationId}" needs its own preview origin: set \`previewOrigin\`, or opt out by name with \`sharedPreviewOrigin: 'unprotected'\`.`);
+    telemetry.report(refusal.reason, applicationContext(applicationId), { message: refusal.message });
+    throw refusal;
+  };
+  const originOf = origins.enabled ? origins.originOf : sharedAllowed ? undefined : refuseShared;
+  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, originOf, previewUrl, options: node, kinds, security: { telemetry } });
   // Databases never run where processes do in relay mode: their Workers start on this (host) origin.
   const databaseWorkers = trackWorkers(databaseWorkerFactory(options.node));
 
@@ -112,7 +126,9 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   /** Whether a request that came through `origin` may reach `port`: only through its owner's preview origin. */
   const admitPort = (origin: string, port: number) => {
     if (origins.mayServe(origin, processes.ports.ownerOf(port))) return true;
-    emitShieldEvent(sink, { reason: 'ingress.app_origin_mismatch', message: `Port ${port} was asked for through ${origin}, which is not its owner's preview origin.`, origin });
+    // The asker is a preview document on `origin`: no process of ours, so unattributed; the port's owner is evidence.
+    const owner = processes.ports.ownerOf(port);
+    telemetry.report('ingress.app_origin_mismatch', undefined, { port, origin, ownerApplicationId: owner?.applicationId ?? null });
     return false;
   };
   const egressOf = (applicationId?: string) => (typeof options.previewEgress === 'function' ? options.previewEgress(applicationId) : options.previewEgress);
@@ -174,6 +190,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
       if (serviceId === undefined) origins.release(applicationId); // its relay closes; its origin stays its own
     },
     createDatabaseWorker: () => databaseWorkers.create(),
+    security: () => telemetry,
     cookies,
     dispose() {
       bridge.dispose();

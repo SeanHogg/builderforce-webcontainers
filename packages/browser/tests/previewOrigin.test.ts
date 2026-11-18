@@ -6,8 +6,8 @@ import {
   previewOriginTemplate,
   resetSharedOriginWarning,
   validatePreviewOrigin,
-  type ShieldEvent,
 } from '../src/previewOrigin.js';
+import { createShieldTelemetry, type SecurityEvent } from '../src/security.js';
 
 const PAGE = 'https://app.example.com';
 const RELAY = 'https://preview.example.com/__bfwc/relay.html';
@@ -50,13 +50,13 @@ describe('control 10: same-origin previews are refused at boot', () => {
 
   it('warns once per page, and reports to the sink on every boot, when applications share the preview origin', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const events: ShieldEvent[] = [];
-    const sink = { emit: (event: ShieldEvent) => void events.push(event) };
-    checkPreviewOrigins({ relayUrl: RELAY }, PAGE, sink);
-    checkPreviewOrigins({ relayUrl: RELAY }, PAGE, sink);
+    const events: SecurityEvent[] = [];
+    const telemetry = createShieldTelemetry({ sink: { emit: (event) => void events.push(event) } });
+    checkPreviewOrigins({ relayUrl: RELAY }, PAGE, telemetry);
+    checkPreviewOrigins({ relayUrl: RELAY }, PAGE, telemetry);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain('previewOrigin');
-    expect(events.map((event) => [event.reason, event.origin])).toEqual([
+    expect(events.map((event) => [event.reasonCode, event.evidence.origin])).toEqual([
       ['ingress.shared_preview_origin', 'https://preview.example.com'],
       ['ingress.shared_preview_origin', 'https://preview.example.com'],
     ]);
@@ -69,7 +69,7 @@ describe('control 10: same-origin previews are refused at boot', () => {
         throw new Error('sink down');
       },
     };
-    expect(checkPreviewOrigins({ relayUrl: RELAY }, PAGE, sink)).toBe('https://preview.example.com');
+    expect(checkPreviewOrigins({ relayUrl: RELAY }, PAGE, createShieldTelemetry({ sink }))).toBe('https://preview.example.com');
   });
 });
 

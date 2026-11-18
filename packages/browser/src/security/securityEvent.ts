@@ -53,6 +53,11 @@ export interface SecurityHealth {
 /** No decision has a known owner (a connection the registry named no caller for). Never minted for a process. */
 export const UNATTRIBUTED_CONTEXT: SecurityContext = Object.freeze({ applicationId: 'unattributed', serviceId: 'unattributed' });
 
+/** An application as a whole (a decision about its preview origin, not one service of it). */
+export function applicationContext(applicationId: string): SecurityContext {
+  return Object.freeze({ applicationId, serviceId: UNATTRIBUTED_CONTEXT.serviceId });
+}
+
 export const MAX_EVIDENCE_BYTES = 4096;
 /** Longest string kept in evidence, in UTF-16 units. */
 export const MAX_EVIDENCE_STRING = 512;

@@ -12,21 +12,13 @@
  * rejection is caught too), so a throwing or slow-to-settle sink never changes a
  * decision or breaks a request. Enforcement never reads anything from here.
  */
-import { PLATFORM_CONTEXT, type PortRegistry, type SecurityContext, type ShieldDecision, type ShieldReasonCode } from '@seanhogg/builderforce-webcontainers-core';
+import type { PortRegistry, SecurityContext, ShieldDecision, ShieldReasonCode } from '@seanhogg/builderforce-webcontainers-core';
 import { ringBuffer } from '../shared/ringBuffer.js';
 import { SHIELD_RULES } from './shieldRules.js';
 import { UNATTRIBUTED_CONTEXT, redactEvidence, type SecurityEvent, type SecurityEventSink, type SecurityHealth } from './securityEvent.js';
 
 /** One port-access decision, as the port registry's `onDecision` reports it. */
 export type PortDecision = Parameters<NonNullable<NonNullable<ConstructorParameters<typeof PortRegistry>[0]>['onDecision']>>[0];
-
-/** A boot or routing notice in the shape `previewOrigin.ts`'s `emitShieldEvent` sends (`ShieldEventSink`). */
-export interface ShieldNotice {
-  reason: ShieldReasonCode;
-  message: string;
-  applicationId?: string;
-  origin?: string;
-}
 
 export interface ShieldTelemetryOptions {
   /** Where events leave the runtime (the embedding product's adapter). Optional: the ring keeps them either way. */
@@ -44,12 +36,13 @@ export interface ShieldTelemetry {
   decision(context: SecurityContext | undefined, decision: ShieldDecision, evidence?: Readonly<Record<string, unknown>>): void;
   /** The port registry's `onDecision` hook: refusals reported as the (page-side) caller. */
   readonly portDecision: (event: PortDecision) => void;
-  /** A `ShieldEventSink` for the boot/routing checks that report `ShieldNotice`s (`checkPreviewOrigins`, `createPreviewOrigins`). */
-  readonly notices: { emit(notice: ShieldNotice): void };
   /** The ring's events, oldest first — one application's when `applicationId` is given. A copy. */
   events(filter?: { applicationId?: string }): SecurityEvent[];
   health(): SecurityHealth;
 }
+
+/** What a chokepoint needs of the telemetry: to report. Never throws. */
+export type ShieldReporter = Pick<ShieldTelemetry, 'report'>;
 
 export const DEFAULT_EVENT_CAPACITY = 500;
 
@@ -104,11 +97,6 @@ export function createShieldTelemetry(options: ShieldTelemetryOptions = {}): Shi
     },
     portDecision: ({ operation, port, caller, owner, decision }) => {
       if (!decision.allow) report(decision.reason, caller, { operation, port, ownerApplicationId: owner.applicationId, ownerServiceId: owner.serviceId });
-    },
-    notices: {
-      emit: ({ reason, message, applicationId, origin }) =>
-        // Boot and routing checks are the host's own; an application's names that application (no single service).
-        report(reason, applicationId === undefined ? PLATFORM_CONTEXT : { applicationId, serviceId: UNATTRIBUTED_CONTEXT.serviceId }, { message, origin: origin ?? null }),
     },
     events: (filter) => [...ring].filter((event) => filter?.applicationId === undefined || event.context.applicationId === filter.applicationId),
     health: () => ({ enforcement: 'ok', telemetry: lastDeliveryFailed ? 'degraded' : 'ok', sinkFailures }),

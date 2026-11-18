@@ -338,7 +338,7 @@ const runtime = await startPreviewRuntime({
   previewOrigin: previewOriginTemplate('https://{key}.preview.example.com'),
   previewEgress: (applicationId) => (applicationId ? declaredApis(applicationId) : []),
   workerPolicy: (applicationId) => signedPolicyId(applicationId),
-  security: { sink: { emit: (event) => report(event.reason, event) } },
+  security: { sink: { emit: (event) => report(event.reasonCode, event) } },
 });
 ```
 
@@ -353,8 +353,10 @@ workspace's only through `relayUrl`'s): any other request is a 403
 (`ingress.app_origin_mismatch`). An origin that is not a bare https origin, or
 that equals your page's, `relayUrl`'s or another application's, refuses the
 application's process (`ingress.preview_origin_invalid`). Without
-`previewOrigin`, applications share `relayUrl`'s origin, and the runtime warns
-once per page and reports `ingress.shared_preview_origin`.
+`previewOrigin`, an application's first process is refused the same way, unless
+you opt out by name with `sharedPreviewOrigin: 'unprotected'` — then
+applications share `relayUrl`'s origin, and the runtime warns once per page and
+reports `ingress.shared_preview_origin`.
 
 Deployment: a wildcard DNS record (`*.preview.example.com`) and a wildcard TLS
 certificate, and a host route that serves the same files on every
@@ -371,6 +373,21 @@ before an application is known carry none — serve those the most restrictive
 policy. Every attach of a preview to the service worker carries a fresh nonce
 chained to the previous one, so a page that can post as the relay but never saw
 the host's messages cannot rebind a preview (`ingress.attach_rejected`).
+
+#### Security events (`security.sink`)
+
+Every refusal the runtime makes on the page side — a port the service graph
+does not allow, a database login or name refused, a write outside an
+application's directory, a spawn over quota, a request body over 32 MiB (also on
+in-runtime loopback HTTP and `runtime.request`, answered 413), an origin
+mismatch — becomes one `SecurityEvent` (`@seanhogg/builderforce-webcontainers/security`):
+`{ category, ruleId, severity, reasonCode, action, context, evidence, occurredAt }`.
+`context` is who the runtime assigned the actor at spawn, never what a process
+claims; `evidence` is redacted (no passwords, tokens, cookies or bodies) and at
+most 4 KB. Events go to `security.sink` (called synchronously, never awaited; a
+throwing sink is ignored) and into a bounded ring: `runtime.security().events()`
+and `runtime.security().health()` (`enforcement` and `telemetry`, reported
+separately).
 
 ## How it works
 

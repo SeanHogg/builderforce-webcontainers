@@ -17,7 +17,8 @@
  *   Cache Storage, BroadcastChannel, worker scope): a console warning once per
  *   page and an `ingress.shared_preview_origin` event per runtime say so.
  */
-import { hashAlgorithm, type ShieldReasonCode } from '@seanhogg/builderforce-webcontainers-core';
+import { hashAlgorithm, PLATFORM_CONTEXT, type ShieldReasonCode } from '@seanhogg/builderforce-webcontainers-core';
+import type { ShieldReporter } from './security/shieldTelemetry.js';
 
 /** A boot or routing decision the Security Shield refused; `reason` is the contract, `message` is for logs. */
 export class PreviewShieldError extends Error {
@@ -29,20 +30,6 @@ export class PreviewShieldError extends Error {
     super(message);
     this.name = 'PreviewShieldError';
   }
-}
-
-/** A Security Shield event the runtime reports (telemetry; enforcement never depends on it). */
-export interface ShieldEvent {
-  reason: ShieldReasonCode;
-  /** Plain explanation for logs (not localized; `reason` is the contract). */
-  message: string;
-  applicationId?: string;
-  origin?: string;
-}
-
-/** Where shield events leave the runtime (the embedding product maps reason codes to its own records). Its failures are ignored. */
-export interface ShieldEventSink {
-  emit(event: ShieldEvent): void;
 }
 
 /** Who a preview origin is for: the runtime (its `id`, the project) and the application in it. */
@@ -119,22 +106,13 @@ export interface PreviewOriginRequest {
 
 let sharedOriginWarned = false;
 
-/** Report one shield event: telemetry fails open. */
-export function emitShieldEvent(sink: ShieldEventSink | undefined, event: ShieldEvent): void {
-  try {
-    sink?.emit(event);
-  } catch {
-    // Telemetry never changes the decision.
-  }
-}
-
 /**
  * Control 10 at boot: throws `PreviewShieldError` (`ingress.same_origin_refused`)
  * when the preview would share `embeddingOrigin`, unless `unprotectedSameOrigin`
  * is set. Warns (once per page) and reports when every application will share
  * one preview origin. Returns the relay's origin in relay mode.
  */
-export function checkPreviewOrigins(request: PreviewOriginRequest, embeddingOrigin: string, sink?: ShieldEventSink): string | undefined {
+export function checkPreviewOrigins(request: PreviewOriginRequest, embeddingOrigin: string, telemetry?: ShieldReporter): string | undefined {
   const relayOrigin = request.relayUrl ? new URL(request.relayUrl, embeddingOrigin).origin : undefined;
   const shared = relayOrigin === undefined || relayOrigin === embeddingOrigin;
   if (shared && !request.unprotectedSameOrigin) {
@@ -156,7 +134,7 @@ export function checkPreviewOrigins(request: PreviewOriginRequest, embeddingOrig
       sharedOriginWarned = true;
       console.warn(`[bfwc] ${message}`);
     }
-    emitShieldEvent(sink, { reason: 'ingress.shared_preview_origin', message, origin: relayOrigin ?? embeddingOrigin });
+    telemetry?.report('ingress.shared_preview_origin', PLATFORM_CONTEXT, { message, origin: relayOrigin ?? embeddingOrigin }); // fails open
   }
   return relayOrigin;
 }

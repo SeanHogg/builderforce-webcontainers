@@ -8,7 +8,8 @@ export type {
   RuntimeBuildOptions,
 } from './host.js';
 export { PreviewShieldError, previewOriginTemplate, previewOriginKey } from './previewOrigin.js';
-export type { PreviewOriginOption, PreviewOriginContext, ShieldEvent, ShieldEventSink } from './previewOrigin.js';
+export type { PreviewOriginOption, PreviewOriginContext } from './previewOrigin.js';
+export type { SecurityEvent, SecurityEventSink, SecurityHealth, ShieldTelemetry } from './security/index.js';
 export { listenToPreview } from './previewMessages.js';
 export type { PreviewOriginMatch } from './previewMessages.js';
 export { createSnapshotStore } from './snapshotStore.js';

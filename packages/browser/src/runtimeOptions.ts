@@ -32,7 +32,9 @@ import type { PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
 import type { PhpHostOptions, PhpPlatformRecord } from './runtimes/php/phpProcessKind.js';
 import type { DotnetHostOptions } from './runtimes/dotnet/dotnetProcessKind.js';
 import type { PreviewConsoleMessage, PreviewError } from './previewMessages.js';
-import type { PreviewOriginOption, ShieldEventSink } from './previewOrigin.js';
+import type { PreviewOriginOption } from './previewOrigin.js';
+import type { SecurityEventSink } from './security/securityEvent.js';
+import type { ShieldTelemetry } from './security/shieldTelemetry.js';
 
 /**
  * Serve previews on THIS page's origin. Only for code the page's own user trusts:
@@ -50,6 +52,8 @@ export interface SameOriginOptions {
   relayUrl?: never;
   previewOrigin?: never;
   workerPolicy?: never;
+  /** Same-origin mode shares everything already (`unprotectedSameOrigin`). */
+  sharedPreviewOrigin?: never;
 }
 
 /**
@@ -72,6 +76,13 @@ export interface RelayOptions {
    * one-time warning and an `ingress.shared_preview_origin` event say so).
    */
   previewOrigin?: PreviewOriginOption;
+  /**
+   * The named opt-out from control 1: without `previewOrigin`, an application's
+   * first process is refused (`PreviewShieldError`) unless this says, by name,
+   * that applications may share `relayUrl`'s origin (storage, Cache Storage,
+   * BroadcastChannels, service worker) with each other. Never a default.
+   */
+  sharedPreviewOrigin?: 'unprotected';
   /**
    * The egress policy id (opaque, signed by you; `[A-Za-z0-9._~-]`, at most 512)
    * the relay puts on each application's process Worker script URL as
@@ -132,8 +143,14 @@ export interface CommonRuntimeOptions {
    * `bundleUrl`, `dotnet` commands decline with the reason.
    */
   dotnet?: DotnetHostOptions;
-  /** The Security Shield's telemetry: where its events leave the runtime (reason codes only; failures ignored). */
-  security?: { sink?: ShieldEventSink };
+  /**
+   * The Security Shield's telemetry: where its events (`SecurityEvent`, from
+   * `@seanhogg/builderforce-webcontainers/security`) leave the runtime. Reason
+   * codes and redacted evidence only; a throwing sink is ignored.
+   */
+  security?: { sink?: SecurityEventSink };
+  /** Where browsers send CSP violation reports (`report-to` / `report-uri`) for preview documents and process Worker scripts: an absolute https URL on your API. Reports are never trusted from inside a Worker. */
+  cspReportUrl?: string;
   /**
    * The external sources preview documents may connect to (`https://api.example.com`,
    * `https://*.example.com`, `wss://…`; no paths): the service worker stamps them
@@ -236,6 +253,8 @@ export interface PreviewRuntime {
    * storage; only gateway bytes cross. `dispose()` terminates the ones running.
    */
   createDatabaseWorker(): WorkerLike;
+  /** The Security Shield's telemetry for this runtime: `events()` (the bounded ring), `health()` (enforcement and telemetry), and the reporter the chokepoints share. */
+  security(): ShieldTelemetry;
   /**
    * Cookies virtual servers set, per port. A service worker cannot set cookies,
    * so the runtime keeps them and sends them back on later requests (and

@@ -16,7 +16,9 @@
  * Without `previewOrigin` every port is served everywhere, as before.
  */
 import { PLATFORM_APPLICATION, WORKSPACE_APPLICATION, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
-import { emitShieldEvent, previewOriginKey, validatePreviewOrigin, PreviewShieldError, type PreviewOriginOption, type ShieldEventSink } from './previewOrigin.js';
+import { previewOriginKey, validatePreviewOrigin, PreviewShieldError, type PreviewOriginOption } from './previewOrigin.js';
+import { applicationContext } from './security/securityEvent.js';
+import type { ShieldReporter } from './security/shieldTelemetry.js';
 import type { PreviewTransport } from './transport.js';
 import type { WorkerLike } from './node/processHost.js';
 import type { WorkerKind } from './node/protocol.js';
@@ -43,7 +45,8 @@ export interface PreviewOriginsOptions {
   open(relayUrl: string): PreviewTransport;
   /** A relay was opened for `applicationId`: attach the runtime's previews to it. Returns what to undo when it closes. */
   onOpened?(transport: PreviewTransport, applicationId: string): () => void;
-  sink?: ShieldEventSink;
+  /** The runtime's Security Shield telemetry: a refused application origin is reported to it. */
+  telemetry?: ShieldReporter;
 }
 
 interface AppOrigin {
@@ -79,7 +82,7 @@ export function createPreviewOrigins(options: PreviewOriginsOptions) {
     } catch (error) {
       const refusal =
         error instanceof PreviewShieldError ? error : new PreviewShieldError('ingress.preview_origin_invalid', `previewOrigin("${applicationId}") failed: ${error instanceof Error ? error.message : String(error)}`);
-      emitShieldEvent(options.sink, { reason: refusal.reason, message: refusal.message, applicationId });
+      options.telemetry?.report(refusal.reason, applicationContext(applicationId), { message: refusal.message }); // fails open
       throw refusal;
     }
     apps.set(applicationId, { origin });

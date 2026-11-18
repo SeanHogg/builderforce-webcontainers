@@ -195,6 +195,8 @@ export class ProcessHost {
   private spawn(origin: SpawnOrigin, requested: string, requestedArgs: string[], options: ProcessOptions): ChildHandle {
     const cwd = options.cwd ?? this.options.cwd ?? '/';
     const admitted = this.identities.admit(origin, cwd);
+    // Decided before the process exists: an application refused a preview origin (previewOriginOf throws) leaves no record behind.
+    const previewOrigin = this.originOf(admitted.context.applicationId);
     const pid = allocatePid();
     const env = { ...DEFAULT_ENV, ...this.options.env, ...options.env };
     // An application process's command is routed (shebangs, scripts read) on its view's mirror: nothing outside its subtree is read for it.
@@ -248,7 +250,7 @@ export class ProcessHost {
       thread: options.thread,
       snapshot,
       ports: ((self) => (self ? this.ports.reachablePorts(self) : []))(this.identityOf(pid)), // only what it may reach (W10 control 4)
-      previewOrigin: this.originOf(admitted.context.applicationId),
+      previewOrigin,
       previewBase: this.options.previewBase,
       previewUrl: this.options.previewUrl,
       registry: this.options.registry,
@@ -269,6 +271,14 @@ export class ProcessHost {
       exit,
       ipc: proc.ipc?.endpoint,
     };
+  }
+
+  /** Post a process-kind message (a training checkpoint, a save acknowledgement) to process `pid`; false when it is gone. */
+  notify(pid: number, message: unknown): boolean {
+    const proc = [...this.procs].find((candidate) => candidate.pid === pid);
+    if (!proc || proc.exited) return false;
+    this.post(proc, message as HostToWorker);
+    return true;
   }
 
   /** Every process still running, oldest first — children started by a shell included. */
@@ -368,9 +378,14 @@ export class ProcessHost {
         return this.served.loopback(proc, message);
       case 'request-cancel':
         return proc.loopbacks.get(message.reqId)?.();
-      case 'listening':
-        this.servers.announce({ port: message.port, url: message.url });
+      case 'listening': {
+        // The URL is the page's, never the Worker's: a port this process registered is served at its owner's
+        // preview origin (serverUrl); anything else is the dev-server handoff, served at the runtime's preview URL.
+        const port = Number(message.port);
+        const url = proc.registrations.has(port) ? this.serverUrl(port) : this.options.previewUrl;
+        if (url && Number.isInteger(port) && port > 0 && port < 65536) this.servers.announce({ port, url });
         return;
+      }
       default:
         // A message of one process kind (python-installed): its policy decides, knowing who sent it — from the
         // page-side record of this Worker, never the message. Each application writes only its own record

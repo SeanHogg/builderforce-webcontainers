@@ -7,7 +7,7 @@
  * non-service-worker body limit (control 3) and routing on the scoped view (b).
  */
 import { describe, expect, it } from 'vitest';
-import { createChannelPair, textResponse, VirtualFileSystem, WORKSPACE_CONTEXT, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
+import { createChannelPair, PLATFORM_CONTEXT, textResponse, VirtualFileSystem, WORKSPACE_CONTEXT, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from '../src/node/processHost.js';
 import type { HostToWorker, WorkerToHost } from '../src/node/protocol.js';
 import { NODE_ONLY, type ProcessKindPolicy } from '../src/node/processKinds.js';
@@ -15,6 +15,7 @@ import { processQuota } from '../src/node/processQuota.js';
 import { createPgliteProvider } from '../src/app/pgliteProvider.js';
 import { DEFAULT_MAX_BODY_BYTES } from '../src/swBody.js';
 import {
+  applicationContext,
   createShieldTelemetry,
   IngressLimit,
   MAX_EVIDENCE_BYTES,
@@ -57,6 +58,7 @@ function shieldHost(options: { sink?: SecurityEventSink; quota?: Parameters<type
     },
     previewOrigin: 'https://app.test',
     previewBase: '/__bfwc/p1/',
+    previewUrl: 'https://app.test/__bfwc/p1/',
     warmWorker: false,
     kinds: options.kinds,
     security: { quota: processQuota(options.quota), telemetry, maxBodyBytes: options.maxBodyBytes },
@@ -98,13 +100,15 @@ describe('the event ring and the sink', () => {
     expect(rejecting.health()).toMatchObject({ enforcement: 'ok', telemetry: 'degraded', sinkFailures: 1 });
   });
 
-  it('turns ShieldNotices (the boot and routing checks) into events: the platform without an application', () => {
+  it('reports a refusal with no page-side owner as unattributed, and an application-wide one as that application', () => {
     const telemetry = createShieldTelemetry();
-    telemetry.notices.emit({ reason: 'ingress.attach_rejected', message: 'attach', origin: 'https://p.test' });
-    telemetry.notices.emit({ reason: 'ingress.client_not_bound', message: 'unbound', applicationId: 'app:a' });
-    const [attach, unbound] = telemetry.events();
-    expect(attach).toMatchObject({ category: 'ingress', action: 'reject', context: { applicationId: 'platform' }, evidence: { message: 'attach', origin: 'https://p.test' } });
-    expect(unbound).toMatchObject({ action: 'reject', context: { applicationId: 'app:a', serviceId: 'unattributed' } });
+    telemetry.report('ingress.app_origin_mismatch', undefined, { port: 3000, origin: 'https://p.test' });
+    telemetry.report('ingress.preview_origin_invalid', applicationContext('app:a'), { message: 'bad' });
+    telemetry.report('ingress.shared_preview_origin', PLATFORM_CONTEXT);
+    const [mismatch, invalid, shared] = telemetry.events();
+    expect(mismatch).toMatchObject({ category: 'ingress', action: 'reject', context: { applicationId: 'unattributed' }, evidence: { port: 3000, origin: 'https://p.test' } });
+    expect(invalid).toMatchObject({ action: 'reject', context: { applicationId: 'app:a', serviceId: 'unattributed' } });
+    expect(shared).toMatchObject({ action: 'monitor', severity: 'low', context: { applicationId: 'platform' } });
   });
 
   it('every reason code has a rule', () => {
@@ -237,6 +241,24 @@ describe('the request-body limit off the service worker (control 3)', () => {
     expect(telemetry.events().map((e) => [e.reasonCode, e.context.applicationId, e.evidence.path])).toEqual([
       ['ingress.body_too_large', 'platform', 'host'],
       ['ingress.body_too_large', 'platform', 'host'],
+    ]);
+  });
+});
+
+describe('announced server URLs are assigned by the page', () => {
+  it("ignores the Worker's URL: a registered port gets its page-side URL, anything else the runtime's preview URL", () => {
+    const { processes, puppets } = shieldHost();
+    const announced: Array<{ port: number; url: string }> = [];
+    processes.servers.onListening((server) => void announced.push(server));
+    processes.spawnChild('node', [], { identity: A, cwd: '/apps/a' });
+    puppets[0]!.send({ type: 'listen', port: 4100, id: 1 });
+    announced.length = 0; // the port's own open
+    puppets[0]!.send({ type: 'listening', port: 4100, url: 'https://evil.test/' });
+    puppets[0]!.send({ type: 'listening', port: 5173, url: 'https://evil.test/' });
+    puppets[0]!.send({ type: 'listening', port: -1, url: 'https://evil.test/' });
+    expect(announced).toEqual([
+      { port: 4100, url: processes.serverUrl(4100) },
+      { port: 5173, url: 'https://app.test/__bfwc/p1/' },
     ]);
   });
 });

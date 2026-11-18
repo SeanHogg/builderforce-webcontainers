@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PreviewShieldError, previewOriginKey, previewOriginTemplate, type ShieldEvent } from '../src/previewOrigin.js';
+import { PreviewShieldError, previewOriginKey, previewOriginTemplate } from '../src/previewOrigin.js';
+import { createShieldTelemetry, type SecurityEvent } from '../src/security.js';
 import { createPreviewOrigins } from '../src/previewOrigins.js';
 import type { PreviewTransport } from '../src/transport.js';
 
@@ -29,7 +30,7 @@ const appOrigin = (applicationId: string, runtimeId = 'project-1') => `https://$
 function origins(options: { previewOrigin?: typeof TEMPLATE; workerPolicy?: string | ((applicationId: string) => string | undefined); runtimeId?: string } = {}) {
   const shared = fakeTransport('https://preview.example.com');
   const opened: Array<{ url: string; fake: ReturnType<typeof fakeTransport>; detach: ReturnType<typeof vi.fn> }> = [];
-  const events: ShieldEvent[] = [];
+  const events: SecurityEvent[] = [];
   const set = createPreviewOrigins({
     shared: shared.transport,
     relayUrl: RELAY_URL,
@@ -43,7 +44,7 @@ function origins(options: { previewOrigin?: typeof TEMPLATE; workerPolicy?: stri
       return fake.transport;
     },
     onOpened: () => opened.at(-1)!.detach,
-    sink: { emit: (event) => void events.push(event) },
+    telemetry: createShieldTelemetry({ sink: { emit: (event) => void events.push(event) } }),
   });
   return { set, shared, opened, events };
 }
@@ -98,7 +99,7 @@ describe('per-application preview origins', () => {
     const { set, events, opened } = origins({ previewOrigin: () => 'https://same.preview.example.com' });
     expect(set.originOf('shop')).toBe('https://same.preview.example.com');
     expect(() => set.createWorker!('node', 'blog')).toThrow(PreviewShieldError);
-    expect(events.map((event) => [event.reason, event.applicationId])).toEqual([['ingress.preview_origin_invalid', 'blog']]);
+    expect(events.map((event) => [event.reasonCode, event.context.applicationId])).toEqual([['ingress.preview_origin_invalid', 'blog']]);
     expect(opened).toHaveLength(0);
 
     const throwing = origins({
@@ -107,7 +108,7 @@ describe('per-application preview origins', () => {
       },
     });
     expect(() => throwing.set.originOf('shop')).toThrow(/no DNS/);
-    expect(throwing.events[0]?.reason).toBe('ingress.preview_origin_invalid');
+    expect(throwing.events[0]?.reasonCode).toBe('ingress.preview_origin_invalid');
 
     for (const bad of [PAGE, 'https://preview.example.com', 'http://x.preview.example.com']) {
       expect(() => origins({ previewOrigin: () => bad }).set.originOf('shop')).toThrow(PreviewShieldError);
