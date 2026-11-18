@@ -88,10 +88,10 @@ export class PortRegistry {
         if (!open || this.handlers.get(actual) !== handler) return;
         open = false;
         this.handlers.delete(actual);
-        this.owners.delete(actual);
         this.upgrades.delete(actual);
         this.connections.delete(actual);
-        this.emit({ type: 'close', port: actual });
+        this.emit({ type: 'close', port: actual }); // the owner is still known here, so watchers can tell who could reach it (`reaches`)
+        this.owners.delete(actual);
       },
     };
   }
@@ -105,8 +105,25 @@ export class PortRegistry {
     return this.owners.get(port);
   }
 
+  /** Every open port — the host's view. A process gets {@link reachablePorts} instead, so it cannot list ports it may not reach. */
   ports(): number[] {
     return [...this.handlers.keys()].sort((a, b) => a - b);
+  }
+
+  /** Could `caller` reach `port`? Decided like a connection, but not reported (listing is not an access). False when nothing listens (during a port's `close` event, still its owner's answer). */
+  reaches(port: number, caller: SecurityContext): boolean {
+    const owner = this.owners.get(port);
+    if (!owner) return false;
+    try {
+      return this.policy.decide(caller, owner).allow;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The open ports `caller` may reach: what a process is told is listening. */
+  reachablePorts(caller: SecurityContext): number[] {
+    return this.ports().filter((port) => this.reaches(port, caller));
   }
 
   /**

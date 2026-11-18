@@ -3,6 +3,7 @@
  * host calls, and what it hears back.
  */
 import type {
+  ApplicationSpec,
   DatabaseControl,
   ProviderRegistry,
   RestartLimits,
@@ -69,6 +70,11 @@ export interface AttributedProcesses {
   killApplication(applicationId: string, serviceId?: string): void;
 }
 
+/** Where an application's service graph is put in force; returns the unregister. */
+export interface ApplicationPortPolicy {
+  register(applicationId: string, spec: ApplicationSpec): () => void;
+}
+
 export interface ApplicationRuntimeOptions {
   /** The runtimes services run on (`createNodeProvider(runtime)`), or a registry of them. */
   providers: readonly RuntimeProvider[] | ProviderRegistry;
@@ -78,6 +84,14 @@ export interface ApplicationRuntimeOptions {
    * Without it, only the processes the providers hold are ended.
    */
   processes?: AttributedProcesses;
+  /**
+   * The runtime's port policy (`ProcessHost.ports.policy`, a `ServiceGraphPolicy`):
+   * the application's `dependsOn` graph is registered under its `applicationId`
+   * on `start()` and removed on `stop()` / `dispose()`, so its services reach
+   * only what they declare (W10 control 4). Without it, application processes
+   * reach no port but their own.
+   */
+  portPolicy?: ApplicationPortPolicy;
   /** Default readiness timeout, when a service's readiness sets none. Default 120000ms. */
   readinessTimeoutMs?: number;
   /** How long a stopping service gets after `SIGTERM` before `SIGKILL`. Default 5000ms. */

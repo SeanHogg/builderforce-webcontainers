@@ -255,7 +255,7 @@ describe('composer + Slim 4 against PGlite (online)', () => {
       ],
     };
     const runtime = { run: processes.run.bind(processes), onServerListening: (l: never) => processes.servers.onListening(l), onPortChange: (l: never) => processes.servers.onPortChange(l), listProcesses: () => processes.list() };
-    const app = startApplicationRuntime(spec, { providers: [createPhpProvider(runtime, { probeIntervalMs: 50 }), createPgliteProvider(databases, { locks: fakeLocks() })], readinessTimeoutMs: 120_000 });
+    const app = startApplicationRuntime(spec, { portPolicy: processes.portPolicy, processes, providers: [createPhpProvider(runtime, { probeIntervalMs: 50 }), createPgliteProvider(databases, { locks: fakeLocks() })], readinessTimeoutMs: 120_000 });
     await app.start();
     const call = async (method: string, url: string, body?: unknown) => {
       const response = await request(processes.ports, 8000, method, url, body === undefined ? undefined : JSON.stringify(body), { 'content-type': 'application/json' });

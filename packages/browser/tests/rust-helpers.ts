@@ -39,7 +39,6 @@ export function fakeRustWorker(): WorkerLike {
   };
   const proc = createRustWorkerProcess({
     post: (message) => {
-      if (process.env.DEBUG_RUST) console.log('POST', JSON.stringify(message).slice(0, 200));
       const copy = structuredClone(message);
       queueMicrotask(() => alive && worker.onmessage?.({ data: copy }));
     },

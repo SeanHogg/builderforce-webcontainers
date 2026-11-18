@@ -6,6 +6,7 @@
 import type { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import { ProcessHost, type WorkerLike } from './processHost.js';
 import type { ProcessKindPolicy } from './processKinds.js';
+import type { ProcessShieldOptions } from './processIdentity.js';
 import type { WorkerKind } from './protocol.js';
 
 export { ProcessHost } from './processHost.js';
@@ -105,7 +106,7 @@ export function trackWorkers(create: () => WorkerLike): { create(): WorkerLike; 
   };
 }
 
-export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions; kinds?: ProcessKindPolicy }): ProcessHost {
+export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; base: string; origin: string; previewUrl: string; options?: NodeRuntimeOptions; kinds?: ProcessKindPolicy; security?: ProcessShieldOptions }): ProcessHost {
   const { options = {} } = args;
   return new ProcessHost({
     fs: args.fs,
@@ -120,5 +121,6 @@ export function createProcessHost(args: { fs: VirtualFileSystem; cwd?: string; b
     killGraceMs: options.killGraceMs,
     warmWorker: options.warmWorker,
     kinds: args.kinds,
+    security: args.security,
   });
 }

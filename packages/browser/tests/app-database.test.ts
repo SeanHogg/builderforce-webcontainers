@@ -77,6 +77,8 @@ describe('application runtime with a pglite database', () => {
       ],
     };
     const app = startApplicationRuntime(spec, {
+      portPolicy: processes.portPolicy,
+      processes,
       providers: [createNodeProvider(nodeHost(processes), { probeIntervalMs: 50 }), createPgliteProvider(databases, { locks: fakeLocks() })],
     });
     const call = async (method: string, url: string, body?: unknown) => {

@@ -43,6 +43,7 @@ import {
   type VfsSnapshots,
   type VirtualFileSystem,
 } from '@seanhogg/builderforce-webcontainers-core';
+import { ServiceGraphPolicy } from '@seanhogg/builderforce-webcontainers-core/app';
 import type { HostToWorker, WorkerKind, WorkerToHost } from './protocol.js';
 import { portPath } from './protocol.js';
 import { NODE_ONLY, type ProcessKindPolicy } from './processKinds.js';
@@ -102,7 +103,9 @@ export interface ProcessInfo {
 }
 
 export class ProcessHost {
-  readonly ports = new PortRegistry();
+  /** The port policy: applications register their service graph here (`startApplicationRuntime`'s `portPolicy`). */
+  readonly portPolicy = new ServiceGraphPolicy();
+  readonly ports = new PortRegistry({ policy: this.portPolicy });
   /** Servers listening, ports opening and closing. */
   readonly servers = new ServerEvents();
   private readonly procs = new Set<Proc>();
@@ -130,7 +133,11 @@ export class ProcessHost {
     this.served = new ProcessPorts(this.ports, (proc, message) => this.post(proc, message), (pid) => this.identityOf(pid));
     this.stopPorts = this.ports.watch(({ type, port }) => {
       const url = this.serverUrl(port);
-      for (const proc of this.procs) this.post(proc, { type: 'ports', open: type === 'open' ? [port] : [], closed: type === 'close' ? [port] : [] });
+      // Only to processes that may reach it: a process cannot list ports its policy hides (W10 control 4).
+      for (const proc of this.procs) {
+        const caller = this.identityOf(proc.pid);
+        if (caller && this.ports.reaches(port, caller)) this.post(proc, { type: 'ports', open: type === 'open' ? [port] : [], closed: type === 'close' ? [port] : [] });
+      }
       this.servers.portChanged({ type, port, url });
     });
   }
@@ -222,7 +229,7 @@ export class ProcessHost {
       ipc: options.ipc,
       thread: options.thread,
       snapshot,
-      ports: this.ports.ports(),
+      ports: ((self) => (self ? this.ports.reachablePorts(self) : []))(this.identityOf(pid)), // only what it may reach (W10 control 4)
       previewOrigin: this.options.previewOrigin,
       previewBase: this.options.previewBase,
       previewUrl: this.options.previewUrl,

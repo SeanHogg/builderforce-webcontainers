@@ -93,9 +93,13 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   const assertLive = () => {
     if (disposed) throw new Error('This application runtime was disposed.');
   };
+  /** The service graph in force on the runtime's ports while the application runs (W10 control 4). */
+  let unregisterGraph: (() => void) | undefined;
   const stopAll = async () => {
     for (const id of graph.stopOrder) await service(id).stop();
     options.processes?.killApplication(applicationId); // whatever outlived its service: the whole attributed set
+    unregisterGraph?.();
+    unregisterGraph = undefined;
   };
 
   return {
@@ -110,6 +114,8 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
         failures.forEach((failure) => errors.emit(failure));
         throw new ApplicationStartError(failures);
       }
+      // Before any service runs: its dials are decided against this graph.
+      unregisterGraph ??= options.portPolicy?.register(applicationId, spec);
       // In start order, so each service exists and is on its way before its dependents look at it.
       await settle(graph.startOrder.map((id) => [id, service(id).start()]));
     },

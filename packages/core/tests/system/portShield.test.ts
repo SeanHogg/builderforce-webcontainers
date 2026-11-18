@@ -99,6 +99,19 @@ describe('PortRegistry + ServiceGraphPolicy', () => {
     expect(broken.connect(9001)).toBeUndefined();
   });
 
+  it('lists to a caller only the ports it may reach, without reporting the listing as an access', () => {
+    const { policy, ports, decisions, serve } = network();
+    policy.register('a', spec);
+    policy.register('b', spec);
+    serve(5432, as('a', 'db'));
+    serve(8000, as('a', 'api'));
+    serve(9000, as('b', 'api'));
+    expect(ports.reachablePorts(as('a', 'api'))).toEqual([5432, 8000]);
+    expect(ports.reachablePorts(as('a', 'web'))).toEqual([8000]);
+    expect(ports.reachablePorts(WORKSPACE_CONTEXT)).toEqual([5432, 8000, 9000]);
+    expect(decisions).toEqual([]);
+  });
+
   it('refuses reserved or duplicate application ids and invalid graphs', () => {
     const policy = new ServiceGraphPolicy();
     expect(() => policy.register('workspace', spec)).toThrow('reserved');

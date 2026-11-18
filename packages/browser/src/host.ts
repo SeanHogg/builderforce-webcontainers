@@ -27,12 +27,14 @@ import {
   type ProcessOptions,
   type ProjectProfile,
   type RuntimeProcess,
+  type SecurityContext,
   type ServerAddress,
   type StyleCompilers,
   type Transformer,
   type ZipExportOptions,
   type ZipImportLimits,
 } from '@seanhogg/builderforce-webcontainers-core';
+import type { ServiceGraphPolicy } from '@seanhogg/builderforce-webcontainers-core/app';
 import { PREVIEW_ID, isPortPath, isWireCancel, isWireRequest, previewBase, type WireReply, type WireResponse } from './protocol.js';
 import { createPortResponder, createProcessHost, databaseWorkerFactory, trackWorkers, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
 import type { WorkerLike } from './node/processHost.js';
@@ -190,15 +192,20 @@ export interface PreviewRuntime {
    * (its own localhost, not the network) and wait for the whole response;
    * undefined when nothing listens there. `method` defaults to GET.
    */
-  request(port: number, request: Partial<HttpRequestData> & { url: string }): Promise<HttpResponseData | undefined>;
+  request(port: number, request: Partial<HttpRequestData> & { url: string }, caller?: SecurityContext): Promise<HttpResponseData | undefined>;
   /**
    * Serve raw TCP on a virtual port from the page (the database gateway does):
    * processes reach it with `net.connect(port)`; an HTTP request to it gets a
-   * 502. Throws `EADDRINUSE`.
+   * 502. `owner` (default the platform) is whose port it is: only callers the
+   * port policy allows reach it. Throws `EADDRINUSE`.
    */
-  listenTcp(port: number, accept: ConnectionHandler): { port: number; close(): void };
-  /** Open a raw TCP connection to whatever listens on `port`; undefined when nothing does. */
-  connect(port: number): ByteChannel | undefined;
+  listenTcp(port: number, accept: ConnectionHandler, owner?: SecurityContext): { port: number; close(): void };
+  /** Open a raw TCP connection to whatever listens on `port`; undefined when nothing does (or `caller`, default the platform, may not reach it). */
+  connect(port: number, caller?: SecurityContext): ByteChannel | undefined;
+  /** The runtime's port policy: pass it as `startApplicationRuntime`'s `portPolicy`, so each application's `dependsOn` graph is in force while it runs. */
+  readonly portPolicy: ServiceGraphPolicy;
+  /** End every process attributed to an application (or one of its services): pass the runtime as `startApplicationRuntime`'s `processes`. */
+  killApplication(applicationId: string, serviceId?: string): void;
   /**
    * A database Worker, always on the HOST origin (relay mode included), so the
    * code a project runs — on the preview origin — has no path to the database's
@@ -346,9 +353,11 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     onServerListening: (listener) => processes.servers.onListening(listener),
     onPortChange: (listener) => processes.servers.onPortChange(listener),
     listProcesses: () => processes.list().map((info) => ({ ...info, cwd: baseToProject(root, info.cwd) ?? info.cwd })),
-    request: (port, request) => processes.request(port, { method: 'GET', headers: {}, body: null, ...request }),
-    listenTcp: (port, accept) => processes.ports.listen(port, async () => textResponse(502, 'Not an HTTP server'), undefined, accept),
-    connect: (port) => processes.ports.connect(port),
+    request: (port, request, caller) => processes.request(port, { method: 'GET', headers: {}, body: null, ...request }, caller),
+    listenTcp: (port, accept, owner) => processes.ports.listen(port, async () => textResponse(502, 'Not an HTTP server'), undefined, accept, owner),
+    connect: (port, caller) => processes.ports.connect(port, caller),
+    portPolicy: processes.portPolicy,
+    killApplication: (applicationId, serviceId) => processes.killApplication(applicationId, serviceId),
     createDatabaseWorker: () => databaseWorkers.create(),
     cookies,
     dispose() {

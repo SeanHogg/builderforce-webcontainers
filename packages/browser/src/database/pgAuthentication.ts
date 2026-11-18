@@ -96,16 +96,29 @@ export function authenticateConnection(options: AuthenticateOptions): { cancel()
     options.refused?.(reason, request);
     fatal(...refusal(reason, request!));
   };
-  /** Hand on the start-up and the packets framed after it (pipelined by the client); a broken one ends the connection instead. */
+  /** Bytes that arrived after admission, before the hand-over. */
+  let admitted: Uint8Array[] | undefined;
+  /**
+   * Hand on the start-up and the packets framed after it (pipelined by the
+   * client); a broken one ends the connection instead. The hand-over waits a
+   * microtask: admission happens while the socket is delivering a chunk, and a
+   * listener the caller adds then (its relay) would be handed that same chunk
+   * again — duplicating the start-up or the password into the session.
+   */
   const admit = (rest: FrontendPacket[]) => {
     const broken = rest.find((packet) => packet.kind === 'error');
     if (broken?.kind === 'error') return fatal('08P01', broken.message);
-    finish();
-    options.accepted(concat([startup!, ...rest.map((packet) => (packet.kind === 'message' ? packet.bytes : new Uint8Array())), reader.drain()]));
+    admitted = [startup!, ...rest.map((packet) => (packet.kind === 'message' ? packet.bytes : new Uint8Array())), reader.drain()];
+    queueMicrotask(() => {
+      if (done) return; // hung up meanwhile
+      finish();
+      options.accepted(concat(admitted!));
+    });
   };
 
   const receive = (data: Uint8Array) => {
     if (done) return;
+    if (admitted) return void admitted.push(data);
     const packets = reader.push(data);
     for (let i = 0; i < packets.length; i++) {
       const packet = packets[i]!;

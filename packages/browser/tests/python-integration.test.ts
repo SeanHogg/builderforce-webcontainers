@@ -78,7 +78,7 @@ describe('pg8000 against the PGlite gateway (offline: vendored wheels)', () => {
         { id: 'job', type: 'application', runtime: 'python', root: '/job', command: 'python', args: ['crud.py'], dependsOn: ['db'], readiness: { kind: 'exit-zero' }, restartPolicy: 'never', env: { PIP_INDEX_URL: index.url } },
       ],
     };
-    const app = startApplicationRuntime(spec, { providers: [createPythonProvider(runtimeOf(processes)), createPgliteProvider(databases, { locks: fakeLocks() })] });
+    const app = startApplicationRuntime(spec, { portPolicy: processes.portPolicy, processes, providers: [createPythonProvider(runtimeOf(processes)), createPgliteProvider(databases, { locks: fakeLocks() })] });
     const logs: string[] = [];
     void (async () => {
       for await (const entry of app.logs('job')) logs.push(entry.text);
