@@ -27,19 +27,18 @@ import { applyOpsToPyodide, copyIntoPyodide, toPyodidePath, trackPyodideWrites }
 import type { PyodideLike } from './pyodideLoader.js';
 import { createDialTransport } from './dialTransport.js';
 import { installVirtualSockets, type VirtualTcpTransport } from './virtualSocket.js';
-import { createTrainingArtifactStore, type TrainingArtifactStore } from './trainingArtifacts.js';
 import { createTrainingControl } from './trainingControl.js';
+import { trainingOptionsOf } from './trainingProtocol.js';
 
 export interface PythonWorkerProcessDeps {
-  post(message: WorkerToHost): void;
+  /** `transfer`: buffers handed over with the message (training artifacts). */
+  post(message: WorkerToHost, transfer?: Transferable[]): void;
   /** A fresh interpreter (`loadPyodideRuntime` in a Worker; the `pyodide` npm package in tests). */
   loadPyodide(options: { indexURL?: string; env: Record<string, string> }): Promise<PyodideLike>;
   /** Virtual TCP for Python sockets. Default: the process protocol's dialled connections (dialTransport.ts). */
   tcp?: VirtualTcpTransport;
   /** How extension modules are imported. Default `import(url)`. */
   importModule?: ImportModule;
-  /** Where training artifacts are kept, outside the VFS. Default: IndexedDB (trainingArtifacts.ts). */
-  artifacts?: TrainingArtifactStore;
 }
 
 const addressInUse = (port: number) => `[Errno 98] error while attempting to bind on address ('0.0.0.0', ${port}): address already in use\n`;
@@ -51,8 +50,9 @@ export function createPythonWorkerProcess(deps: PythonWorkerProcessDeps): { rece
   /** Python's sockets dial ports anywhere in the runtime (the Postgres gateway on 5432, another service). */
   const dialled = deps.tcp ? undefined : createDialTransport(deps.post);
   const tcp = deps.tcp ?? dialled!.transport;
-  const training = createTrainingControl(() => (deps.artifacts ??= createTrainingArtifactStore()));
-  const pushStdin = (text: string) => stdin.push(...training.take(text.split(/(?<=\n)/).filter(Boolean)));
+  /** A training service's control (installed only when the page's start message says so). */
+  const training = createTrainingControl((message, transfer) => deps.post(message, transfer));
+  const pushStdin = (text: string) => stdin.push(...text.split(/(?<=\n)/).filter(Boolean));
 
   return createInterpreterProcess(deps.post, (context) => {
     /** Pyodide up, the project copied in, writes tracked, stdio wired, `bfwc` and extensions installed, env and cwd set. */
@@ -73,7 +73,8 @@ export function createPythonWorkerProcess(deps: PythonWorkerProcessDeps): { rece
       // The runtime's own modules and the host's extensions go in before writes are tracked: none of it is the project's.
       installBfwcPackage(py);
       installVirtualSockets(py, tcp);
-      training.install(py, message.env);
+      const trainingOptions = trainingOptionsOf(message);
+      if (trainingOptions) training.install(py, trainingOptions);
       const provided = await installPythonExtensions(py, message.python?.extensions ?? [], deps.importModule ?? importModule);
       copyIntoPyodide(staging, py.FS);
       const tracker = trackPyodideWrites(py.FS, (ops) => {
@@ -101,7 +102,7 @@ export function createPythonWorkerProcess(deps: PythonWorkerProcessDeps): { rece
         provided,
       });
       // What the program wrote under the artifact directory is kept before its exit is reported.
-      if (outcome.kind === 'exited') return training.persist().then(() => outcome);
+      if (outcome.kind === 'exited') return training.saveAtExit(context.io.stderr).then(() => outcome);
       const server = outcome.server;
       return {
         kind: 'serving',
@@ -119,7 +120,7 @@ export function createPythonWorkerProcess(deps: PythonWorkerProcessDeps): { rece
         return { ok: true, port: invocation.kind === 'serve' ? invocation.server.port : undefined, run: (staging) => run(message, invocation, staging) };
       },
       stdin: (data) => pushStdin(data === null ? stdinDecoder.decode() : typeof data === 'string' ? data : stdinDecoder.decode(data, { stream: true })),
-      receive: (message) => !!dialled?.receive(message),
+      receive: (message) => training.receive(message) || !!dialled?.receive(message),
     };
   });
 }

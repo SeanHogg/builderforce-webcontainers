@@ -42,4 +42,9 @@ export { installVirtualSockets, pythonTcpModule, VIRTUAL_TCP_MODULE } from './vi
 export type { VirtualTcpTransport } from './virtualSocket.js';
 export { SEND_HIGH_WATER_MARK, createChannelTransport, createDialTransport } from './dialTransport.js';
 export { TRAINING_ARTIFACT_DIR, createTrainingArtifactStore } from './trainingArtifacts.js';
-export type { TrainingArtifactStore, TrainingArtifactStoreOptions } from './trainingArtifacts.js';
+export type { TrainingArtifactKey, TrainingArtifactStore, TrainingArtifactStoreOptions } from './trainingArtifacts.js';
+export { createTrainingChannel } from './trainingChannel.js';
+export type { NotifyProcess, TrainingChannel, TrainingOptions, TrainingServices } from './trainingChannel.js';
+export { createTrainingSink, validArtifactPath, TRAINING_SINK_DEFAULTS } from './trainingSink.js';
+export type { TrainingSink, TrainingSinkOptions } from './trainingSink.js';
+export type { CheckpointMessage, TrainingArtifactMessage, TrainingPageMessage, TrainingSavedAck, TrainingSavedMessage, TrainingStartOptions } from './trainingProtocol.js';

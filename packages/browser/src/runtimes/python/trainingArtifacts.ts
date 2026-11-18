@@ -1,17 +1,29 @@
 /**
- * Training artifacts (checkpoints, the output adapter's safetensors) kept in
- * project storage OUTSIDE the project's files: a Python program writes them
- * under {@link TRAINING_ARTIFACT_DIR} in Pyodide's file system (never synced
- * to the VFS), and the worker copies them into IndexedDB, keyed by project,
- * service and path, through the runtime's one IndexedDB helper (shared/idb.ts).
- * The host reads them back with the same store. Fails soft: without IndexedDB
- * nothing is kept and reads miss.
+ * Training artifacts (checkpoints, the output adapter's safetensors) in project
+ * storage OUTSIDE the project's files, on the PAGE's origin: a Python program
+ * writes them under {@link TRAINING_ARTIFACT_DIR} in Pyodide's file system
+ * (never synced to the VFS); the worker streams them to the page
+ * (trainingWorker.ts), and the page's sink (trainingSink.ts) commits each save
+ * here. The worker never opens this store.
+ *
+ * Keyed by a host-owned project id plus the page-side identity of the process
+ * (applicationId, serviceId) — never anything the process sets. A save
+ * REPLACES the service's set in one IndexedDB transaction: the files and the
+ * manifest last, so a reader sees a whole save or the previous one, never a
+ * torn one; `list()` reads only the manifest. Built on the runtime's one
+ * IndexedDB helper (shared/idb.ts). Without IndexedDB, saves fail and reads miss.
  */
 import { lazyIdbStore } from '../../shared/idb.js';
-import type { EmscriptenFs } from './pyodideLoader.js';
 
-/** Where a Python program writes artifacts (`bfwc.training.artifact_dir()`); outside `/project`. */
-export const TRAINING_ARTIFACT_DIR = '/bfwc-artifacts';
+export { TRAINING_ARTIFACT_DIR } from './trainingArtifactDir.js';
+
+export interface TrainingArtifactKey {
+  /** The host's project id (never the process's env). */
+  projectId: string;
+  /** The page-side identity of the training service. */
+  applicationId: string;
+  serviceId: string;
+}
 
 export interface TrainingArtifactStoreOptions {
   /** Default `globalThis.indexedDB`. */
@@ -21,64 +33,63 @@ export interface TrainingArtifactStoreOptions {
 }
 
 export interface TrainingArtifactStore {
-  /** False when it was not kept (storage unavailable). */
-  write(projectId: string, serviceId: string, path: string, data: Uint8Array): Promise<boolean>;
-  read(projectId: string, serviceId: string, path: string): Promise<Uint8Array | undefined>;
-  /** The service's artifact paths (relative to the artifact directory), sorted. */
-  list(projectId: string, serviceId: string): Promise<string[]>;
+  /** Replace the service's artifacts with `files`, atomically. Rejects when storage is unavailable or the write fails. */
+  replace(key: TrainingArtifactKey, files: ReadonlyMap<string, Uint8Array>): Promise<void>;
+  read(key: TrainingArtifactKey, path: string): Promise<Uint8Array | undefined>;
+  /** The committed save's paths (relative to the artifact directory), sorted. */
+  list(key: TrainingArtifactKey): Promise<string[]>;
+  /** Drop the service's artifacts. */
+  remove(key: TrainingArtifactKey): Promise<void>;
 }
 
-const prefixOf = (projectId: string, serviceId: string) => `${encodeURIComponent(projectId)}/${encodeURIComponent(serviceId)}/`;
+const manifestKey = (key: TrainingArtifactKey): IDBValidKey => ['manifest', key.projectId, key.applicationId, key.serviceId];
+const fileKey = (key: TrainingArtifactKey, path: string): IDBValidKey => ['file', key.projectId, key.applicationId, key.serviceId, path];
 
 export function createTrainingArtifactStore(options: TrainingArtifactStoreOptions = {}): TrainingArtifactStore {
   const open = lazyIdbStore(options.indexedDB ?? globalThis.indexedDB, { dbName: options.name ?? 'bfwc-training-artifacts', storeName: 'artifacts', version: 1 });
+  const required = async () => {
+    const store = await open();
+    if (!store) throw new Error('Training artifact storage (IndexedDB) is unavailable.');
+    return store;
+  };
+
+  /** In one transaction: read the manifest, delete its files, then (when given) put the new files and manifest. */
+  const rewrite = async (key: TrainingArtifactKey, files?: ReadonlyMap<string, Uint8Array>) => {
+    const store = await required();
+    await store.run('readwrite', (s) => {
+      const previous = s.get(manifestKey(key));
+      previous.onsuccess = () => {
+        for (const path of (previous.result as string[] | undefined) ?? []) s.delete(fileKey(key, path));
+        if (!files) return void s.delete(manifestKey(key));
+        for (const [path, bytes] of files) s.put(bytes, fileKey(key, path));
+        s.put([...files.keys()].sort(), manifestKey(key));
+      };
+      return previous;
+    });
+  };
+
   return {
-    async write(projectId, serviceId, path, data) {
-      const store = await open();
-      if (!store) return false;
-      try {
-        await store.run('readwrite', (s) => s.put(data, prefixOf(projectId, serviceId) + path));
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    async read(projectId, serviceId, path) {
+    replace: (key, files) => rewrite(key, files),
+    remove: (key) => rewrite(key),
+    async read(key, path) {
       const store = await open();
       if (!store) return undefined;
       try {
-        return (await store.run<Uint8Array | undefined>('readonly', (s) => s.get(prefixOf(projectId, serviceId) + path))) ?? undefined;
+        const paths = (await store.run<string[] | undefined>('readonly', (s) => s.get(manifestKey(key)))) ?? [];
+        if (!paths.includes(path)) return undefined;
+        return (await store.run<Uint8Array | undefined>('readonly', (s) => s.get(fileKey(key, path)))) ?? undefined;
       } catch {
         return undefined;
       }
     },
-    async list(projectId, serviceId) {
+    async list(key) {
       const store = await open();
       if (!store) return [];
-      const prefix = prefixOf(projectId, serviceId);
       try {
-        const keys = await store.run('readonly', (s) => s.getAllKeys(IDBKeyRange.bound(prefix, `${prefix}￿`)));
-        return keys.map((key) => String(key).slice(prefix.length)).sort();
+        return [...((await store.run<string[] | undefined>('readonly', (s) => s.get(manifestKey(key)))) ?? [])];
       } catch {
         return [];
       }
     },
   };
-}
-
-/** Every file under the artifact directory in `FS`, as [relative path, bytes]. */
-export function artifactFiles(FS: EmscriptenFs, dir = TRAINING_ARTIFACT_DIR): Array<[string, Uint8Array]> {
-  if (!FS.analyzePath(dir).exists) return [];
-  const files: Array<[string, Uint8Array]> = [];
-  const walk = (path: string, relative: string) => {
-    for (const name of FS.readdir(path)) {
-      if (name === '.' || name === '..') continue;
-      const full = `${path}/${name}`;
-      const rel = relative ? `${relative}/${name}` : name;
-      if (FS.isDir(FS.stat(full).mode)) walk(full, rel);
-      else files.push([rel, FS.readFile(full)]);
-    }
-  };
-  walk(dir, '');
-  return files;
 }

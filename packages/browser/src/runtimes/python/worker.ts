@@ -13,14 +13,14 @@ import { loadPyodideRuntime } from './pyodideLoader.js';
 import { createPythonWorkerProcess } from './pythonWorkerProcess.js';
 
 interface WorkerScope {
-  postMessage(message: unknown): void;
+  postMessage(message: unknown, transfer?: Transferable[]): void;
   addEventListener(type: 'message', listener: (event: { data: HostToWorker }) => void): void;
 }
 
 const scope = globalThis as unknown as WorkerScope;
 
 const process = createPythonWorkerProcess({
-  post: (message) => scope.postMessage(message),
+  post: (message, transfer) => scope.postMessage(message, transfer),
   loadPyodide: (options) => loadPyodideRuntime(options),
 });
 
