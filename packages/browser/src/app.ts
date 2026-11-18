@@ -23,5 +23,7 @@ export type { DatabaseOwnership, LockManagerLike } from './database/databaseLead
 export { DEFAULT_PGLITE_URL, PGLITE_VERSION } from './database/pgliteLoader.js';
 // The Python runtime: the `python` provider, its command/requirements rules, the socket seam.
 export * from './runtimes/python/index.js';
+// The PHP runtime: the `php` provider, `php -S`, Composer, PHP sockets and the runtime's Postgres PDO.
+export * from './runtimes/php/index.js';
 export type { ProcessKindPolicy, PythonExtensionRef, WorkerKind } from './node/index.js';
 export * from '@seanhogg/builderforce-webcontainers-core/app';

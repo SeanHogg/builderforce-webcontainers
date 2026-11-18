@@ -371,3 +371,92 @@ const app = startApplicationRuntime(
   every extension `moduleUrl` must then be absolute URLs served with CORS
   headers that allow the preview origin (the Worker fetches and imports them
   from there; relative URLs would resolve against the preview origin).
+
+### PHP
+
+PHP commands run in a PHP process Worker — PHP 8.3 (8.1–8.4 with
+`php.phpVersion`) on WebAssembly from
+[php-wasm](https://github.com/WordPress/wordpress-playground) `3.1.62`,
+loaded from jsDelivr when a process starts, or from `php.baseUrl` — beside the
+Node and Python processes, on the same files and ports. `runtime.run('php',
+['app.php'])`, a shell's `php …`, Node's `spawn('php')` and a script whose
+shebang names PHP (`./artisan`) all work. A `php` service uses
+`createPhpProvider(runtime)`:
+
+```ts
+import { createPgliteProvider, createPhpProvider, startApplicationRuntime } from '@seanhogg/builderforce-webcontainers/app';
+
+await runtime.run('composer', ['install', '--no-dev'], { cwd: '/api' }).wait();
+const app = startApplicationRuntime(
+  {
+    projectId,
+    services: [
+      { id: 'db', type: 'database', runtime: 'pglite', port: 5432, readiness: { kind: 'query' },
+        database: { engine: 'postgres', provider: 'pglite', persistent: true } },
+      { id: 'api', type: 'application', runtime: 'php', root: '/api', command: 'php',
+        args: ['-S', '0.0.0.0:8000', '-t', 'public', 'public/index.php'], port: 8000, dependsOn: ['db'],
+        readiness: { kind: 'http', path: '/health' } },
+    ],
+  },
+  { providers: [createPhpProvider(runtime, { fs: runtime.fs }), createPgliteProvider(runtime)] },
+);
+```
+
+- **Licence.** php-wasm is GPL-2.0-or-later. This package never bundles it:
+  the PHP Worker imports it at run time, by URL, from jsDelivr or the host's
+  mirror (`php.baseUrl`, laid out like jsDelivr's npm CDN:
+  `<base>@php-wasm/universal@3.1.62/+esm` and
+  `<base>@php-wasm/web-8-3@3.1.62/jspi/php_8_3.js` with its `.wasm` beside it).
+- **Commands.** PHP's own CLI runs the arguments (`php script.php …`,
+  `php -r code`, `php -v`), with its real exit codes. `php -S host:port [-t
+  docroot] [-d name=value] [router.php]` is served request-driven — no socket
+  is bound; each request to the virtual port runs through php-wasm's request
+  runner with `PHP_SAPI === 'cli-server'`, CGI `$_SERVER`, `$_GET`, `$_POST`,
+  `$_COOKIE`, `php://input`, every `Set-Cookie` kept, and a streamed body.
+  Routing is the built-in server's: a router's `return false` serves the file
+  as is; `.php` files run, others are sent by MIME type; `PATH_INFO`;
+  directory indexes; a path without an extension falls back to the nearest
+  `index.php` (front controllers such as Slim's `public/index.php`).
+  Interactive PHP (`php -a`, or no script) is declined with a reason.
+- **Postgres.** php-wasm's images have no `pgsql`/`pdo_pgsql` extension (and
+  no libpq to build one), so `new PDO('pgsql:…')` fails with "could not find
+  driver". Construct `new \Bfwc\Pgsql\PDO('pgsql:host=localhost;port=5432;dbname=app',
+  $user, $password)` instead — loaded in every PHP process without a
+  `require`. It *is* a `\PDO` (its statements `\PDOStatement`s), so code typed
+  against `PDO` takes it: `prepare`/`execute` with `?` and `:name`,
+  `bindValue`/`bindParam`, `query`, `exec` (several statements), transactions,
+  `lastInsertId`, the usual fetch modes, SQLSTATE exceptions, results typed as
+  pdo_pgsql types them. It speaks the Postgres wire protocol over PHP's
+  sockets to the PGlite gateway (trust, password and MD5 authentication).
+- **Composer.** `composer install | update | require | dump-autoload` (and
+  `php composer.phar …`) are done by the runtime, not composer.phar (whose
+  network php-wasm cannot give it): versions are resolved from Packagist's
+  package API (`https://packagist.org/packages/<name>.json`, which answers
+  browsers) or `php.composer.repositoryUrl` (a `{name}` template; Composer v2
+  `p2` answers are read too), dists are fetched as zips — through
+  `php.composer.distProxy` (a URL prefix) when set, else directly, falling back
+  for GitHub-hosted packages to jsDelivr's GitHub mirror at the same commit
+  (GitHub's zipballs do not answer browsers) — and `vendor/`, the autoloader
+  (PSR-4, PSR-0, class maps, `files`, `Composer\InstalledVersions`) and
+  `composer.lock` are written into the project. A lock installs exactly what
+  it locks. Platform requirements are checked against the running PHP: a
+  package needing an extension the image lacks (`ext-pgsql`, `ext-redis` …)
+  is declined by name, and `createPhpProvider` declines such a service up
+  front. Composer scripts and plugins do not run (it says so).
+- **Sockets.** `stream_socket_client`/`fsockopen` reach localhost ports in any
+  process through the runtime's virtual TCP. As with php-wasm's own
+  networking, a connect returns at once: a port nothing listens on shows as
+  end of stream on the first read.
+- **Files.** The project is mounted at `/project` in PHP (`node_modules` and
+  `.git` are left out), and changes flow both ways, as for Python.
+- **Limits.** Standard input is not forwarded (PHP reads end of file); no
+  WebSocket or raw-TCP servers in PHP; no `proc_open`; php-wasm is 32-bit
+  (`php-64bit` is declined).
+- **Relay mode and CSP.** PHP Workers run on the preview origin like Node's:
+  serve `dist/php-worker.js` (`phpWorkerSource` in `./assets`) as
+  `<scope>/php-worker.js` beside `process-worker.js`. The preview origin's
+  CSP must let the Worker import and fetch from the php-wasm base
+  (`https://cdn.jsdelivr.net` by default) and compile WebAssembly
+  (`'wasm-unsafe-eval'`), and — for `composer` — fetch from `packagist.org`,
+  `data.jsdelivr.com` and `cdn.jsdelivr.net` (or the hosts of
+  `repositoryUrl`/`distProxy`). `php.baseUrl` must be absolute and CORS-served.

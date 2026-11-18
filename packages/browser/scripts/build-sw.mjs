@@ -5,9 +5,10 @@
 //   dist/check/worker.js  the type-check worker;
 //   dist/node/worker.js   the process worker (Node runtime, npm, shell);
 //   dist/runtimes/python/worker.js  the Python process worker (Pyodide);
+//   dist/runtimes/php/worker.js  the PHP process worker (php-wasm fetched at run time, never bundled);
 //   dist/inference/worker.bundle.js  the local inference worker (Phase 1).
 // dist/assets.js exports what a preview origin serves (the service worker, the
-// relay page, the Node and Python process workers) as strings, so a server (a
+// relay page, the Node, Python and PHP process workers) as strings, so a server (a
 // Worker, an Express app) can serve them straight from the installed package
 // without copying files.
 import { build } from 'esbuild';
@@ -55,6 +56,15 @@ const pythonWorker = await bundle('src/runtimes/python/worker.ts');
 await writeFile('dist/runtimes/python/worker.js', pythonWorker);
 await writeFile('dist/python-worker.js', pythonWorker);
 
+// The PHP process worker: one per PHP process (php, php -S, composer). php-wasm
+// (GPL-2.0-or-later) is NOT bundled: the worker imports it from the CDN (or the
+// host's mirror) at start, by URL. The host finds it at dist/runtimes/php/worker.js;
+// the relay starts it from `<scope>/php-worker.js`, served beside relay.html.
+await mkdir('dist/runtimes/php', { recursive: true });
+const phpWorker = await bundle('src/runtimes/php/worker.ts');
+await writeFile('dist/runtimes/php/worker.js', phpWorker);
+await writeFile('dist/php-worker.js', phpWorker);
+
 // The local inference worker (Phase 1): self-contained so it can run on a
 // dedicated worker thread. It gets its OWN path — dist/inference/worker.js is
 // tsc's ES module (startInferenceWorkerHost / runInferenceWorker, re-exported
@@ -74,7 +84,9 @@ await writeFile(
     `/** The process worker — serve as \`<scope>/process-worker.js\`, text/javascript, beside relay.html. */\n` +
     `export const processWorkerSource = ${JSON.stringify(processWorker)};\n` +
     `/** The Python process worker — serve as \`<scope>/python-worker.js\`, text/javascript, beside relay.html. */\n` +
-    `export const pythonWorkerSource = ${JSON.stringify(pythonWorker)};\n`,
+    `export const pythonWorkerSource = ${JSON.stringify(pythonWorker)};\n` +
+    `/** The PHP process worker — serve as \`<scope>/php-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export const phpWorkerSource = ${JSON.stringify(phpWorker)};\n`,
 );
 await writeFile(
   'dist/assets.d.ts',
@@ -85,5 +97,7 @@ await writeFile(
     `/** The process worker — serve as \`<scope>/process-worker.js\`, text/javascript, beside relay.html. */\n` +
     `export declare const processWorkerSource: string;\n` +
     `/** The Python process worker — serve as \`<scope>/python-worker.js\`, text/javascript, beside relay.html. */\n` +
-    `export declare const pythonWorkerSource: string;\n`,
+    `export declare const pythonWorkerSource: string;\n` +
+    `/** The PHP process worker — serve as \`<scope>/php-worker.js\`, text/javascript, beside relay.html. */\n` +
+    `export declare const phpWorkerSource: string;\n`,
 );

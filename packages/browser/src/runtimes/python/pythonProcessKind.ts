@@ -6,9 +6,9 @@
  * extensions, the session's `pip install`s); and `python-installed` reports are
  * accepted from Python processes only, and only when well formed (pipRecord.ts).
  */
-import { findExecutable, shebangCommand } from '@seanhogg/builderforce-webcontainers-core';
 import type { ProcessKindPolicy } from '../../node/processKinds.js';
 import type { PythonExtensionRef } from '../../node/protocol.js';
+import { shebangRoute } from '../shebangRoute.js';
 import { createPipRecord, validPipInstall, type PipRecord } from './pipRecord.js';
 import { PYTHON_COMMAND_PATTERN, isPythonCommand } from './pythonCommand.js';
 
@@ -39,10 +39,8 @@ export function createPythonProcessKind(options: PythonHostOptions = {}): Python
     route(command, args, { fs, cwd, env }) {
       if (isPythonCommand(command)) return { kind: 'python', command, args };
       // A script run by path: its shebang may name Python (`#!/usr/bin/env python3`).
-      const file = command.includes('/') ? findExecutable(fs, command, cwd, env) : undefined;
-      const interpreter = file && shebangCommand(fs, file);
-      if (file && interpreter && isPythonCommand(interpreter)) return { kind: 'python', command: interpreter, args: [file, ...args] };
-      return { kind: 'node', command, args };
+      const script = shebangRoute(command, args, { fs, cwd, env }, isPythonCommand);
+      return script ? { kind: 'python', ...script } : { kind: 'node', command, args };
     },
     startOptions(kind) {
       if (kind !== 'python') return {};

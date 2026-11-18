@@ -17,7 +17,7 @@
  */
 import type { ByteChannel } from '@seanhogg/builderforce-webcontainers-core';
 import type { HostToWorker, WorkerToHost } from '../../node/protocol.js';
-import { createWorkerConnections, isWorkerConnectionMessage } from '../../node/workerConnections.js';
+import { createWorkerDialer } from '../../node/workerConnections.js';
 import type { VirtualTcpTransport } from './virtualSocket.js';
 
 /** Bytes a connection may have in flight (sent, not yet read by the peer) before a send waits. */
@@ -113,13 +113,6 @@ export function createChannelTransport(dial: (port: number) => Promise<ByteChann
  * (returns false for messages that are not about dialled connections).
  */
 export function createDialTransport(post: (message: WorkerToHost) => void): { transport: VirtualTcpTransport; receive(message: HostToWorker): boolean } {
-  const connections = createWorkerConnections(post);
-  return {
-    transport: createChannelTransport((port) => connections.dial(port)),
-    receive(message) {
-      if (!isWorkerConnectionMessage(message) || !message.type.startsWith('dial')) return false;
-      connections.receive(message);
-      return true;
-    },
-  };
+  const dialer = createWorkerDialer(post);
+  return { transport: createChannelTransport((port) => dialer.dial(port)), receive: (message) => dialer.receive(message) };
 }

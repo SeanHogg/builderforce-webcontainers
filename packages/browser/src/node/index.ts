@@ -25,10 +25,12 @@ export interface NodeRuntimeOptions {
   workerUrl?: string | URL;
   /** Where this package's `dist/runtimes/python/worker.js` (the Python process Worker) is served. Default: resolved beside this module. */
   pythonWorkerUrl?: string | URL;
+  /** Where this package's `dist/runtimes/php/worker.js` (the PHP process Worker) is served. Default: resolved beside this module. */
+  phpWorkerUrl?: string | URL;
   /**
    * Build each process Worker yourself (CSP, a test double, the relay's
    * `PreviewTransport.createWorker`). It is told the Worker kind the command
-   * needs: `python` for Python commands, else `node`. Wins over the URLs.
+   * needs: `python` for Python commands, `php` for PHP ones, else `node`. Wins over the URLs.
    */
   createWorker?: (kind: WorkerKind) => WorkerLike;
   /** Build each database Worker yourself. It must run on the host origin, never the preview origin. Wins over `workerUrl`. */
@@ -51,12 +53,16 @@ const bundledWorker = (options: NodeRuntimeOptions, name: string) => () =>
 const bundledPythonWorker = (options: NodeRuntimeOptions) => () =>
   new Worker(options.pythonWorkerUrl ?? new URL('../runtimes/python/worker.js', import.meta.url), { name: 'bfwc-python' }) as unknown as WorkerLike;
 
+const bundledPhpWorker = (options: NodeRuntimeOptions) => () =>
+  new Worker(options.phpWorkerUrl ?? new URL('../runtimes/php/worker.js', import.meta.url), { name: 'bfwc-php' }) as unknown as WorkerLike;
+
 /** How this runtime starts a process Worker of a kind: the option (in relay mode, the relay's, on the preview origin), else the bundled script. */
 export function workerFactory(options: NodeRuntimeOptions = {}): (kind: WorkerKind) => WorkerLike {
   if (options.createWorker) return options.createWorker;
   const node = bundledWorker(options, 'bfwc-process');
   const python = bundledPythonWorker(options);
-  return (kind) => (kind === 'python' ? python() : node());
+  const php = bundledPhpWorker(options);
+  return (kind) => (kind === 'python' ? python() : kind === 'php' ? php() : node());
 }
 
 /**

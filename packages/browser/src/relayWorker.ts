@@ -64,7 +64,12 @@ export const RELAY_PROCESS_WORKER = 'process-worker.js';
 /** The Python process worker's file name beside `relay.html` on the preview origin. */
 export const RELAY_PYTHON_WORKER = 'python-worker.js';
 
+/** The PHP process worker's file name beside `relay.html` on the preview origin. */
+export const RELAY_PHP_WORKER = 'php-worker.js';
+
 /** The script the relay starts for a Worker kind (anything unknown is a Node process Worker). */
 export function relayWorkerScript(kind: unknown): { file: string; name: string } {
-  return kind === 'python' ? { file: RELAY_PYTHON_WORKER, name: 'bfwc-python' } : { file: RELAY_PROCESS_WORKER, name: 'bfwc-process' };
+  if (kind === 'python') return { file: RELAY_PYTHON_WORKER, name: 'bfwc-python' };
+  if (kind === 'php') return { file: RELAY_PHP_WORKER, name: 'bfwc-php' };
+  return { file: RELAY_PROCESS_WORKER, name: 'bfwc-process' };
 }

@@ -27,8 +27,8 @@ import type { HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo, VfsDelt
 /** One file-system change, either way (the core journal's op). */
 export type FsOp = VfsOp;
 
-/** Which process Worker runs a command: the Node runtime's, or the Python runtime's (Pyodide). */
-export type WorkerKind = 'node' | 'python';
+/** Which process Worker runs a command: the Node runtime's, the Python runtime's (Pyodide), or the PHP runtime's (php-wasm). */
+export type WorkerKind = 'node' | 'python' | 'php';
 
 /** A host-provided Python extension: a module the Python Worker imports, whose export builds it (runtimes/python/pythonExtensions.ts). */
 export interface PythonExtensionRef {
@@ -53,6 +53,27 @@ export interface PythonStartOptions {
   extensions?: PythonExtensionRef[];
   /** This session's earlier `pip install`s, in order: each replayed with only its own indexes. */
   installs?: PipInstall[];
+}
+
+/** Where the PHP runtime's Composer installs come from (runtimes/php/composer/packagist.ts). */
+export interface ComposerSourceOptions {
+  /** Package metadata URL template with `{name}` (Packagist's package API, or a `p2` mirror). Default: Packagist's package API. */
+  repositoryUrl?: string;
+  /** A URL prefix dist zip URLs are appended to (encoded): a CORS proxy for GitHub's zipballs. Default: none (jsDelivr's GitHub mirror). */
+  distProxy?: string;
+}
+
+/**
+ * The host's instructions to a PHP process Worker. Like Python's, they travel
+ * in the start message, never the environment, so a program's env cannot
+ * redirect where php-wasm or Composer packages are loaded from.
+ */
+export interface PhpStartOptions {
+  /** Where php-wasm is served (a jsDelivr-style npm CDN base). Default: jsDelivr. */
+  baseUrl?: string;
+  /** PHP version (`8.1`–`8.4`). Default 8.3. */
+  phpVersion?: string;
+  composer?: ComposerSourceOptions;
 }
 
 export interface StartMessage {
@@ -83,6 +104,8 @@ export interface StartMessage {
   packageCache: boolean;
   /** Set for a Python process. */
   python?: PythonStartOptions;
+  /** Set for a PHP process. */
+  php?: PhpStartOptions;
   /**
    * Commands another Worker kind runs (a RegExp source over the command's base
    * name): a Node process spawns them through the page instead of resolving
@@ -173,6 +196,8 @@ export type WorkerToHost =
   | { type: 'dial'; connId: number; port: number }
   /** A Python process's `pip install` succeeded: record it for the processes started after it. */
   | ({ type: 'python-installed' } & PipInstall)
+  /** A PHP process read the running PHP's version and extensions (the page's `php` provider checks services against them). */
+  | { type: 'php-platform'; phpVersion: string; extensions: string[] }
   | ResponseMessage
   | SocketMessage
   | DialMessage

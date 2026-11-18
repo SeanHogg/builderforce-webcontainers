@@ -37,6 +37,7 @@ import { PREVIEW_ID, isPortPath, isWireCancel, isWireRequest, previewBase, type 
 import { createPortResponder, createProcessHost, databaseWorkerFactory, trackWorkers, type NodeRuntimeOptions, type ProcessInfo } from './node/index.js';
 import type { WorkerLike } from './node/processHost.js';
 import { createPythonProcessKind, type PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
+import { createPhpProcessKind, type PhpHostOptions } from './runtimes/php/phpProcessKind.js';
 import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from './previewMessages.js';
 import { listenToPreviewBridge } from './previewBridge.js';
 import { relayTransport, sameOriginTransport } from './transport.js';
@@ -105,6 +106,8 @@ export interface CommonRuntimeOptions {
   node?: NodeRuntimeOptions;
   /** Python processes (`python`, `pip`, `uvicorn` …): where Pyodide is served, host extensions. */
   python?: PythonHostOptions;
+  /** PHP processes (`php`, `php -S`, `composer`): where php-wasm is served, the PHP version, Composer's sources. */
+  php?: PhpHostOptions;
 }
 
 export interface RuntimeBuildOptions {
@@ -261,8 +264,9 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const previewUrl = new URL(base, transport.origin).href;
   // In relay mode processes run on the preview origin (the relay starts them), never the host's.
   const node = { ...options.node, createWorker: options.node?.createWorker ?? transport.createWorker?.bind(transport) };
-  // Python commands run in Python process Workers (Pyodide), beside the Node ones.
-  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, previewUrl, options: node, kinds: createPythonProcessKind(options.python) });
+  // Python commands run in Python process Workers (Pyodide), PHP commands in PHP ones (php-wasm), beside the Node ones.
+  const kinds = createPhpProcessKind(options.php, createPythonProcessKind(options.python));
+  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, previewUrl, options: node, kinds });
   // Databases never run where processes do in relay mode: their Workers start on this (host) origin.
   const databaseWorkers = trackWorkers(databaseWorkerFactory(options.node));
 

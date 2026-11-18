@@ -10,9 +10,10 @@
  * cold; one that failed, or fell further behind than the journal holds, is
  * dropped.
  *
- * Spares are Node Workers. A Python Worker is always cold: its cost is
- * Pyodide's boot (seconds, and an interpreter's worth of memory), which a
- * primed file system does not save, so a spare would only hold memory.
+ * Spares are Node Workers. A Python or PHP Worker is always cold: its cost is
+ * its interpreter's boot (Pyodide's, php-wasm's: seconds, and an interpreter's
+ * worth of memory), which a primed file system does not save, so a spare
+ * would only hold memory.
  */
 import type { VfsDelta, VfsSnapshot, VfsSnapshots } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerLike } from './processHost.js';
@@ -45,7 +46,8 @@ export class WorkerSupply {
   /** A Worker of `kind` for a new process, and what its `start` message carries for the file system. */
   take(kind: WorkerKind = 'node'): { worker: WorkerLike; snapshot: VfsSnapshot | VfsDelta } {
     if (this.disposed) throw new Error('The process host was disposed.');
-    if (kind === 'python') return { worker: this.createWorker('python'), snapshot: this.snapshots.snapshot() };
+    // Every other kind (Python, PHP) is always cold: a spare is a Node Worker.
+    if (kind !== 'node') return { worker: this.createWorker(kind), snapshot: this.snapshots.snapshot() };
     const taken = this.fromSpare() ?? this.cold();
     if (this.warm) this.scheduleRefill();
     return taken;

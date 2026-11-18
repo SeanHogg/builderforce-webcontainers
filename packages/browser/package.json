@@ -33,7 +33,9 @@
     "./relay.html": "./dist/relay.html",
     "./process-worker.js": "./dist/process-worker.js",
     "./python-worker.js": "./dist/python-worker.js",
-    "./runtimes/python/worker.js": "./dist/runtimes/python/worker.js"
+    "./runtimes/python/worker.js": "./dist/runtimes/python/worker.js",
+    "./php-worker.js": "./dist/php-worker.js",
+    "./runtimes/php/worker.js": "./dist/runtimes/php/worker.js"
   },
   "type": "module",
   "sideEffects": false,
@@ -86,6 +88,8 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.16",
+    "@php-wasm/node": "3.1.62",
+    "@php-wasm/universal": "3.1.62",
     "@vue/compiler-sfc": "^3.5.0",
     "drizzle-orm": "^0.45.4",
     "esbuild": "^0.24.0",

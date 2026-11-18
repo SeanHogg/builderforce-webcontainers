@@ -37,7 +37,7 @@ export interface PreviewTransport {
   send(base: string, update: PreviewUpdate): void;
   /**
    * Start a process worker of `kind` (default `node`; `python` for Python
-   * commands) on the preview origin. Only the relay has one to offer;
+   * commands, `php` for PHP commands) on the preview origin. Only the relay has one to offer;
    * same-origin mode runs processes on the host's origin, which is the trust it
    * already chose.
    */

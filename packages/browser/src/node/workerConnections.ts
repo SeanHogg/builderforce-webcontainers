@@ -36,6 +36,26 @@ export interface WorkerConnections {
   receive(message: ConnectionMessage): void;
 }
 
+/** Outbound connections only, for a Worker kind whose runtime dials but serves no raw connections (Python, PHP). */
+export interface WorkerDialer {
+  /** Dial `port` anywhere in the runtime: the client end, or undefined when nothing listens. */
+  dial(port: number): Promise<ByteChannel | undefined>;
+  /** Take the page's `dial-*` messages; false for any other message. */
+  receive(message: HostToWorker): boolean;
+}
+
+export function createWorkerDialer(post: (message: WorkerToHost) => void): WorkerDialer {
+  const connections = createWorkerConnections(post);
+  return {
+    dial: (port) => connections.dial(port),
+    receive(message) {
+      if (!isWorkerConnectionMessage(message) || !message.type.startsWith('dial')) return false;
+      connections.receive(message);
+      return true;
+    },
+  };
+}
+
 export function createWorkerConnections(post: (message: WorkerToHost) => void): WorkerConnections {
   /** Our ends of connections to this process's servers, by the page's id. */
   const inbound = new RelayedChannels('socket', post);
