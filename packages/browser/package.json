@@ -24,6 +24,10 @@
       "types": "./dist/app.d.ts",
       "import": "./dist/app.js"
     },
+    "./security": {
+      "types": "./dist/security.d.ts",
+      "import": "./dist/security.js"
+    },
     "./node/worker.js": "./dist/node/worker.js",
     "./assets": {
       "types": "./dist/assets.d.ts",

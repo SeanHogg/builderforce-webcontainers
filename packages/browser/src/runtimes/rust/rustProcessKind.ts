@@ -19,7 +19,7 @@ export function createRustProcessKind(next: ProcessKindPolicy = NODE_ONLY): Proc
     route(command, args, context): ProcessRoute {
       return isRustCommand(command) ? { kind: RUST_KIND, command, args } : next.route(command, args, context);
     },
-    startOptions: (kind) => (kind === RUST_KIND ? {} : next.startOptions(kind)),
-    receive: (kind, message) => kind !== RUST_KIND && next.receive(kind, message),
+    startOptions: (kind, context) => (kind === RUST_KIND ? {} : next.startOptions(kind, context)),
+    receive: (kind, message, context) => kind !== RUST_KIND && next.receive(kind, message, context),
   };
 }

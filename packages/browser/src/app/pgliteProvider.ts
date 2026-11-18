@@ -24,6 +24,7 @@ import type { ConnectionHandler, SecurityContext } from '@seanhogg/builderforce-
 import { DatabaseCredentials, databaseAuthenticator, type RandomSource } from '../database/databaseCredentials.js';
 import type { WorkerLike } from '../node/processHost.js';
 import { startDatabaseHost, type DatabaseHost } from '../database/databaseHost.js';
+import type { ShieldTelemetry } from '../security/shieldTelemetry.js';
 import type { LockManagerLike } from '../database/databaseLeadership.js';
 import type { ChannelFactory } from '../database/databaseTabs.js';
 import { signalExitCode } from '@seanhogg/builderforce-webcontainers-core';
@@ -34,6 +35,8 @@ export interface DatabaseServiceHost {
   listenTcp(port: number, accept: ConnectionHandler, owner?: SecurityContext): { port: number; close(): void };
   /** A database Worker on the host origin — never the preview origin. */
   createDatabaseWorker(): WorkerLike;
+  /** The runtime's Security Shield telemetry: refused connections are reported to it. */
+  security?(): ShieldTelemetry;
 }
 
 export interface PgliteProviderOptions {
@@ -103,6 +106,7 @@ export function createPgliteProvider(host: DatabaseServiceHost, options: PgliteP
     async start(service, context) {
       const projectId = context.env.BUILDERFORCE_PROJECT_ID ?? 'project';
       const output = lineStream();
+      const telemetry = host.security?.();
       let database: DatabaseHost;
       try {
         database = await startDatabaseHost({
@@ -110,7 +114,10 @@ export function createPgliteProvider(host: DatabaseServiceHost, options: PgliteP
           listen: (port, accept, owner) => host.listenTcp(port, accept, owner),
           owner: context.security,
           authenticate: databaseAuthenticator(credentials, service),
-          onRefused: (reason) => output.write(`Refused a connection (${reason}).`),
+          onRefused: (reason, caller, detail) => {
+            output.write(`Refused a connection (${reason}).`);
+            telemetry?.report(reason, caller, detail); // as the page-side caller; fails open
+          },
           port: service.port!,
           dataDir: service.database!.persistent ? pgliteDataDir(projectId, service.id) : 'memory://',
           relaxedDurability: options.relaxedDurability,

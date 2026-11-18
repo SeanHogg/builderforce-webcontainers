@@ -24,6 +24,7 @@ import {
 } from '@seanhogg/builderforce-webcontainers-core';
 import { FsScopes, type FsScopeOptions, type FsView } from './fsScope.js';
 import { SpawnRefusedError, processQuota, type ProcessQuotaPolicy } from './processQuota.js';
+import type { ShieldTelemetry } from '../security/shieldTelemetry.js';
 
 /** A page-side start's options: a process's own options, plus who it is. */
 export interface SpawnOptions extends ProcessOptions {
@@ -43,6 +44,14 @@ export interface ProcessShieldOptions {
   scope?: Omit<FsScopeOptions, 'workspaceRoot'>;
   /** Every refusal (a spawn over quota, a write outside an application's view). Telemetry, failing open: enforcement never depends on it. */
   onDecision?(context: SecurityContext, decision: ShieldDecision): void;
+  /**
+   * The runtime's Security Shield telemetry (`createShieldTelemetry`, built once
+   * by the host): port-registry refusals, quota and file-system refusals and
+   * ingress limits are reported to it as the page-side identity. Failing open.
+   */
+  telemetry?: ShieldTelemetry;
+  /** Request-body limit on loopback and host-API HTTP. Default the service worker's (32 MiB). */
+  maxBodyBytes?: number;
 }
 
 /** What the page knows of a process: who it is, how deep, and what of the file system it sees. */
@@ -84,7 +93,7 @@ export class ProcessIdentities {
     const depth = inherited ? inherited.depth + 1 : 0;
     const decision = this.quota.check({ context, live: this.live.get(context.applicationId) ?? 0, depth });
     if (!decision.allow) {
-      this.report(context, decision);
+      this.report(context, decision, { live: this.live.get(context.applicationId) ?? 0, depth, parentPid: 'parent' in origin ? origin.parent : null });
       throw new SpawnRefusedError(decision.reason);
     }
     const view = inherited ? inherited.view : context.applicationId === WORKSPACE_APPLICATION ? undefined : this.scopes.view(context.applicationId, cwd);
@@ -119,12 +128,13 @@ export class ProcessIdentities {
     return context !== undefined && context.applicationId === applicationId && (serviceId === undefined || context.serviceId === serviceId);
   }
 
-  /** Tell `onDecision`; a throwing listener changes nothing. */
-  report(context: SecurityContext, decision: ShieldDecision): void {
+  /** Tell `onDecision` and the shield's telemetry; a throwing listener changes nothing. */
+  report(context: SecurityContext, decision: ShieldDecision, evidence?: Readonly<Record<string, unknown>>): void {
     try {
       this.options.onDecision?.(context, decision);
     } catch {
       // Telemetry fails open.
     }
+    this.options.telemetry?.decision(context, decision, evidence); // fails open itself
   }
 }

@@ -70,6 +70,12 @@ export class ViewSupplies {
     return entry.supply;
   }
 
+  /** The mirror of what `view` sees: what a process of that view is routed on (its shebangs, scripts), never the page's whole file system. */
+  mirrorFor(view: FsView): VirtualFileSystem {
+    this.supplyFor(view);
+    return this.entries.get(view)!.mirror;
+  }
+
   /** Application `applicationId` ended: drop its views' mirrors, snapshots and spares. */
   release(applicationId: string): void {
     for (const [view, entry] of this.entries) {

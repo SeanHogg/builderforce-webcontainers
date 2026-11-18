@@ -7,7 +7,7 @@
  * runtimes/dotnet/dotnetProcessKind.ts — the .NET policy chains to the PHP one,
  * the PHP policy to the Python one); with no policy every process is Node.
  */
-import type { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
+import type { SecurityContext, VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-core';
 import type { StartMessage, WorkerKind } from './protocol.js';
 
 export interface ProcessRoute {
@@ -19,10 +19,10 @@ export interface ProcessRoute {
 export interface ProcessKindPolicy {
   /** The Worker kind that runs `command` (a script's shebang may decide), and the command line it is given. */
   route(command: string, args: string[], context: { fs: VirtualFileSystem; cwd: string; env: Record<string, string> }): ProcessRoute;
-  /** What a `kind` process's start message carries beyond the common fields. */
-  startOptions(kind: WorkerKind): Pick<StartMessage, 'python' | 'php' | 'dotnet'>;
-  /** A message the host does not handle itself, from a process of `kind`; true when taken. */
-  receive(kind: WorkerKind, message: unknown): boolean;
+  /** What a `kind` process's start message carries beyond the common fields; `context` is who the process is (the page-side record). */
+  startOptions(kind: WorkerKind, context: SecurityContext): Pick<StartMessage, 'python' | 'php' | 'dotnet'>;
+  /** A message the host does not handle itself, from a process of `kind`; true when taken. `context` is the sender, from the page-side record of its Worker — never from the message. */
+  receive(kind: WorkerKind, message: unknown, context: SecurityContext): boolean;
   /** Commands Node processes must hand to the page rather than resolve (a RegExp source over the base name). */
   readonly foreignCommands?: string;
 }

@@ -5,6 +5,7 @@
  * Readers are bounded: one that falls behind loses the overflow, and is told.
  */
 import { messageOf } from './asyncHelpers.js';
+import { ringBuffer } from '../shared/ringBuffer.js';
 import type { ServiceLogEntry } from './types.js';
 
 export interface ServiceLogs {
@@ -16,24 +17,6 @@ export interface ServiceLogs {
   stream(serviceId?: string): ReadableStream<ServiceLogEntry>;
   /** End every reader's stream; later readers get the history, then end. */
   close(): void;
-}
-
-/** A fixed-size history: the newest `capacity` entries, oldest first. */
-function ringBuffer<T>(capacity: number) {
-  const items: T[] = [];
-  let start = 0;
-  return {
-    push(item: T) {
-      if (items.length < capacity) items.push(item);
-      else {
-        items[start] = item;
-        start = (start + 1) % capacity;
-      }
-    },
-    *[Symbol.iterator]() {
-      for (let i = 0; i < items.length; i++) yield items[(start + i) % items.length]!;
-    },
-  };
 }
 
 interface Reader {

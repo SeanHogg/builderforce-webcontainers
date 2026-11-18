@@ -39,8 +39,12 @@ export interface DatabaseHostOptions {
    * service graph (`databaseAuthenticator`). Required: there is no trust mode.
    */
   authenticate: ConnectionAuthenticator;
-  /** A connection was refused (telemetry; never changes the outcome). */
-  onRefused?(reason: ShieldReasonCode, caller: SecurityContext | undefined): void;
+  /**
+   * A connection was refused (telemetry; never changes the outcome). `caller` is
+   * who the port registry says dialled; `detail` is what the client asked for
+   * (the database name, and its self-declared `application_name` — a claim, never an identity).
+   */
+  onRefused?(reason: ShieldReasonCode, caller: SecurityContext | undefined, detail?: { database?: string; claimedApplicationName?: string }): void;
   /** `idb://<key>` (persistent, shared by the origin's tabs) or `memory://`. */
   dataDir: string;
   /** Default `navigator.locks`. Required for a persistent database. */
@@ -105,10 +109,10 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
       socket,
       caller,
       authenticate: options.authenticate,
-      refused: (reason) => {
+      refused: (reason, request) => {
         authenticating.delete(pending);
         try {
-          options.onRefused?.(reason, caller);
+          options.onRefused?.(reason, caller, { database: request?.database, claimedApplicationName: request?.applicationName });
         } catch {
           // telemetry fails open
         }
