@@ -5,20 +5,30 @@
  * the two. See `relayTransport`.
  *
  * Whoever may frame this page may drive it, so the server that hosts relay.html
- * must restrict that with `Content-Security-Policy: frame-ancestors <host origins>`.
+ * must send `Content-Security-Policy: frame-ancestors <host origin>` (the host
+ * only) with `connect-src 'none'` and a restrictive `default-src` (README ›
+ * Preview origin headers): the relay itself never fetches, so a preview that
+ * scripts it gains no egress. It refuses to run unframed (a top-level or opened
+ * window), and the worker accepts attaches only from it as a nested frame.
+ *
+ * The worker's configuration (egress, report endpoint, policy id) comes from
+ * this page's own URL, which the host set, into the worker URL it registers
+ * (`relayConfig`) — never from a message.
  */
-import { ATTACH, REATTACH, RELAY_ATTACH, RELAY_READY, RELAY_REATTACH, RELAY_SPAWN, RELAY_UPDATE } from './protocol.js';
+import { REATTACH, RELAY_ATTACH, RELAY_READY, RELAY_REATTACH, RELAY_SPAWN, RELAY_UPDATE, attachMessageOf } from './protocol.js';
 import { bridgeWorker, relayWorkerUrl } from './relayWorker.js';
+import { relayServiceWorkerUrl } from './relayConfig.js';
 import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 import { broadcastUpdate, waitForActive } from './worker.js';
 
 const host = window.parent;
 
 async function start(): Promise<void> {
+  if (host === window) throw new Error('The preview relay only runs framed by its host page.');
   const container = navigator.serviceWorker;
   if (!container) throw new Error('Service workers are unavailable on the preview origin.');
   // `mode=relay` tells the worker to accept ATTACH only from this exact relay page (not any same-origin page).
-  const registration = await container.register(new URL('./sw.js?mode=relay', location.href).href, { scope: './' });
+  const registration = await container.register(relayServiceWorkerUrl(location.href), { scope: './' });
   await waitForActive(registration);
 
   container.addEventListener('message', (event) => {
@@ -27,10 +37,10 @@ async function start(): Promise<void> {
 
   addEventListener('message', (event) => {
     if (event.source !== host) return;
-    const data = event.data as { type?: string; id?: unknown; base?: unknown; update?: PreviewUpdate; nonce?: unknown; previous?: unknown; egress?: unknown } | null;
+    const data = event.data as { type?: string; id?: unknown; base?: unknown; update?: PreviewUpdate; nonce?: unknown; previous?: unknown } | null;
     if (data?.type === RELAY_ATTACH && typeof data.id === 'string' && event.ports[0]) {
-      // The host's attach nonce goes on as it came; the worker judges it (a malformed one is refused there).
-      registration.active?.postMessage({ type: ATTACH, id: data.id, nonce: data.nonce, previous: data.previous, egress: data.egress }, [event.ports[0]]);
+      // The host's attach nonce goes on as it came; the worker judges it (a malformed one is refused there). Nothing else does.
+      registration.active?.postMessage(attachMessageOf({ id: data.id, nonce: data.nonce, previous: data.previous }), [event.ports[0]]);
     } else if (data?.type === RELAY_UPDATE && typeof data.base === 'string') {
       broadcastUpdate(data.base, data.update ?? { type: 'reload' });
     } else if (data?.type === RELAY_SPAWN && event.ports[0]) {

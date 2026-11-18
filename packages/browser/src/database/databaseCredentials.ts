@@ -10,7 +10,7 @@
  * `databaseAuthenticator` turns the logins into the gateway's admission rule.
  */
 import { databaseName, mayConnectToDatabase, type DatabaseCredential, type ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
-import { ALLOW, deny, PLATFORM_APPLICATION, WORKSPACE_APPLICATION, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
+import { ALLOW, deny, isApplicationId, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import type { ConnectionAuthenticator } from './pgAuthentication.js';
 
 interface Login extends DatabaseCredential {
@@ -75,7 +75,7 @@ export class DatabaseCredentials {
   }
 }
 
-const isHostSide = (caller: SecurityContext) => caller.applicationId === PLATFORM_APPLICATION || caller.applicationId === WORKSPACE_APPLICATION;
+const isHostSide = (caller: SecurityContext) => !isApplicationId(caller.applicationId);
 
 /**
  * The gateway's admission rule for one database service, decided on the page

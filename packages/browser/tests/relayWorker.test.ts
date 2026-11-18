@@ -48,6 +48,28 @@ describe('process workers bridged through the relay', () => {
     host.terminate();
   });
 
+  it('fails the process, and reports it, when a message cannot cross between the origins (messageerror) on any leg — never silently', async () => {
+    for (const leg of ['worker to relay', 'host to relay', 'relay to host'] as const) {
+      const channel = new MessageChannel();
+      const { worker } = fakeWorker();
+      bridgeWorker(channel.port2, worker as unknown as Worker);
+      const undeliverable: string[] = [];
+      const host = workerOverPort(channel.port1, (message) => undeliverable.push(message));
+      const errors: Array<string | undefined> = [];
+      host.onerror = (event) => errors.push(event.message);
+      const event = new MessageEvent('messageerror');
+      if (leg === 'worker to relay') (worker as unknown as { onmessageerror: (event: MessageEvent) => void }).onmessageerror(event);
+      else if (leg === 'host to relay') channel.port2.onmessageerror!(event);
+      else channel.port1.onmessageerror!(event);
+      await settle();
+      expect(errors, leg).toHaveLength(1);
+      expect(errors[0], leg).toMatch(/could not be delivered across origins \(messageerror/);
+      expect(undeliverable, leg).toEqual(errors);
+      if (leg !== 'relay to host') expect(worker.terminate, leg).toHaveBeenCalled();
+      host.terminate();
+    }
+  });
+
   it('terminates the real worker when the host does', async () => {
     const channel = new MessageChannel();
     const { worker } = fakeWorker();

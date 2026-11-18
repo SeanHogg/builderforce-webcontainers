@@ -28,6 +28,8 @@ import {
   type WebSocketConnection,
 } from '@seanhogg/builderforce-webcontainers-core';
 import { previewPageOf, type PreviewOriginMatch } from './previewMessages.js';
+import { DEFAULT_MAX_BODY_BYTES } from './swBody.js';
+import type { ShieldReporter } from './security/shieldTelemetry.js';
 
 export interface PreviewBridgeOptions {
   /** Open an upgraded connection to the server on `port` (`ProcessHost.upgrade`). */
@@ -42,6 +44,10 @@ export interface PreviewBridgeOptions {
    * per-application preview origins only the owner's origin may. Default: any.
    */
   admitPort?(origin: string, port: number): boolean;
+  /** The largest WebSocket message a page may send (default `DEFAULT_MAX_BODY_BYTES`, the HTTP body limit); larger closes the socket with 1009. */
+  maxMessageBytes?: number;
+  /** The runtime's Security Shield telemetry: an oversized message is reported to it (`ingress.body_too_large`). */
+  telemetry?: ShieldReporter;
 }
 
 /** The slice of MessagePort the bridge uses. */
@@ -59,6 +65,15 @@ export interface PreviewBridge {
 
 /** Pages kept in sync per server port; older ones (navigated away, never said so) are dropped past this. */
 const COOKIE_PAGES_PER_PORT = 50;
+
+const encoder = new TextEncoder();
+
+/** A WebSocket message's size in bytes, as far as `limit` needs it: a string short enough to be under `limit` whatever its UTF-8 is not encoded. */
+function messageBytes(data: unknown, limit: number): number {
+  if (data instanceof ArrayBuffer) return data.byteLength;
+  if (typeof data !== 'string') return 0;
+  return data.length * 3 <= limit ? data.length : encoder.encode(data).byteLength;
+}
 
 interface BridgeMessage {
   type?: unknown;
@@ -78,6 +93,7 @@ export function listenToPreviewBridge(
   const cookiePages = new Map<number, Array<{ port: BridgePort; path: string }>>();
 
   const admits = (from: string, port: number) => !options.admitPort || options.admitPort(from, port);
+  const maxMessageBytes = options.maxMessageBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   function openSocket(channel: BridgePort, data: BridgeMessage, page: URL, from: string): void {
     const port = Number(data.port);
@@ -121,6 +137,11 @@ export function listenToPreviewBridge(
     channel.onmessage = (event) => {
       const message = event.data as { kind?: unknown; data?: unknown; code?: unknown; reason?: unknown } | null;
       if (message?.kind === 'send') {
+        const size = messageBytes(message.data, maxMessageBytes);
+        if (size > maxMessageBytes) {
+          options.telemetry?.report('ingress.body_too_large', undefined, { port, origin: from, bytes: size, limit: maxMessageBytes }); // fails open
+          return connection.close(1009, 'Message too big');
+        }
         if (typeof message.data === 'string') connection.send(message.data);
         else if (message.data instanceof ArrayBuffer) connection.send(new Uint8Array(message.data));
       } else if (message?.kind === 'close') {

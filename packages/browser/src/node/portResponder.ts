@@ -21,6 +21,7 @@ import {
 } from '@seanhogg/builderforce-webcontainers-core';
 import type { WireReply, WireRequest, WireResponse } from '../protocol.js';
 import type { ProcessHost } from './processHost.js';
+import { headerKey } from '../shared/headers.js';
 
 export interface PortResponderOptions {
   /** The runtime's cookie jars. Without them, the browser's own `Cookie` header passes through and `Set-Cookie` is lost. */
@@ -41,10 +42,6 @@ export interface OpenedPortResponse {
 }
 
 const NO_STORE = { 'cache-control': 'no-store' };
-
-function headerKey(headers: Record<string, unknown>, name: string): string | undefined {
-  return Object.keys(headers).find((key) => key.toLowerCase() === name);
-}
 
 /** Send a preview request to its virtual server; resolves with the head and a body that streams. */
 export async function openPortResponse(host: ProcessHost, request: WireRequest, options: PortResponderOptions = {}): Promise<OpenedPortResponse> {

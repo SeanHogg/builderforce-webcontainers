@@ -13,18 +13,18 @@
  * preview origins (`previewOrigins.ts`) each application gets its own relay.
  */
 import {
-  ATTACH,
   REATTACH,
   RELAY_ATTACH,
   RELAY_READY,
   RELAY_REATTACH,
   RELAY_UPDATE,
+  attachMessageOf,
   type AttachProof,
 } from './protocol.js';
 import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerLike } from './node/processHost.js';
 import type { WorkerKind } from './node/protocol.js';
-import { spawnOverRelay } from './relayWorker.js';
+import { spawnOverRelay, type UndeliverableListener } from './relayWorker.js';
 import { broadcastUpdate, waitForActive } from './worker.js';
 
 export interface PreviewTransport {
@@ -32,8 +32,12 @@ export interface PreviewTransport {
   readonly origin: string;
   /** The worker's scope path on that origin. */
   readonly scope: string;
-  /** Hand the worker the port that serves preview `id`, with this attach's nonce (see `AttachProof`) and its documents' declared egress. */
-  attach(id: string, port: MessagePort, proof: AttachProof, egress?: readonly string[]): void;
+  /**
+   * Hand the worker the port that serves preview `id`, with this attach's nonce
+   * (see `AttachProof`) and nothing else: the worker's egress is its own
+   * configuration (`relayConfig`, in the relay / worker URL).
+   */
+  attach(id: string, port: MessagePort, proof: AttachProof): void;
   /** The worker restarted and wants `id` again. */
   onReattach(listener: (id: string) => void): () => void;
   /** Tell every frame showing the preview at `base` what changed: a hot update, or reload. */
@@ -42,9 +46,10 @@ export interface PreviewTransport {
    * Start a process worker of `kind` (default `node`; `python` for Python
    * commands, `php` for PHP commands, `dotnet` for .NET commands) on the preview origin. Only the relay has one to offer;
    * same-origin mode runs processes on the host's origin, which is the trust it
-   * already chose.
+   * already chose. `onUndeliverable` hears a message that could not cross to or
+   * from the Worker (`messageerror`); the Worker then fails as a process error.
    */
-  createWorker?(kind?: WorkerKind, policy?: string): WorkerLike;
+  createWorker?(kind?: WorkerKind, policy?: string, onUndeliverable?: UndeliverableListener): WorkerLike;
   dispose(): void;
 }
 
@@ -74,7 +79,7 @@ export async function sameOriginTransport(serviceWorkerUrl: string, scopeOption?
   return {
     origin: location.origin,
     scope,
-    attach: (id, port, proof, egress) => registration.active?.postMessage({ type: ATTACH, id, ...proof, egress }, [port]),
+    attach: (id, port, proof) => registration.active?.postMessage(attachMessageOf({ id, ...proof }), [port]),
     onReattach(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -161,13 +166,13 @@ export function openRelay(relayUrl: string): OpenedRelay {
     origin: url.origin,
     scope: new URL('./', url).pathname,
     ready,
-    attach: (id, port, proof, egress) => post({ type: RELAY_ATTACH, id, ...proof, egress }, [port]),
+    attach: (id, port, proof) => post({ type: RELAY_ATTACH, id, ...proof }, [port]),
     onReattach(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     send: (base, update) => post({ type: RELAY_UPDATE, base, update }),
-    createWorker: (kind: WorkerKind = 'node', policy?: string) => spawnOverRelay(post, kind, policy),
+    createWorker: (kind: WorkerKind = 'node', policy?: string, onUndeliverable?: UndeliverableListener) => spawnOverRelay(post, kind, policy, onUndeliverable),
     dispose() {
       window.removeEventListener('message', onRelayMessage);
       listeners.clear();
@@ -177,7 +182,11 @@ export function openRelay(relayUrl: string): OpenedRelay {
   };
 }
 
-/** Frame the relay at `relayUrl` and wait until its worker is active; rejects (and removes the frame) when it cannot start. */
+/**
+ * Frame the relay at `relayUrl` and wait until its worker is active; rejects
+ * (and removes the frame) when it cannot start. Build `relayUrl` with
+ * `relayConfigUrl` to give the origin's worker its egress and report endpoint.
+ */
 export async function relayTransport(relayUrl: string): Promise<PreviewTransport> {
   const relay = openRelay(relayUrl);
   try {

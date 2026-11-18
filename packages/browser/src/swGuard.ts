@@ -74,6 +74,8 @@ export interface IngressGuardOptions {
   /** `clients.get(id)`. Without it every unbound client is refused and a live attach binding never moves. */
   getClient?(clientId: string): Promise<AttachClient | undefined>;
   onReject?(rejection: IngressRejection): void;
+  /** Ask the attacher pages for a fresh attach of `id` (after a stale nonce from its bound client). */
+  requestReattach?(id: string): Promise<void> | void;
   /** The preview id a URL is served for (the router's `match`), or null. */
   previewIdOf(url: URL): string | null;
   /** Told when a client is bound from its own URL (after a lookup), so routing state can be rebuilt. */
@@ -131,6 +133,14 @@ export function createIngressGuard(options: IngressGuardOptions) {
     else detail = await owners.claim(id, client.id, valid);
     if (!detail) return true;
     report({ reason: 'ingress.attach_rejected', id, clientId: client?.id, detail, message: ATTACH_MESSAGES[detail](id) });
+    // The bound client's chain parted from ours (a dropped attach): recover with a fresh attach, never a lockout.
+    if (detail === 'stale_nonce') {
+      try {
+        await options.requestReattach?.(id);
+      } catch {
+        // the next request for `id` asks again
+      }
+    }
     return false;
   }
 

@@ -14,8 +14,6 @@ import {
   importZip,
   normalizePath,
   textResponse,
-  PLATFORM_APPLICATION,
-  WORKSPACE_APPLICATION,
   type PreviewUpdate,
   type ProcessOptions,
 } from '@seanhogg/builderforce-webcontainers-core';
@@ -29,9 +27,9 @@ import { listenToPreview } from './previewMessages.js';
 import { listenToPreviewBridge } from './previewBridge.js';
 import { openRelay, relayTransport, sameOriginTransport, type PreviewTransport } from './transport.js';
 import { attachPreview } from './previewAttach.js';
-import { checkPreviewOrigins, PreviewShieldError } from './previewOrigin.js';
+import { checkPreviewOrigins } from './previewOrigin.js';
+import { relayConfigUrl } from './relayConfig.js';
 import { createShieldTelemetry } from './security/shieldTelemetry.js';
-import { applicationContext } from './security/securityEvent.js';
 import { createPreviewOrigins } from './previewOrigins.js';
 import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
 import { createCdnComponentCompilers } from './componentCompilers.js';
@@ -43,6 +41,9 @@ export { toWire } from './previewAttach.js';
 export type { CommonRuntimeOptions, PreviewRuntime, PreviewRuntimeOptions, RelayOptions, RuntimeBuildOptions, SameOriginOptions } from './runtimeOptions.js';
 
 const DEFAULT_ROOT = '/home/project';
+
+/** The default package CDN (`cdn` unset): previews load packages from it, so it is always in their egress. */
+const DEFAULT_CDN_ORIGIN = 'https://esm.sh';
 
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 16) ?? Math.random().toString(36).slice(2, 18);
@@ -65,9 +66,16 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const telemetry = createShieldTelemetry({ sink: options.security?.sink });
   // W10 control 10: refused before anything boots when the preview would share this page's origin.
   checkPreviewOrigins(options, location.origin, telemetry);
+  /** The egress a preview origin's responses may reach (host-side; never from an attach): the embedder's, plus the default package CDN previews load from. */
+  const previewEgress = (applicationId?: string): readonly string[] => {
+    const declared = typeof options.previewEgress === 'function' ? options.previewEgress(applicationId) : (options.previewEgress ?? []);
+    return options.cdn ? declared : [DEFAULT_CDN_ORIGIN, ...declared];
+  };
+  // The shared origin's worker takes its egress and report endpoint from its own URL (`relayConfig`).
+  const sharedConfig = { egress: previewEgress(undefined), report: options.cspReportUrl };
   const transport = options.relayUrl
-    ? await relayTransport(options.relayUrl)
-    : await sameOriginTransport((options as SameOriginOptions).serviceWorkerUrl, options.scope);
+    ? await relayTransport(relayConfigUrl(options.relayUrl, sharedConfig, location.href))
+    : await sameOriginTransport(relayConfigUrl((options as SameOriginOptions).serviceWorkerUrl, sharedConfig, location.href), options.scope);
 
   const base = previewBase(transport.scope, id);
   // Every bridge this runtime injects carries it; preview messages without it are refused.
@@ -97,14 +105,19 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     relayUrl: options.relayUrl,
     embeddingOrigin: location.origin,
     previewOrigin: options.previewOrigin,
+    sharedPreviewOrigin: options.sharedPreviewOrigin ?? (options.unprotectedSameOrigin ? 'unprotected' : undefined),
+    previewEgress,
+    cspReportUrl: options.cspReportUrl,
     runtimeId: id,
     workerPolicy: options.workerPolicy,
+    createWorker: options.node?.createWorker,
     open: openRelay,
     onOpened: (relay, applicationId) => attachTo(relay, applicationId),
     telemetry,
   });
-  // In relay mode processes run on the preview origin (the relay starts them; with `previewOrigin`, the application's own relay), never the host's.
-  const node = { ...options.node, createWorker: options.node?.createWorker ?? origins.createWorker };
+  // In relay mode processes run on the preview origin (the relay starts them; with `previewOrigin`, the application's own relay), never the host's;
+  // a custom `node.createWorker` is handed each application's origin and policy (`WorkerTarget`).
+  const node = { ...options.node, createWorker: origins.createWorker };
   // Python commands run in Python process Workers (Pyodide), PHP commands in PHP ones (php-wasm), .NET commands in .NET ones (Mono), beside the Node ones.
   // Memory cannot be shared with a Worker behind a relay or on another origin: training's shared checkpoint flag is off there
   // (a SharedArrayBuffer in the start message could not cross). A custom `node.createWorker` is the embedder's to judge (`sharedFlags`).
@@ -114,16 +127,8 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const php = createPhpProcessKind(options.php, python);
   // Prebuilt wasm32-wasip1 modules (and the declined cargo/rustc) run in Rust process Workers.
   const kinds = createRustProcessKind(createDotnetProcessKind(options.dotnet, php));
-  // Control 1: an application gets its own preview origin, or — only with the named opt-out — shares the relay's.
-  const sharedAllowed = options.sharedPreviewOrigin === 'unprotected' || options.unprotectedSameOrigin === true;
-  const refuseShared = (applicationId: string): string => {
-    if (applicationId === WORKSPACE_APPLICATION || applicationId === PLATFORM_APPLICATION) return transport.origin;
-    const refusal = new PreviewShieldError('ingress.preview_origin_invalid', `Application "${applicationId}" needs its own preview origin: set \`previewOrigin\`, or opt out by name with \`sharedPreviewOrigin: 'unprotected'\`.`);
-    telemetry.report(refusal.reason, applicationContext(applicationId), { message: refusal.message });
-    throw refusal;
-  };
-  const originOf = origins.enabled ? origins.originOf : sharedAllowed ? undefined : refuseShared;
-  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, originOf, previewUrl, options: node, kinds, security: { telemetry } });
+  // Control 1: an application gets its own preview origin, or — only with the named opt-out — shares the relay's (`origins.originOf` refuses or announces it, before the process exists).
+  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, originOf: origins.originOf, previewUrl, options: node, kinds, security: { telemetry } });
   // Training checkpoints and save acknowledgements reach a process through the host.
   python.training?.connect((pid, message) => processes.notify(pid, message));
   // Databases never run where processes do in relay mode: their Workers start on this (host) origin.
@@ -138,12 +143,11 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     telemetry.report('ingress.app_origin_mismatch', undefined, { port, origin, ownerApplicationId: owner?.applicationId ?? null });
     return false;
   };
-  const egressOf = (applicationId?: string) => (typeof options.previewEgress === 'function' ? options.previewEgress(applicationId) : options.previewEgress);
-  const attachOn = (relay: PreviewTransport, applicationId?: string, devServer?: DevServer) =>
-    attachPreview({ transport: relay, id, server: devServer, processes, cookies, scripts: () => previewScripts, bridgeNonce: nonce, egress: egressOf(applicationId), mayServePort: (port) => admitPort(relay.origin, port) });
+  const attachOn = (relay: PreviewTransport, devServer?: DevServer) =>
+    attachPreview({ transport: relay, id, server: devServer, processes, cookies, scripts: () => previewScripts, bridgeNonce: nonce, mayServePort: (port) => admitPort(relay.origin, port) });
   // The shared origin serves the dev server; an application's own origin only that application's ports.
-  const stopAttach = attachOn(transport, undefined, server);
-  attachTo = (relay, applicationId) => attachOn(relay, applicationId);
+  const stopAttach = attachOn(transport, server);
+  attachTo = (relay) => attachOn(relay);
 
   // Every frame showing this preview hears what each burst of edits changed.
   const sendAll = (update: PreviewUpdate) => {
@@ -154,7 +158,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
 
   const previewMessages = listenToPreview(window, origins.accepts, base, nonce);
   // WebSockets and document.cookie for virtual servers, which a service worker cannot carry.
-  const bridge = listenToPreviewBridge(window, origins.accepts, base, { upgrade: (port, request) => processes.upgrade(port, request), cookies, nonce, admitPort });
+  const bridge = listenToPreviewBridge(window, origins.accepts, base, { upgrade: (port, request) => processes.upgrade(port, request), cookies, nonce, admitPort, telemetry });
 
   return {
     id,

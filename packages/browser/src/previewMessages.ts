@@ -48,8 +48,10 @@ const LEVELS = new Set<string>(['log', 'info', 'warn', 'error', 'debug']);
 
 /**
  * The preview page a window message came from, when it is one of THIS runtime's:
- * sent from the preview origin, by a page under `base`, carrying `nonce` when
- * the runtime has one. Undefined otherwise.
+ * sent from the preview origin, by a page under `base` ON THAT SAME ORIGIN (the
+ * `href` a message claims is the app's word; `event.origin` is the browser's,
+ * so application A cannot pass its errors or console off as B's), carrying
+ * `nonce` when the runtime has one. Undefined otherwise.
  */
 export function previewPageOf(event: MessageEvent, origin: PreviewOriginMatch, base: string, nonce?: string): URL | undefined {
   const data = event.data as { href?: unknown; nonce?: unknown } | null;
@@ -58,6 +60,7 @@ export function previewPageOf(event: MessageEvent, origin: PreviewOriginMatch, b
   if (nonce !== undefined && data!.nonce !== nonce) return undefined;
   try {
     const page = new URL(href);
+    if (page.origin !== event.origin) return undefined; // a page claiming another origin's address
     return page.pathname.startsWith(base) ? page : undefined; // else: another runtime's preview
   } catch {
     return undefined;

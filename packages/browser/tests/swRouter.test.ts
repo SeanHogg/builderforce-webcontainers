@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { attachModeOf, createSwRouter, readBoundedBody, type AttachClient, type AttachMode, type BodySource, type IngressRejection, type PortLike, type SwRouter } from '../src/swRouter.js';
-import { isWireRequest, previewBase, previewPrefix, randomNonce, type AttachProof } from '../src/protocol.js';
+import { isWireAttached, isWireRequest, previewBase, previewPrefix, randomNonce, type AttachProof } from '../src/protocol.js';
 import { createRecentMap } from '../src/swBindings.js';
 
 /** Each attacher's last nonce per preview id: like the host page, a fresh nonce per attach, chained to the last. */
 const lastNonce = new Map<string, string>();
 
 /** Attach as `client` with a fresh, chained nonce (`proof` overrides it). */
-function acceptAttach(router: SwRouter, id: string, port: PortLike, client: AttachClient | null, proof?: AttachProof | null, egress?: unknown) {
+function acceptAttach(router: SwRouter, id: string, port: PortLike, client: AttachClient | null, proof?: AttachProof | null) {
   if (proof === undefined) {
     const key = `${client?.id}:${id}`;
     const nonce = randomNonce();
@@ -15,19 +15,21 @@ function acceptAttach(router: SwRouter, id: string, port: PortLike, client: Atta
     lastNonce.set(key, nonce);
     proof = previous === undefined ? { nonce } : { nonce, previous };
   }
-  return router.acceptAttach(id, port, client, proof, egress);
+  return router.acceptAttach(id, port, client, proof);
 }
 
 /** The same-origin host page: the page that attaches previews in the routing tests. */
 const HOST_PAGE: AttachClient = { id: 'host', type: 'window', url: 'https://h.test/editor' };
 const attachTo = (router: SwRouter, id: string, port: PortLike) => acceptAttach(router, id, port, HOST_PAGE);
 
-/** A page-side fake: answers every request with the path it was asked for. */
-function answeringPort(): PortLike & { requests: unknown[] } {
-  const port: PortLike & { requests: unknown[] } = {
+/** A page-side fake: answers every request with the path it was asked for (the worker's attach acknowledgements kept apart). */
+function answeringPort(): PortLike & { requests: unknown[]; acks: unknown[] } {
+  const port: PortLike & { requests: unknown[]; acks: unknown[] } = {
     requests: [],
+    acks: [],
     onmessage: null,
     postMessage(message) {
+      if (isWireAttached(message)) return void port.acks.push(message);
       port.requests.push(message);
       if (!isWireRequest(message)) return;
       queueMicrotask(() =>
@@ -139,6 +141,7 @@ describe('streamed responses', () => {
       sent,
       onmessage: null,
       postMessage(message) {
+        if (isWireAttached(message)) return; // the worker's attach acknowledgement
         sent.push(message);
         if (!isWireRequest(message)) return;
         queueMicrotask(() => port.onmessage?.({ data: { type: 'response', reqId: message.reqId, status: 200, headers: { 'content-type': 'text/event-stream' }, body: null, streaming: true } }));
@@ -191,7 +194,8 @@ describe('streamed responses', () => {
 
 /** A client on the preview origin `https://p.test`, whose worker scope is `/__bfwc/`. */
 const client = (id: string, path: string, type = 'window'): AttachClient => ({ id, type, url: path.includes(':') ? path : `https://p.test${path}` });
-const relay = (id: string) => client(id, '/__bfwc/relay.html');
+/** The relay page as the worker sees it: framed (`nested`) by the host. */
+const relay = (id: string): AttachClient => ({ ...client(id, '/__bfwc/relay.html'), frameType: 'nested' });
 
 /** A router on a dedicated `/__bfwc/` scope over a controllable set of open clients. */
 function guarded(open: AttachClient[] = [], attachMode?: AttachMode) {
@@ -347,23 +351,68 @@ describe('attach integrity', () => {
     expect(rejections.map((r) => r.detail)).toEqual(['bad_nonce', 'bad_nonce', 'bad_nonce']);
   });
 
-  it('refuses a re-attach by the bound client that does not hold the current nonce, keeping the live port', async () => {
-    const { router, rejections } = guarded([relay('relay-1')]);
+  it('refuses a re-attach by the bound client without the current nonce, keeping the live port, and asks for a fresh attach', async () => {
+    const asked: string[] = [];
+    const rejections: IngressRejection[] = [];
+    const router = createSwRouter({
+      scopePath: '/__bfwc/',
+      requestReattach: (id) => void asked.push(id),
+      getClient: async (clientId) => (clientId === 'relay-1' ? relay('relay-1') : undefined),
+      onReject: (rejection) => rejections.push(rejection),
+    });
     const owner = answeringPort();
-    const first = randomNonce();
-    expect(await acceptAttach(router, 'p1', owner, relay('relay-1'), { nonce: first })).toBe(true);
-    // A script posting as the relay client, without the host's nonce: no previous, or a guessed one.
-    for (const proof of [{ nonce: randomNonce() }, { nonce: randomNonce(), previous: randomNonce() }]) {
-      const thief = closablePort();
-      expect(await acceptAttach(router, 'p1', thief, relay('relay-1'), proof)).toBe(false);
-      expect(thief.closed).toBe(true);
-    }
-    expect(rejections.map((r) => [r.reason, r.detail])).toEqual([
-      ['ingress.attach_rejected', 'stale_nonce'],
-      ['ingress.attach_rejected', 'stale_nonce'],
-    ]);
+    expect(await acceptAttach(router, 'p1', owner, relay('relay-1'), { nonce: randomNonce() })).toBe(true);
+    // A script posting as the relay client, without the host's nonce.
+    const thief = closablePort();
+    expect(await acceptAttach(router, 'p1', thief, relay('relay-1'), { nonce: randomNonce(), previous: randomNonce() })).toBe(false);
+    expect(thief.closed).toBe(true);
+    expect(rejections.map((r) => [r.reason, r.detail])).toEqual([['ingress.attach_rejected', 'stale_nonce']]);
+    expect(asked).toEqual(['p1']);
     await router.respond({ id: 'p1', path: '/', search: '' });
     expect(owner.requests).toHaveLength(1);
+  });
+
+  it('recovers after a dropped attach: the stale chain is reset and the fresh attach it asks for is taken, never a lockout', async () => {
+    const asked: string[] = [];
+    const router = createSwRouter({ scopePath: '/__bfwc/', requestReattach: (id) => void asked.push(id), getClient: async () => relay('relay-1') });
+    const acked = randomNonce();
+    await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), { nonce: acked });
+    // The worker took a second attach whose acknowledgement the page never saw, so the page still chains from `acked`.
+    await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), { nonce: randomNonce(), previous: acked });
+    expect(await acceptAttach(router, 'p1', closablePort(), relay('relay-1'), { nonce: randomNonce(), previous: randomNonce() })).toBe(false);
+    expect(asked).toEqual(['p1']);
+    // The page answers the REATTACH from where it believes the chain is: taken, and the chain runs on from it.
+    const fresh = randomNonce();
+    const port = answeringPort();
+    expect(await acceptAttach(router, 'p1', port, relay('relay-1'), { nonce: fresh, previous: acked })).toBe(true);
+    expect(port.acks).toEqual([{ type: 'attached', nonce: fresh }]);
+    expect(await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), { nonce: randomNonce(), previous: fresh })).toBe(true);
+    expect((await router.respond({ id: 'p1', path: '/', search: '' })).status).toBe(200);
+  });
+
+  it("acknowledges an accepted attach on its port with that attach's nonce, and never a refused one", async () => {
+    const { router } = guarded([relay('relay-1')]);
+    const nonce = randomNonce();
+    const accepted = answeringPort();
+    await acceptAttach(router, 'p1', accepted, relay('relay-1'), { nonce });
+    expect(accepted.acks).toEqual([{ type: 'attached', nonce }]);
+    const refused = closablePort();
+    await acceptAttach(router, 'p1', refused, client('doc', '/__bfwc/p1/'), { nonce: randomNonce() });
+    expect(refused.acks).toEqual([]);
+  });
+
+  it('after a worker restart, refuses a first attach from anything but the framed relay page', async () => {
+    // A fresh router is a restarted worker: no bindings, so only the attacher rules stand.
+    const restarted = guarded([], 'relay');
+    const foreign: AttachClient[] = [
+      client('doc', '/__bfwc/p1/index.html'),
+      { ...client('opened', '/__bfwc/relay.html'), frameType: 'auxiliary' }, // window.open('relay.html') from a preview
+      { ...client('top', '/__bfwc/relay.html'), frameType: 'top-level' },
+      client('unknown-frame', '/__bfwc/relay.html'),
+    ];
+    for (const from of foreign) expect(await acceptAttach(restarted.router, 'p1', closablePort(), from, { nonce: randomNonce() })).toBe(false);
+    expect(restarted.rejections.map((r) => r.detail)).toEqual(foreign.map(() => 'not_attacher'));
+    expect(await acceptAttach(restarted.router, 'p1', answeringPort(), relay('relay-1'), { nonce: randomNonce() })).toBe(true);
   });
 
   it('refuses a re-attach that presents a nonce the host already replaced', async () => {
@@ -375,15 +424,6 @@ describe('attach integrity', () => {
     expect(await acceptAttach(router, 'p1', closablePort(), relay('relay-1'), { nonce: randomNonce(), previous: n1 })).toBe(false); // replays the stale one
     expect(rejections[0]?.detail).toBe('stale_nonce');
     expect(await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), { nonce: randomNonce(), previous: n2 })).toBe(true);
-  });
-
-  it('gives the preview the document CSP its accepted attach declared, and only its own origin otherwise', async () => {
-    const { router } = guarded();
-    expect(router.documentPolicy('p1')).toBe("connect-src 'self' blob: data:; worker-src 'self' blob:");
-    await acceptAttach(router, 'p1', answeringPort(), relay('relay-1'), undefined, ['https://api.example.com', 'https://evil.example/__bfwc/x', "'unsafe-inline'"]);
-    expect(router.documentPolicy('p1')).toBe("connect-src 'self' blob: data: https://api.example.com; worker-src 'self' blob:");
-    await acceptAttach(router, 'p1', closablePort(), relay('relay-1'), null, ['https://*']);
-    expect(router.documentPolicy('p1')).toContain('https://api.example.com'); // a refused attach changes nothing
   });
 
   it('asks only pages that may attach to re-attach', () => {

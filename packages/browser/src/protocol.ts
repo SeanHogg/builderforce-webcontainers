@@ -14,7 +14,7 @@ export const PREVIEW_ID = /^[A-Za-z0-9_-]+$/;
 
 /** page → worker, with a MessagePort in `ports[0]`: "serve preview `id` over this port". */
 export const ATTACH = 'bfwc:attach';
-/** worker → pages: "I lost the port for `id` (I was restarted) — attach again". */
+/** worker → pages: "attach `id` again" — I was restarted and lost its port, or its last attach presented a stale nonce. */
 export const REATTACH = 'bfwc:reattach';
 
 /**
@@ -24,7 +24,7 @@ export const REATTACH = 'bfwc:reattach';
  */
 /** relay → host: the worker is active; send ports. */
 export const RELAY_READY = 'bfwc:relay-ready';
-/** host → relay, with a MessagePort: forward as ATTACH for `id`, with its `nonce` and `previous` (`AttachProof`). */
+/** host → relay, with a MessagePort: forward as ATTACH for `id`, with its `nonce` and `previous` (`AttachProof`) and nothing else. */
 export const RELAY_ATTACH = 'bfwc:relay-attach';
 /** relay → host: the worker asked for `id` again. */
 export const RELAY_REATTACH = 'bfwc:relay-reattach';
@@ -36,11 +36,14 @@ export const RELAY_SPAWN = 'bfwc:relay-spawn';
 /**
  * What an attach proves (W10 control 2): `nonce` is fresh for this attach, minted
  * by the host page; `previous` is the nonce of the host's last attach of the same
- * id. The worker binds the nonce to the attaching client, and a later attach of
- * that id from that client must present it as `previous` — so a script that can
- * post as the relay client but never saw the host's messages cannot rebind it.
- * Both travel only by postMessage to the exact relay origin and the worker, never
- * in a URL a preview can read.
+ * id that the worker acknowledged (`WireAttached`). The worker binds the nonce to
+ * the attaching client, and a later attach of that id from that client must
+ * present it as `previous` — so a script that can post as the relay client but
+ * never saw the host's messages cannot rebind it. A stale `previous` from the
+ * bound client makes the worker ask for a fresh attach (never a lockout). Both
+ * travel only by postMessage to the exact relay origin and the worker, never in
+ * a URL a preview can read. Within one application's origin this is defence in
+ * depth: the boundary is the application's origin (control 1).
  */
 export interface AttachProof {
   nonce: string;
@@ -64,11 +67,36 @@ export function attachProofOf(message: { nonce?: unknown; previous?: unknown } |
   return typeof message.previous === 'string' && ATTACH_NONCE.test(message.previous) ? { nonce: message.nonce, previous: message.previous } : null;
 }
 
+/**
+ * page → worker. Carries the id and its proof only: the worker's egress is
+ * host-side configuration in its own script URL (`relayConfig`), never anything
+ * an attach says — a preview that scripts the relay can post one.
+ */
 export interface AttachMessage extends AttachProof {
   type: typeof ATTACH;
   id: string;
-  /** The external sources preview `id`'s documents may connect to (`previewCsp`); absent = none beyond their own origin. */
-  egress?: readonly string[];
+}
+
+/** The ATTACH message for `id` with `proof`, built from exactly those fields (whatever else `data` carries is dropped). */
+export function attachMessageOf(data: { id: string; nonce?: unknown; previous?: unknown }): AttachMessage {
+  const message: AttachMessage = { type: ATTACH, id: data.id, nonce: data.nonce as string };
+  if (data.previous !== undefined) message.previous = data.previous as string;
+  return message;
+}
+
+/**
+ * worker → page, on the attached port: the worker accepted the attach with
+ * `nonce` and bound it. The page advances its nonce chain (`previous`) only on
+ * this, so an attach the worker never saw cannot desync the chain.
+ */
+export interface WireAttached {
+  type: 'attached';
+  nonce: string;
+}
+
+export function isWireAttached(value: unknown): value is WireAttached {
+  const v = value as WireAttached | null;
+  return !!v && v.type === 'attached' && typeof v.nonce === 'string';
 }
 
 export interface ReattachMessage {

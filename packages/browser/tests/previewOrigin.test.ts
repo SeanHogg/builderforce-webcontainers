@@ -48,18 +48,30 @@ describe('control 10: same-origin previews are refused at boot', () => {
     expect(refusal(() => checkPreviewOrigins(request, PAGE)).reason).toBe('ingress.preview_origin_invalid');
   });
 
-  it('warns once per page, and reports to the sink on every boot, when applications share the preview origin', () => {
+  it('refuses a relay that is not https', () => {
+    expect(refusal(() => checkPreviewOrigins({ relayUrl: 'http://preview.example.com/__bfwc/relay.html' }, PAGE)).reason).toBe('ingress.preview_origin_invalid');
+  });
+
+  it('warns once per page, and reports on every boot, when previews run on the page origin by the opt-out', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const events: SecurityEvent[] = [];
     const telemetry = createShieldTelemetry({ sink: { emit: (event) => void events.push(event) } });
-    checkPreviewOrigins({ relayUrl: RELAY }, PAGE, telemetry);
-    checkPreviewOrigins({ relayUrl: RELAY }, PAGE, telemetry);
+    checkPreviewOrigins({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true }, PAGE, telemetry);
+    checkPreviewOrigins({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true }, PAGE, telemetry);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain('previewOrigin');
+    expect(warn.mock.calls[0]?.[0]).toContain('unprotectedSameOrigin');
     expect(events.map((event) => [event.reasonCode, event.evidence.origin])).toEqual([
-      ['ingress.shared_preview_origin', 'https://preview.example.com'],
-      ['ingress.shared_preview_origin', 'https://preview.example.com'],
+      ['ingress.shared_preview_origin', PAGE],
+      ['ingress.shared_preview_origin', PAGE],
     ]);
+  });
+
+  it('boots a relay without previewOrigin silently: applications are decided when each starts, the workspace needs none', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const events: SecurityEvent[] = [];
+    expect(checkPreviewOrigins({ relayUrl: RELAY }, PAGE, createShieldTelemetry({ sink: { emit: (event) => void events.push(event) } }))).toBe('https://preview.example.com');
+    expect(warn).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
   });
 
   it('never fails the boot over a throwing sink', () => {
@@ -69,7 +81,7 @@ describe('control 10: same-origin previews are refused at boot', () => {
         throw new Error('sink down');
       },
     };
-    expect(checkPreviewOrigins({ relayUrl: RELAY }, PAGE, createShieldTelemetry({ sink }))).toBe('https://preview.example.com');
+    expect(checkPreviewOrigins({ serviceWorkerUrl: '/__bfwc/sw.js', unprotectedSameOrigin: true }, PAGE, createShieldTelemetry({ sink }))).toBeUndefined();
   });
 });
 

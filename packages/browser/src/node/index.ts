@@ -8,6 +8,7 @@ import { ProcessHost, type WorkerLike } from './processHost.js';
 import type { ProcessKindPolicy } from './processKinds.js';
 import type { ProcessShieldOptions } from './processIdentity.js';
 import type { WorkerKind } from './protocol.js';
+import type { WorkerTarget } from '../previewOrigins.js';
 
 export { ProcessHost } from './processHost.js';
 export type { ProcessHostOptions, ProcessInfo, WorkerLike } from './processHost.js';
@@ -37,10 +38,11 @@ export interface NodeRuntimeOptions {
    * `PreviewTransport.createWorker`). It is told the Worker kind the command
    * needs: `python` for Python commands, `php` for PHP ones, `dotnet` for .NET
    * ones, else `node`. Wins over the URLs. `applicationId` is the application
-   * whose process it is (undefined for the workspace's): with per-application
-   * preview origins, start it on that application's origin.
+   * whose process it is (undefined for the workspace's); `target` is where it
+   * must run: that application's preview origin, under its egress policy id
+   * (`startPreviewRuntime` always passes it — honour both).
    */
-  createWorker?: (kind: WorkerKind, applicationId?: string) => WorkerLike;
+  createWorker?: (kind: WorkerKind, applicationId?: string, target?: WorkerTarget) => WorkerLike;
   /** Build each database Worker yourself. It must run on the host origin, never the preview origin. Wins over `workerUrl`. */
   createDatabaseWorker?: () => WorkerLike;
   /** npm registry. Default https://registry.npmjs.org (it sends CORS headers). */

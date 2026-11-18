@@ -34,7 +34,7 @@ export type { WebSocketFrame } from './webSocketFrames.js';
 export { CookieJar, PortCookieJars, parseSetCookie, defaultCookiePath, cookiePathMatches } from './cookieJar.js';
 export type { StoredCookie } from './cookieJar.js';
 export type { PortEvent, PortAccessPolicy, PortDecisionEvent, PortRegistryOptions } from './ports.js';
-export { WORKSPACE_APPLICATION, WORKSPACE_SERVICE, PLATFORM_APPLICATION, PLATFORM_SERVICE, WORKSPACE_CONTEXT, PLATFORM_CONTEXT, sameService, ALLOW, deny } from './securityContext.js';
+export { WORKSPACE_APPLICATION, WORKSPACE_SERVICE, PLATFORM_APPLICATION, PLATFORM_SERVICE, WORKSPACE_CONTEXT, PLATFORM_CONTEXT, isApplicationId, sameService, ALLOW, deny } from './securityContext.js';
 export type { SecurityContext, ShieldReasonCode, ShieldDecision } from './securityContext.js';
 export { runProgram, runArguments, toRuntimeProcess, allocatePid } from './process.js';
 export type { RuntimeProcess, RunProgramOptions } from './process.js';

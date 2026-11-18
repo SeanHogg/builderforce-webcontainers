@@ -305,7 +305,7 @@ describe('a stable artifact key across runs', () => {
 
     fs.writeFile('/train.py', CRASH);
     const second = startApplicationRuntime({ projectId: 'stable', services: [training] }, { runtime: processes, providers: [provider] });
-    expect(second.applicationId).not.toBe(first.applicationId);
+    expect(second.applicationId).toBe(first.applicationId); // an application's identity is stable across runs (W10 control 1: its origin key)
     const secondLogs = follow(second, 'train');
     await second.start();
     await secondLogs.until(/Exited with code|Failed/);

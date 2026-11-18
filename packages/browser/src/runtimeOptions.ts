@@ -68,13 +68,16 @@ export interface RelayOptions {
   /**
    * Each application's own preview origin (W10 control 1), e.g.
    * `previewOriginTemplate('https://{key}.preview.example.com')`, where the key
-   * is a hash of (this runtime's `id`, the application id) — pass the project id
-   * as `id` so keys are unique and stable across projects: a bare https
-   * origin, distinct from this page's, from `relayUrl`'s and from every other
-   * application's — else the application's first process is refused
-   * (`ingress.preview_origin_invalid`). That origin must serve the relay files at
-   * `relayUrl`'s path. Unset, every application shares `relayUrl`'s origin (a
-   * one-time warning and an `ingress.shared_preview_origin` event say so).
+   * is a hash of (this runtime's `id`, the application's stable id) — pass the
+   * project id as `id` so keys are unique across projects and the same on every
+   * start: a bare https origin, distinct from this page's, from `relayUrl`'s and
+   * from every other application's — else the application's first process is
+   * refused (`ingress.preview_origin_invalid`). That origin must serve the relay
+   * files at `relayUrl`'s path (README › Preview origin headers). REQUIRED for
+   * applications: unset, an application's first process is refused
+   * (`PreviewShieldError`, `ingress.app_origin_required`) unless
+   * `sharedPreviewOrigin: 'unprotected'` opts out. The workspace and the instant
+   * preview need none.
    */
   previewOrigin?: PreviewOriginOption;
   /**
@@ -150,14 +153,21 @@ export interface CommonRuntimeOptions {
    * codes and redacted evidence only; a throwing sink is ignored.
    */
   security?: { sink?: SecurityEventSink };
-  /** Where browsers send CSP violation reports (`report-to` / `report-uri`) for preview documents and process Worker scripts: an absolute https URL on your API. Reports are never trusted from inside a Worker. */
+  /**
+   * Where browsers send CSP violation reports for preview responses
+   * (`report-to bfwc-csp`, with `Reporting-Endpoints`): an absolute https URL on
+   * your API. It reaches each origin's service worker in its own script URL,
+   * never by message. Reports are never trusted from inside a Worker.
+   */
   cspReportUrl?: string;
   /**
-   * The external sources preview documents may connect to (`https://api.example.com`,
+   * The external sources preview responses may reach (`https://api.example.com`,
    * `https://*.example.com`, `wss://…`; no paths): the service worker stamps them
-   * into each document's `connect-src` (on top of its own origin), added to any
-   * CSP the app sets. A function answers per application (undefined: the
-   * workspace's previews). Default: none.
+   * into the preview CSP of every response it serves (on top of its own origin),
+   * added to any CSP the app sets. Host-side only: each origin's service worker
+   * takes them from its own script URL, never from an attach. The default package
+   * CDN (`https://esm.sh`, when `cdn` is unset) is always added. A function
+   * answers per application (undefined: the workspace's previews). Default: none.
    */
   previewEgress?: readonly string[] | ((applicationId: string | undefined) => readonly string[]);
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { COOKIE_MESSAGE_TYPE, Kernel, PortCookieJars, SOCKET_MESSAGE_TYPE, defaultPrograms } from '@seanhogg/builderforce-webcontainers-core';
-import { listenToPreviewBridge, type PreviewBridge } from '../src/previewBridge.js';
+import { listenToPreviewBridge, type PreviewBridge, type PreviewBridgeOptions } from '../src/previewBridge.js';
+import { createShieldTelemetry, type SecurityEvent } from '../src/security.js';
 
 const ORIGIN = 'https://preview.test';
 const BASE = '/__bfwc/p1/';
@@ -58,7 +59,7 @@ afterEach(() => {
   stop?.();
 });
 
-async function runtime() {
+async function runtime(extra: Partial<PreviewBridgeOptions> = {}) {
   const kernel = new Kernel({ programs: defaultPrograms() });
   kernel.fs.writeTree({ 'server.js': ECHO_SERVER });
   const ready = new Promise<void>((resolve) => kernel.servers.onListening(() => resolve()));
@@ -67,7 +68,7 @@ async function runtime() {
   await ready;
   const cookies = new PortCookieJars();
   const win = fakeWindow();
-  bridge = listenToPreviewBridge(win, ORIGIN, BASE, { upgrade: (port, request) => kernel.upgrade(port, request), cookies });
+  bridge = listenToPreviewBridge(win, ORIGIN, BASE, { upgrade: (port, request) => kernel.upgrade(port, request), cookies, ...extra });
   return { win, cookies };
 }
 
@@ -108,6 +109,23 @@ describe('preview bridge: WebSockets', () => {
     expect(spoofed.messages).toEqual([]);
     spoof.port1.close();
     missing.port1.close();
+  });
+});
+
+describe('preview bridge: message size', () => {
+  it('closes a socket with 1009 on a message over the limit, and reports it', async () => {
+    const events: SecurityEvent[] = [];
+    const { win } = await runtime({ maxMessageBytes: 8, telemetry: createShieldTelemetry({ sink: { emit: (event) => void events.push(event) } }) });
+    const channel = new MessageChannel();
+    const page = inbox(channel.port1);
+    win.post(ORIGIN, { type: SOCKET_MESSAGE_TYPE, href: `${ORIGIN}${BASE}`, port: 3000, path: '/live' }, [channel.port2]);
+    await page.next((m) => m.kind === 'open');
+    channel.port1.postMessage({ kind: 'send', data: 'small' });
+    expect(await page.next((m) => m.data === 'small')).toEqual({ kind: 'message', data: 'small' });
+    channel.port1.postMessage({ kind: 'send', data: new Uint8Array(9).buffer });
+    expect(await page.next((m) => m.kind === 'close')).toMatchObject({ kind: 'close', code: 1009 });
+    expect(events.map((event) => [event.reasonCode, event.evidence.bytes, event.evidence.limit])).toEqual([['ingress.body_too_large', 9, 8]]);
+    channel.port1.close();
   });
 });
 

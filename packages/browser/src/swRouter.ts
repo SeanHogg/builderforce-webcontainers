@@ -1,7 +1,6 @@
-import { PREVIEW_ID, isPortPath, isWireReply, previewPrefix, type AttachProof, type WireCancel, type WireResponse } from './protocol.js';
+import { PREVIEW_ID, attachProofOf, isPortPath, isWireReply, previewPrefix, type AttachProof, type WireAttached, type WireCancel, type WireResponse } from './protocol.js';
 import type { AttachClient, AttachMode, IngressRejection } from './swBindings.js';
 import { createIngressGuard } from './swGuard.js';
-import { previewDocumentPolicy } from './previewCsp.js';
 
 export type { LookupRequest } from './swGuard.js';
 import { DEFAULT_MAX_BODY_BYTES, readBoundedBody, type BodySource } from './swBody.js';
@@ -88,10 +87,6 @@ export function createSwRouter(options: SwRouterOptions) {
   const streams = new Map<number, ReadableStreamDefaultController<Uint8Array>>();
   let nextId = 0;
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-  /** Preview id → the CSP its documents get (from the accepted attach's declared egress). */
-  const policies = new Map<string, string>();
-  /** The CSP preview `id`'s documents get: its attach's, or — with none known — only its own origin. */
-  const documentPolicy = (id: string) => policies.get(id) ?? previewDocumentPolicy([]);
   const guard = createIngressGuard({
     ...options,
     previewIdOf: (url) => match(url)?.id ?? null,
@@ -110,8 +105,8 @@ export function createSwRouter(options: SwRouterOptions) {
     port.close?.();
   }
 
-  /** Install a port `acceptAttach` has admitted, releasing the one it replaces. */
-  function attach(id: string, port: PortLike): void {
+  /** Install a port `acceptAttach` has admitted (acknowledging `nonce` on it), releasing the one it replaces. */
+  function attach(id: string, port: PortLike, nonce: string): void {
     const previous = ports.get(id);
     if (previous && previous !== port) releasePort(id, previous);
     ports.set(id, port);
@@ -134,6 +129,8 @@ export function createSwRouter(options: SwRouterOptions) {
         streams.delete(reply.reqId); // the reader already went away
       }
     };
+    // The page advances its nonce chain only on this, so a dropped attach never desyncs it.
+    port.postMessage({ type: 'attached', nonce } satisfies WireAttached);
     for (const wake of waiters.get(id) ?? []) wake(port);
     waiters.delete(id);
   }
@@ -141,12 +138,12 @@ export function createSwRouter(options: SwRouterOptions) {
   /**
    * An attach from `client` (`event.source`) carrying `proof` (`attachProofOf`),
    * decided by the guard (nonce, attacher, binding, unique id per tab). A refused
-   * port is closed. An accepted one sets the preview's document CSP from `egress`.
+   * port is closed (a stale nonce from the bound client also asks it for a fresh
+   * attach). An attach carries no egress: that is the worker's own configuration.
    */
-  async function acceptAttach(id: string, port: PortLike, client: AttachClient | null | undefined, proof: AttachProof | null | undefined, egress?: unknown): Promise<boolean> {
+  async function acceptAttach(id: string, port: PortLike, client: AttachClient | null | undefined, proof: AttachProof | null | undefined): Promise<boolean> {
     if (await guard.checkAttach(id, client, proof)) {
-      policies.set(id, previewDocumentPolicy(egress));
-      attach(id, port);
+      attach(id, port, attachProofOf(proof)!.nonce);
       return true;
     }
     port.close?.();
@@ -252,7 +249,7 @@ export function createSwRouter(options: SwRouterOptions) {
     return matchForClient(url, clientId, origin);
   }
 
-  return { acceptAttach, documentPolicy, mayAttach: guard.mayAttach, admit, readBody, match, matchForClient, needsClientLookup: guard.needsLookup, resolveForClient, rememberClient, respond, detach };
+  return { acceptAttach, mayAttach: guard.mayAttach, admit, readBody, match, matchForClient, needsClientLookup: guard.needsLookup, resolveForClient, rememberClient, respond, detach };
 }
 
 export type SwRouter = ReturnType<typeof createSwRouter>;

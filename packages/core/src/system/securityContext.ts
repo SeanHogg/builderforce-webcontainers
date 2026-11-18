@@ -30,6 +30,15 @@ export const PLATFORM_SERVICE = 'platform';
 export const WORKSPACE_CONTEXT: SecurityContext = Object.freeze({ applicationId: WORKSPACE_APPLICATION, serviceId: WORKSPACE_SERVICE });
 export const PLATFORM_CONTEXT: SecurityContext = Object.freeze({ applicationId: PLATFORM_APPLICATION, serviceId: PLATFORM_SERVICE });
 
+/**
+ * Whether `applicationId` names an application (`startApplicationRuntime`), not
+ * the workspace or the platform: the host side's two identities. The one
+ * predicate every chokepoint asks (preview origins, database credentials).
+ */
+export function isApplicationId(applicationId: string | undefined): applicationId is string {
+  return applicationId !== undefined && applicationId !== WORKSPACE_APPLICATION && applicationId !== PLATFORM_APPLICATION;
+}
+
 /** Same (application, service) — process/request/connection ids are ignored. */
 export function sameService(a: SecurityContext, b: SecurityContext): boolean {
   return a.applicationId === b.applicationId && a.serviceId === b.serviceId;
@@ -56,8 +65,14 @@ export type ShieldReasonCode =
   | 'ingress.preview_origin_invalid'
   /** A request reached an application's port through a preview origin that is not that application's. */
   | 'ingress.app_origin_mismatch'
-  /** Telemetry, not a refusal: every application shares one preview origin (no `previewOrigin` set). */
-  | 'ingress.shared_preview_origin';
+  /** An application started with no `previewOrigin` and no named opt-out (`sharedPreviewOrigin: 'unprotected'`): refused. */
+  | 'ingress.app_origin_required'
+  /** Telemetry, not a refusal: an application started on the shared preview origin under the named opt-out. */
+  | 'ingress.shared_preview_origin'
+  /** The embedder's egress policy id for an application is malformed: dropped, so its Workers get the most restrictive policy. */
+  | 'egress.policy_invalid'
+  /** A message to or from a process Worker could not be delivered across origins (`messageerror`): the process was ended. */
+  | 'process.message_undeliverable';
 
 /** A page-side decision; `reject` carries the reason the caller surfaces (ECONNREFUSED, 403, EACCES…). */
 export type ShieldDecision = { readonly allow: true } | { readonly allow: false; readonly reason: ShieldReasonCode };

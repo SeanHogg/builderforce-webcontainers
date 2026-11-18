@@ -8,14 +8,15 @@
  *   refused with `ingress.same_origin_refused` — unless the embedder opts out by
  *   name (`unprotectedSameOrigin: true`), which is never a default.
  * - Control 1: with `previewOrigin`, every application gets its own origin, built
- *   from a key hashed from (runtime id, application id) so it is unique across
- *   projects in one browser profile; the
+ *   from a key hashed from (runtime id, the application's STABLE id) so it is
+ *   unique across projects in one browser profile and the same on every start; the
  *   computed origin must be a bare https origin (no path, query, fragment or
  *   credentials), distinct from the page's, from the shared preview origin and
  *   from every other application's — else `ingress.preview_origin_invalid`.
- * - Without `previewOrigin`, applications share one preview origin (storage,
- *   Cache Storage, BroadcastChannel, worker scope): a console warning once per
- *   page and an `ingress.shared_preview_origin` event per runtime say so.
+ * - Per-application origins are mandatory for applications (`previewOrigins`):
+ *   without `previewOrigin`, an application is refused at start
+ *   (`ingress.app_origin_required`) unless the embedder opts out by name
+ *   (`sharedPreviewOrigin: 'unprotected'`). The relay must be https.
  */
 import { hashAlgorithm, PLATFORM_CONTEXT, type ShieldReasonCode } from '@seanhogg/builderforce-webcontainers-core';
 import type { ShieldReporter } from './security/shieldTelemetry.js';
@@ -109,11 +110,16 @@ let sharedOriginWarned = false;
 /**
  * Control 10 at boot: throws `PreviewShieldError` (`ingress.same_origin_refused`)
  * when the preview would share `embeddingOrigin`, unless `unprotectedSameOrigin`
- * is set. Warns (once per page) and reports when every application will share
- * one preview origin. Returns the relay's origin in relay mode.
+ * is set (then it warns once per page and reports). A relay must be https
+ * (`ingress.preview_origin_invalid`). Returns the relay's origin in relay mode.
+ *
+ * Applications without `previewOrigin` are decided when each starts
+ * (`createPreviewOrigins`): refused, or shared under the named opt-out. The
+ * workspace and instant preview never need one.
  */
 export function checkPreviewOrigins(request: PreviewOriginRequest, embeddingOrigin: string, telemetry?: ShieldReporter): string | undefined {
-  const relayOrigin = request.relayUrl ? new URL(request.relayUrl, embeddingOrigin).origin : undefined;
+  const relay = request.relayUrl ? new URL(request.relayUrl, embeddingOrigin) : undefined;
+  const relayOrigin = relay?.origin;
   const shared = relayOrigin === undefined || relayOrigin === embeddingOrigin;
   if (shared && !request.unprotectedSameOrigin) {
     throw new PreviewShieldError(
@@ -123,18 +129,19 @@ export function checkPreviewOrigins(request: PreviewOriginRequest, embeddingOrig
         : `The preview relay (${relayOrigin}) is on this page's own origin: serve it from a separate origin.`,
     );
   }
+  if (relay && relay.protocol !== 'https:') {
+    throw new PreviewShieldError('ingress.preview_origin_invalid', `The preview relay (${relay.href}) is not https.`);
+  }
   if (request.previewOrigin && relayOrigin === undefined) {
     throw new PreviewShieldError('ingress.preview_origin_invalid', '`previewOrigin` needs relay mode (`relayUrl`): each application is served by its own relay.');
   }
-  if (!request.previewOrigin) {
-    const message = shared
-      ? `Previews run on this page's own origin (${embeddingOrigin}) — \`unprotectedSameOrigin\` is set.`
-      : `Every application shares the preview origin ${relayOrigin}; set \`previewOrigin\` to give each application its own.`;
+  if (shared) {
+    const message = `Previews run on this page's own origin (${embeddingOrigin}) — \`unprotectedSameOrigin\` is set.`;
     if (!sharedOriginWarned) {
       sharedOriginWarned = true;
       console.warn(`[bfwc] ${message}`);
     }
-    telemetry?.report('ingress.shared_preview_origin', PLATFORM_CONTEXT, { message, origin: relayOrigin ?? embeddingOrigin }); // fails open
+    telemetry?.report('ingress.shared_preview_origin', PLATFORM_CONTEXT, { message, origin: embeddingOrigin }); // fails open
   }
   return relayOrigin;
 }

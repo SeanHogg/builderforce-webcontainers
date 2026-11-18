@@ -4,7 +4,8 @@ import { fakeProvider, settle, stubRuntime, take, until } from './app-fakeProvid
 
 const svc = (id: string, extra: Partial<ServiceSpec> = {}): ServiceSpec => ({ id, type: 'application', runtime: 'fake', command: 'run', ...extra });
 const app = (...services: ServiceSpec[]): ApplicationSpec => ({ projectId: 'p1', services });
-const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000, runtime: stubRuntime() };
+// A fresh runtime per application started: an application's identity is stable, so one runtime holds it once at a time.
+const fast = { stopTimeoutMs: 20, restart: { backoffMs: 5 }, readinessTimeoutMs: 1000, get runtime() { return stubRuntime(); } };
 
 describe('startApplicationRuntime', () => {
   it('validates the spec up front', () => {

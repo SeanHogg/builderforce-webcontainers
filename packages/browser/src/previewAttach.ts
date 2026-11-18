@@ -3,10 +3,15 @@
  * worker forwards requests on, re-attached whenever the worker asks (it was
  * restarted and lost its ports).
  *
- * Every attach carries a fresh nonce chained to the previous one (`AttachProof`,
- * W10 control 2): the worker binds the nonce to the relay client and accepts the
- * next attach of the id from that client only with it. Nonces go only through
- * `transport.attach` (postMessage to the exact relay origin), never into a URL.
+ * Every attach carries a fresh nonce chained to the last one the worker
+ * ACKNOWLEDGED (`AttachProof`, `WireAttached`; W10 control 2): the worker binds
+ * the nonce to the relay client and accepts the next attach of the id from that
+ * client only with it. The chain advances only on the worker's acknowledgement,
+ * so an attach that never arrived leaves it where the worker is; if the two
+ * still part, the worker asks for a fresh attach (`stale_nonce` recovery).
+ * Nonces go only through `transport.attach` (postMessage to the exact relay
+ * origin), never into a URL. An attach carries no egress: that is host-side
+ * configuration of the worker (`relayConfig`).
  *
  * What a channel serves is decided here, on the page, for every request: on an
  * application's own origin only that application's ports (never the dev server,
@@ -14,7 +19,7 @@
  * workspace's ports (see `PreviewOrigins.mayServe`).
  */
 import { parsePortPath, type DevServer, type PortCookieJars } from '@seanhogg/builderforce-webcontainers-core';
-import { isPortPath, isWireCancel, isWireRequest, randomNonce, type WireReply, type WireResponse } from './protocol.js';
+import { isPortPath, isWireAttached, isWireCancel, isWireRequest, randomNonce, type WireReply, type WireResponse } from './protocol.js';
 import { createPortResponder, type ProcessHost } from './node/index.js';
 import type { PreviewTransport } from './transport.js';
 
@@ -36,8 +41,6 @@ export interface PreviewAttachOptions {
   processes: ProcessHost;
   cookies: PortCookieJars;
   scripts: () => readonly string[];
-  /** The external sources this origin's preview documents may connect to (the worker stamps them into their CSP). */
-  egress?: readonly string[];
   /** The runtime's preview-message nonce (the injected bridge's), not an attach nonce. */
   bridgeNonce: string;
   /** Whether a request through this transport may reach `port` (its owner's origin). */
@@ -50,7 +53,10 @@ export interface PreviewAttachOptions {
 export function attachPreview(options: PreviewAttachOptions): () => void {
   const { transport, id, processes } = options;
   let responder: ReturnType<typeof createPortResponder> | undefined;
+  /** The nonce of the last attach the worker acknowledged. */
   let previous: string | undefined;
+  /** The channel of the latest attach: only its acknowledgement advances the chain. */
+  let current: MessageChannel | undefined;
 
   const refuse = (reqId: number, reply: (message: WireReply, transfer: Transferable[]) => void, port?: number) => {
     options.onRefused?.(port);
@@ -59,11 +65,17 @@ export function attachPreview(options: PreviewAttachOptions): () => void {
 
   const attach = () => {
     const channel = new MessageChannel();
+    const nonce = randomNonce();
+    current = channel;
     const reply = (message: WireReply, transfer: Transferable[]) => channel.port1.postMessage(message, transfer);
     // Virtual servers' responses stream (one responder per channel: request ids are per worker).
     responder?.dispose();
     const ports = (responder = createPortResponder(processes, { cookies: options.cookies, scripts: options.scripts, nonce: options.bridgeNonce }));
     channel.port1.onmessage = async (event) => {
+      if (isWireAttached(event.data)) {
+        if (channel === current && event.data.nonce === nonce) previous = nonce;
+        return;
+      }
       if (isWireCancel(event.data)) return ports.cancel(event.data.reqId);
       if (!isWireRequest(event.data)) return;
       const request = event.data;
@@ -76,9 +88,7 @@ export function attachPreview(options: PreviewAttachOptions): () => void {
       const { message, transfer } = toWire(request.reqId, await options.server.handle(request.path, request.search));
       reply(message, transfer);
     };
-    const nonce = randomNonce();
-    transport.attach(id, channel.port2, previous === undefined ? { nonce } : { nonce, previous }, options.egress);
-    previous = nonce;
+    transport.attach(id, channel.port2, previous === undefined ? { nonce } : { nonce, previous });
   };
 
   attach();
