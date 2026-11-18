@@ -1,0 +1,42 @@
+name: Build the .NET runtime bundle
+description: >
+  Install the .NET SDK packages/browser/dotnet-host/global.json pins, restore the NuGet and patched-Npgsql
+  caches, and build the bundle into packages/browser/dotnet-host/out (scripts/build-dotnet-runtime.mjs).
+  The checkout at `root` must already be installed and built (pnpm install, pnpm build). Used by ci.yml
+  and release.yml, so the bundle CI proves is the bundle a release publishes.
+
+inputs:
+  root:
+    description: The checkout to build (the repository root of the source being built).
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Exactly the SDK dotnet-host/global.json pins (it carries the ASP.NET Core shared framework the host
+    # program references); the build script builds Npgsql with the same pin.
+    - uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: ${{ inputs.root }}/packages/browser/dotnet-host/global.json
+
+    # NuGet packages and the patched Npgsql clone, keyed by everything that decides them: the SDK pin, the
+    # host's lock file, the patch, and the pinned Npgsql commit (dotnetBundle.ts). The build script re-fetches
+    # a clone whose marker does not match, so a stale cache is never built.
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.nuget/packages
+          ${{ inputs.root }}/packages/browser/dotnet-host/.work/npgsql-*
+        key: dotnet-bundle-${{ runner.os }}-${{ hashFiles(format('{0}/packages/browser/dotnet-host/global.json', inputs.root), format('{0}/packages/browser/dotnet-host/packages.lock.json', inputs.root), format('{0}/packages/browser/dotnet-host/patches/**', inputs.root), format('{0}/packages/browser/src/runtimes/dotnet/dotnetBundle.ts', inputs.root)) }}
+
+    - name: Build the .NET runtime bundle
+      shell: bash
+      env:
+        DOTNET_NOLOGO: '1'
+        DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+        DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+      run: pnpm -C "${{ inputs.root }}/packages/browser" build:dotnet
+
+    - name: Check the bundle exists
+      shell: bash
+      run: test -f "${{ inputs.root }}/packages/browser/dotnet-host/out/manifest.json"

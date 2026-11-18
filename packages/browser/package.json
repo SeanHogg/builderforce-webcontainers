@@ -58,6 +58,7 @@
   "scripts": {
     "build": "node ./node_modules/typescript-7/bin/tsc -p tsconfig.build.json && node scripts/build-sw.mjs",
     "build:dotnet": "node scripts/build-dotnet-runtime.mjs",
+    "pack:dotnet": "node scripts/pack-dotnet-runtime.mjs",
     "build:rust-fixtures": "node scripts/build-rust-fixtures.mjs",
     "typecheck": "node ./node_modules/typescript-7/bin/tsc --noEmit",
     "test": "vitest run",
