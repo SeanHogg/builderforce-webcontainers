@@ -101,7 +101,9 @@ preview could forge. Set `cspReportUrl` to have violations reported (`report-to 
 Put the preview parent domain (`preview.example.com`) on the
 [Public Suffix List](https://publicsuffix.org/), so browsers treat each
 `<key>.preview.example.com` as its own site: no cookie set on the parent domain
-reaches a sibling application, whatever an application's own code does.
+reaches a sibling application, whatever an application's own code does. (A
+single-label template, `{key}-preview.example.com`, avoids a second-level wildcard
+certificate but cannot get this: those origins stay same-site with `example.com`.)
 
 A custom `node.createWorker` is called as `createWorker(kind, applicationId, { origin, policy })`:
 it must start an application's Worker on `origin` under `policy`.

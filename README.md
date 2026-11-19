@@ -364,6 +364,13 @@ certificate, and a host route that serves the same files on every
 `frame-ancestors` limited to your app), `sw.js` and the process worker scripts —
 at the same path.
 
+On a zone whose certificate covers one level only (e.g. Cloudflare Universal SSL's
+`*.example.com`), use a single-label template instead —
+`previewOriginTemplate('https://{key}-preview.example.com')` — so the existing
+`*.example.com` wildcard DNS record and certificate cover every application. The
+origins are still distinct (storage, DOM, service workers), but they are same-site
+with `example.com`, so the Public Suffix List cannot separate their cookies.
+
 Every preview document the service worker routes gets a Content-Security-Policy
 of `connect-src 'self' blob: data: <previewEgress>; worker-src 'self' blob:`,
 added beside (never replacing) any the app sets, so it can only tighten. Process
