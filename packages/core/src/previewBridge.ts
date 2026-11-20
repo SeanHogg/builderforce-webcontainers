@@ -39,15 +39,16 @@ export const SOCKET_CONNECT_TIMEOUT_MS = 15_000;
 /** `JSON.stringify`, safe inside an inline script. */
 export const scriptLiteral = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
 
-/** The `WebSocket` replacement; runs in every preview page (dev-server documents and virtual-server HTML). `nonce`: the runtime's (see the module doc). */
-export function previewSocketScript(nonce = ''): string {
-  return `<script>(function(){
-  var Native = window.WebSocket;
-  if (!Native || Native.__bfwc) return;
-  var runtime = window.parent !== window ? window.parent : window.opener;
-  var m = /^(.*\\/__bfwc\\/[A-Za-z0-9_-]+\\/)(?:__port\\/(\\d{1,5})(?:\\/|$))?/.exec(location.pathname);
-  if (!runtime || !m || typeof MessageChannel === 'undefined') return;
-  var base = m[1], ownPort = m[2] ? Number(m[2]) : 0;
+/** Page script: `m`, the page's preview path (`[, base, ownPort?]`), or null outside one. */
+const PREVIEW_PATH_JS = `var m = /^(.*\\/__bfwc\\/[A-Za-z0-9_-]+\\/)(?:__port\\/(\\d{1,5})(?:\\/|$))?/.exec(location.pathname);`;
+
+/**
+ * Page script, run once `m` is known: `target(url)`, the virtual server a URL
+ * names — `{ port, path }` for `ws://localhost:3000/…`, `/__bfwc/<id>/__port/3000/…`,
+ * or a path on the page's own host from a page that server served — else null.
+ * The ONE URL mapping both shims (WebSocket, and fetch/XHR/EventSource to localhost) use.
+ */
+const PORT_TARGET_JS = `var base = m[1], ownPort = m[2] ? Number(m[2]) : 0;
   var LOCAL = /^(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])$/i;
   function target(url) {
     var u;
@@ -62,7 +63,75 @@ export function previewSocketScript(nonce = ''): string {
     }
     if (LOCAL.test(u.hostname)) return { port: Number(u.port || (/^(wss|https):$/.test(u.protocol) ? 443 : 80)), path: u.pathname + u.search };
     return null;
+  }`;
+
+/**
+ * `fetch`, `XMLHttpRequest` and `EventSource` for absolute URLs naming another
+ * virtual server (`http://localhost:8000/items`, what a frontend's `API_URL`
+ * holds): such a request is cross-origin, so the service worker never sees it.
+ * It is rewritten to that server's preview path on the page's own origin
+ * (`/__bfwc/<id>/__port/8000/items`), which the worker routes and the host
+ * admits under the port policy like any other. Same-origin URLs are left alone
+ * (the worker sees them, ingress routes included); so is everything else.
+ */
+export function previewFetchScript(): string {
+  return `<script>(function(){
+  if (window.__bfwcFetch) return;
+  ${PREVIEW_PATH_JS}
+  if (!m) return;
+  window.__bfwcFetch = true;
+  ${PORT_TARGET_JS}
+  function rewrite(url) {
+    var u;
+    try { u = new URL(String(url), location.href); } catch (_) { return null; }
+    if (u.host === location.host || !/^https?:$/.test(u.protocol)) return null;
+    var t = target(u.href);
+    return t ? location.origin + base + '__port/' + t.port + t.path + u.hash : null;
   }
+  var nativeFetch = window.fetch;
+  if (nativeFetch) {
+    window.fetch = function (input, init) {
+      if (typeof Request !== 'undefined' && input instanceof Request) {
+        var r = rewrite(input.url), req = input;
+        // A Request's URL is fixed: rebuild it at the new URL, its body read first (a stream body cannot be handed on without \`duplex\`).
+        if (r) return (/^(GET|HEAD)$/i.test(req.method) ? Promise.resolve(null) : req.arrayBuffer()).then(function (body) {
+          return nativeFetch.call(window, new Request(r, { method: req.method, headers: req.headers, body: body, credentials: req.credentials, cache: req.cache, redirect: req.redirect, integrity: req.integrity, signal: req.signal }), init);
+        });
+      } else {
+        var s = rewrite(input);
+        if (s) input = s;
+      }
+      return nativeFetch.call(window, input, init);
+    };
+  }
+  var X = window.XMLHttpRequest;
+  if (X && X.prototype && X.prototype.open) {
+    var open = X.prototype.open;
+    X.prototype.open = function (method, url) {
+      var args = Array.prototype.slice.call(arguments), r = rewrite(url);
+      if (r) args[1] = r;
+      return open.apply(this, args);
+    };
+  }
+  var ES = window.EventSource;
+  if (ES) {
+    var Wrapped = function EventSource(url, init) { return new ES(rewrite(url) || url, init); };
+    Wrapped.prototype = ES.prototype;
+    ['CONNECTING', 'OPEN', 'CLOSED'].forEach(function (k) { Wrapped[k] = ES[k]; });
+    window.EventSource = Wrapped;
+  }
+})();</script>`;
+}
+
+/** The `WebSocket` replacement; runs in every preview page (dev-server documents and virtual-server HTML). `nonce`: the runtime's (see the module doc). */
+export function previewSocketScript(nonce = ''): string {
+  return `<script>(function(){
+  var Native = window.WebSocket;
+  if (!Native || Native.__bfwc) return;
+  var runtime = window.parent !== window ? window.parent : window.opener;
+  ${PREVIEW_PATH_JS}
+  if (!runtime || !m || typeof MessageChannel === 'undefined') return;
+  ${PORT_TARGET_JS}
   var CONNECTING = 0, OPEN = 1, CLOSING = 2, CLOSED = 3;
   var live = new Set();
   window.addEventListener('pagehide', function () {

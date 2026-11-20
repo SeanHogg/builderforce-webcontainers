@@ -9,6 +9,8 @@ export interface ServerAddress {
   port: number;
   /** Where a browser reaches it (the preview URL for that port). */
   url: string;
+  /** A dev-server handoff only: the directory it serves (the handing-off process's working directory, absolute). */
+  root?: string;
 }
 
 export interface PortChange extends ServerAddress {

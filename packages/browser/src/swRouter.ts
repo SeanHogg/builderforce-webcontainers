@@ -1,6 +1,19 @@
-import { PREVIEW_ID, attachProofOf, isPortPath, isWireReply, previewPrefix, type AttachProof, type WireAttached, type WireCancel, type WireResponse } from './protocol.js';
+import {
+  PREVIEW_ID,
+  attachProofOf,
+  ingressRoutesOf,
+  isPortPath,
+  isWireReply,
+  previewPrefix,
+  type AttachProof,
+  type RequestOrigin,
+  type WireAttached,
+  type WireCancel,
+  type WireResponse,
+} from './protocol.js';
 import type { AttachClient, AttachMode, IngressRejection } from './swBindings.js';
 import { createIngressGuard } from './swGuard.js';
+import { createSwIngressTable } from './swIngressTable.js';
 
 export type { LookupRequest } from './swGuard.js';
 import { DEFAULT_MAX_BODY_BYTES, readBoundedBody, type BodySource } from './swBody.js';
@@ -20,6 +33,8 @@ export interface PreviewTarget {
   id: string;
   path: string;
   search: string;
+  /** A port request a preview page made (see `RequestOrigin`): forwarded to the page side, which decides who the page acts as. */
+  from?: RequestOrigin;
 }
 
 /** The parts of a request a virtual server needs (method, headers, body). */
@@ -112,6 +127,8 @@ export function createSwRouter(options: SwRouterOptions) {
     ports.set(id, port);
     port.onmessage = (event) => {
       const reply = event.data;
+      const routes = ingressRoutesOf(reply);
+      if (routes) return ingress.set(id, routes);
       if (!isWireReply(reply)) return;
       if (reply.type === 'response') {
         pending.get(reply.reqId)?.(reply);
@@ -194,20 +211,40 @@ export function createSwRouter(options: SwRouterOptions) {
    * clients make, so a same-origin request from such a page that falls outside
    * the preview prefix is mapped back under that server's path.
    */
-  const clientServers = new Map<string, { id: string; prefix: string }>();
+  const clientServers = new Map<string, { id: string; prefix: string; port: number }>();
 
   function rememberClient(clientId: string | undefined, target: PreviewTarget): void {
     if (!clientId || !isPortPath(target.path)) return;
-    const prefix = /^\/__port\/\d+/.exec(target.path)![0];
-    clientServers.set(clientId, { id: target.id, prefix });
+    const found = /^\/__port\/(\d+)/.exec(target.path)!;
+    clientServers.set(clientId, { id: target.id, prefix: found[0], port: Number(found[1]) });
     if (clientServers.size > 200) clientServers.delete(clientServers.keys().next().value!);
   }
 
+  /** Each preview's ingress table (`swIngressTable`): what a page's absolute URLs route by. */
+  const ingress = createSwIngressTable({ waitMs: reattachWaitMs, requestAttach: (id) => void portFor(id) });
+
+  /**
+   * A same-origin request outside the preview prefix: by the ingress table first
+   * (a virtual-server page: its non-catch-all routes only), then — for a
+   * virtual-server page — back under the server that served it.
+   */
   function matchForClient(url: URL, clientId: string | undefined, origin: string): PreviewTarget | null {
     const direct = match(url);
-    if (direct || !clientId || url.origin !== origin) return direct;
+    if (direct) return clientId ? withOrigin(direct, clientId) : direct;
+    if (!clientId || url.origin !== origin) return null;
     const server = clientServers.get(clientId);
+    const id = server?.id ?? guard.previewOf(clientId);
+    const routed = id === undefined ? null : ingress.route(id, url, server);
+    if (routed) return routed;
     return server ? { id: server.id, path: server.prefix + url.pathname, search: url.search } : null;
+  }
+
+  /** A port request from a page of the same preview carries who made it (`from`); anything else (the host's, a navigation) goes as it is. */
+  function withOrigin(target: PreviewTarget, clientId: string): PreviewTarget {
+    if (!isPortPath(target.path)) return target;
+    const server = clientServers.get(clientId);
+    if (server?.id === target.id) return { ...target, from: { port: server.port } };
+    return guard.previewOf(clientId) === target.id ? { ...target, from: {} } : target;
   }
 
   async function respond(target: PreviewTarget, details?: RequestDetails): Promise<RoutedResponse> {
@@ -231,12 +268,13 @@ export function createSwRouter(options: SwRouterOptions) {
         });
         resolve({ status: response.status, headers: response.headers, body });
       });
-      port.postMessage({ type: 'request', reqId, path: target.path, search: target.search, ...details });
+      port.postMessage({ type: 'request', reqId, path: target.path, search: target.search, ...details, ...(target.from ? { from: target.from } : {}) });
     });
   }
 
   function detach(id: string): boolean {
     guard.release(id);
+    ingress.forget(id);
     const port = ports.get(id);
     if (port) releasePort(id, port);
     return !!port;
@@ -245,7 +283,9 @@ export function createSwRouter(options: SwRouterOptions) {
 
   /** Judge the client (rebuilding its remap if it is a virtual-server page), then route the URL for it. */
   async function resolveForClient(url: URL, clientId: string, origin: string): Promise<PreviewTarget | null> {
-    await guard.identify(clientId);
+    const scope = await guard.identify(clientId);
+    // A dev-server document has no remap to fall back on: its absolute URLs route only by the ingress table, which a restart lost.
+    if (typeof scope !== 'string' && !clientServers.has(clientId)) await ingress.await(scope.preview);
     return matchForClient(url, clientId, origin);
   }
 

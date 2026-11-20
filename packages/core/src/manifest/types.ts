@@ -1,0 +1,240 @@
+/**
+ * The app manifest, v1: `builderforce.json` with `"version": 1`. One file
+ * declares the whole application — services, resources (databases, caches,
+ * queues, storage, mail, …), scheduled jobs, ingress and environments — and
+ * `toApplicationSpec` turns one environment of it into the `ApplicationSpec`
+ * the application runtime runs. Every entry is keyed by id, so ids cannot
+ * repeat and environment overrides merge per key. Pure data: no browser APIs.
+ */
+
+/** The canonical `$schema` URL of a v1 manifest. */
+export const APP_MANIFEST_SCHEMA_URL = 'https://builderforce.ai/schema/app.v1.json';
+
+/** Where an environment runs. `browser` is this runtime (temporary); the rest are durable infrastructure. */
+export type ManifestTargetId = 'browser' | 'cloudflare' | 'aws' | 'azure' | 'gcp';
+
+export const MANIFEST_TARGETS: readonly ManifestTargetId[] = ['browser', 'cloudflare', 'aws', 'azure', 'gcp'];
+
+/** Every environment is one or the other. `debug` is allowed only on `non-production`. */
+export type EnvironmentTier = 'production' | 'non-production';
+
+export const ENVIRONMENT_TIERS: readonly EnvironmentTier[] = ['production', 'non-production'];
+
+/** `session`: runs while the session that started it lives. `always-on`: needs a durable target. */
+export type Availability = 'session' | 'always-on';
+
+// ---------------------------------------------------------------------------
+// Resources
+// ---------------------------------------------------------------------------
+
+export interface PostgresResource {
+  type: 'postgres';
+  /** Data outlives the application. Default false. */
+  persistent?: boolean;
+  /** Postgres extensions, e.g. `vector`. */
+  extensions?: string[];
+  /** Database name. Default: the provider's. */
+  name?: string;
+}
+
+export interface RedisResource {
+  type: 'redis';
+  persistent?: boolean;
+  maxMemoryMb?: number;
+}
+
+/** `redis`: a queue on a `redis` resource named by `on`. `native`: the target's own queue service. */
+export type QueueEngine = 'redis' | 'native';
+
+export interface QueueResource {
+  type: 'queue';
+  engine: QueueEngine;
+  /** The `redis` resource the queue lives on (engine `redis`). */
+  on?: string;
+}
+
+export interface ObjectStorageResource {
+  type: 'object-storage';
+}
+
+export interface MailResource {
+  type: 'mail';
+}
+
+export type GraphEngine = 'neo4j' | 'memgraph' | 'age';
+
+export interface GraphResource {
+  type: 'graph';
+  engine: GraphEngine;
+}
+
+/** A Connected Account (Stripe, Slack, …) by id; its credentials reach the runtime from the vault, never the file. */
+export interface ConnectionResource {
+  type: 'connection';
+  connection: string;
+}
+
+/** An OpenTofu / Terraform / Bicep / CloudFormation module only a customer-cloud target applies. */
+export interface ExternalResource {
+  type: 'external';
+  module: string;
+  /** Module outputs that become environment variables. */
+  outputs?: string[];
+}
+
+export type ResourceSpec =
+  | PostgresResource
+  | RedisResource
+  | QueueResource
+  | ObjectStorageResource
+  | MailResource
+  | GraphResource
+  | ConnectionResource
+  | ExternalResource;
+
+export type ResourceType = ResourceSpec['type'];
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+/** When a service is ready. Exactly one of the kind keys, plus an optional `timeout` duration (`30s`). */
+export type ManifestReadiness = (
+  /** `GET <path>` answers 2xx or 3xx. */
+  | { http: string }
+  /** The port opens. */
+  | { port: true }
+  /** The database accepts a query. */
+  | { query: true }
+  /** The process exits with code 0. */
+  | { exitZero: true }
+  /** The process started (a worker with no port). */
+  | { started: true }
+) & { timeout?: string };
+
+export type ManifestRestart = 'never' | 'on-failure' | 'always';
+
+export type ScaleMetric = 'concurrency' | 'cpu' | 'requests';
+
+export interface ScaleSpec {
+  min?: number;
+  max?: number;
+  metric?: ScaleMetric;
+}
+
+export interface ManifestService {
+  /** The runtime provider that starts it: `node`, `python`, `php`, `dotnet`, `rust`. */
+  runtime: string;
+  /** Project-relative directory. Default `/`. */
+  root?: string;
+  command: string;
+  args?: string[];
+  port?: number;
+  /** Default `backend`. A `frontend` never receives credentials. */
+  role?: 'frontend' | 'backend';
+  /** Resource ids this service connects to. */
+  uses?: string[];
+  /** Service ids that must be ready first. */
+  dependsOn?: string[];
+  readiness?: ManifestReadiness;
+  restart?: ManifestRestart;
+  /** Wins over everything the runtime injects. */
+  env?: Record<string, string>;
+  availability?: Availability;
+  scale?: ScaleSpec;
+}
+
+// ---------------------------------------------------------------------------
+// Jobs
+// ---------------------------------------------------------------------------
+
+/** Run a command in a service's environment. */
+export interface JobRun {
+  service: string;
+  command: string;
+}
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+export const HTTP_METHODS: readonly HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+
+/** Call one of a service's HTTP endpoints. Default method `POST`. */
+export interface JobInvoke {
+  service: string;
+  method?: HttpMethod;
+  path: string;
+}
+
+/** `allow`: runs may overlap. `forbid`: skip a fire while one runs. `replace`: stop the running one. */
+export type JobConcurrency = 'allow' | 'forbid' | 'replace';
+
+/** What a fire missed while nothing was running does: `skip` it, or `run-once` on wake. */
+export type MissedPolicy = 'skip' | 'run-once';
+
+interface JobBase {
+  /** Five-field cron, e.g. `0 3 * * *`. */
+  schedule: string;
+  /** IANA time zone. Default `UTC`. */
+  timezone?: string;
+  concurrency?: JobConcurrency;
+  /** Duration, e.g. `10m`. */
+  timeout?: string;
+  missed?: MissedPolicy;
+  availability?: Availability;
+}
+
+export type JobSpec = JobBase & ({ run: JobRun; invoke?: never } | { invoke: JobInvoke; run?: never });
+
+// ---------------------------------------------------------------------------
+// Ingress and environments
+// ---------------------------------------------------------------------------
+
+export interface IngressRoute {
+  path: string;
+  service: string;
+}
+
+export interface IngressSpec {
+  routes: IngressRoute[];
+}
+
+/** Every key optional, all the way down; arrays are values (replaced, never concatenated). */
+export type DeepPartial<T> = T extends readonly unknown[] ? T : T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
+
+/** Per-key changes an environment makes to the base manifest. */
+export interface ManifestOverrides {
+  services?: Record<string, DeepPartial<ManifestService>>;
+  resources?: Record<string, DeepPartial<ResourceSpec>>;
+  jobs?: Record<string, DeepPartial<JobSpec>>;
+}
+
+export interface EnvironmentSpec {
+  target: ManifestTargetId;
+  /** The Connected Account (cloud credentials) a durable target deploys with. */
+  connection?: string;
+  tier: EnvironmentTier;
+  /** Non-production only; on production it is a validation error. */
+  debug?: boolean;
+  overrides?: ManifestOverrides;
+}
+
+/** An environment by name, as `resolveEnvironment` hands it out. */
+export interface ResolvedEnvironment extends EnvironmentSpec {
+  name: string;
+}
+
+export interface AppManifest {
+  $schema?: string;
+  version: 1;
+  name?: string;
+  resources?: Record<string, ResourceSpec>;
+  services?: Record<string, ManifestService>;
+  jobs?: Record<string, JobSpec>;
+  ingress?: IngressSpec;
+  environments?: Record<string, EnvironmentSpec>;
+}
+
+/** The environments a manifest that declares none has. */
+export const DEFAULT_ENVIRONMENTS: Readonly<Record<string, EnvironmentSpec>> = {
+  local: { target: 'browser', tier: 'non-production' },
+};

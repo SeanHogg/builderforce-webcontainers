@@ -25,7 +25,7 @@ own origin with `startPreviewRuntime({ relayUrl })`. That origin serves
 `relay.html`, `sw.js` and `process-worker.js` (strings in `@seanhogg/builderforce-webcontainers/assets`)
 with the headers below. Same-origin mode (above) needs `unprotectedSameOrigin: true`,
 or the runtime refuses to boot (`ingress.same_origin_refused`); the relay must be
-https. Applications (`startApplicationRuntime`) need their own origin
+https (plain http only on a loopback host, for the local launcher below). Applications (`startApplicationRuntime`) need their own origin
 (`previewOrigin`, which needs wildcard DNS and a host route serving the relay files
 on `<key>.preview.example.com`): an application started without one is refused
 (`PreviewShieldError`, `ingress.app_origin_required`) unless you opt out by name
@@ -115,6 +115,34 @@ the project in a Web Worker. `.vue` and `.svelte` files need no setup. See the
 
 The package re-exports everything from
 [`@seanhogg/builderforce-webcontainers-core`](../core).
+
+## Local launcher (`./launcher/server`, `bfwc-launch`)
+
+Run a project's `builderforce.json` application in an ordinary browser, from Node
+(an editor extension, a terminal):
+
+```ts
+import { createLocalLauncher } from '@seanhogg/builderforce-webcontainers/launcher/server';
+
+const launcher = await createLocalLauncher({ projectDir, environment: 'local' });
+openInBrowser(launcher.url); // http://localhost:<port>/#token=…
+// later: await launcher.close();
+```
+
+or `npx bfwc-launch [dir] [--env name] [--port n]`. It binds 127.0.0.1 only and serves,
+on one port, the launcher page on `http://localhost:<port>`, the relay on
+`http://127.0.0.1:<port>` and each application on its own `http://<key>.localhost:<port>`
+(per-application origins hold locally: browsers treat loopback hosts as secure contexts,
+and the preview-origin check accepts plain http on `localhost`, `*.localhost` and
+`127.0.0.1` only). Every other `Host` is refused, and `/__bf/*` (the manifest, the project
+tree, a change stream) needs the per-launch token. The runtime files get the headers
+above, with `frame-ancestors` limited to the launcher page; no reporting endpoint and no
+signed policies (every Worker gets the most restrictive policy). The project tree skips
+`node_modules`, `.git`, `dist`, `.next`, `bin`, `obj`, `vendor`, `__pycache__` and `.venv`,
+caps at 5,000 files, 2 MB per file and 50 MB in all (anything left out is listed), and
+never follows a link out of the project. .NET services need
+`@seanhogg/builderforce-webcontainers-dotnet` installed (or `dotnetBundleDir`); without it
+they are declined with that reason.
 
 ## Angular
 

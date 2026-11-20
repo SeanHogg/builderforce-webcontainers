@@ -14,6 +14,7 @@
     "src/sw.ts",
     "src/relay.ts",
     "src/check/worker.ts",
-    "src/node/worker.ts"
+    "src/node/worker.ts",
+    "src/launcher/page"
   ]
 }

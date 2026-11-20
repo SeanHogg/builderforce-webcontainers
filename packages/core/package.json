@@ -17,6 +17,10 @@
     "./app": {
       "types": "./dist/app/index.d.ts",
       "import": "./dist/app/index.js"
+    },
+    "./manifest": {
+      "types": "./dist/manifest/index.d.ts",
+      "import": "./dist/manifest/index.js"
     }
   },
   "type": "module",

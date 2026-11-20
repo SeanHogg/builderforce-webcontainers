@@ -27,7 +27,9 @@ import {
   ServerEvents,
   PLATFORM_CONTEXT,
   allocatePid,
+  baseToProject,
   bufferResponse,
+  normalizePath,
   createIpcEndpoint,
   runArguments,
   signalExitCode,
@@ -59,6 +61,7 @@ import { opEvidence } from './fsScope.js';
 import { IngressLimit } from '../security/ingressLimit.js';
 import { ViewSupplies } from './viewSupply.js';
 import type { Proc } from './procRecord.js';
+import { DevHandoffs } from './devHandoffs.js';
 
 /** The part of `Worker` the host uses — a real Worker, or an in-thread fake in tests. */
 export interface WorkerLike {
@@ -116,6 +119,8 @@ export class ProcessHost {
   private readonly ingress: IngressLimit;
   /** Servers listening, ports opening and closing. */
   readonly servers = new ServerEvents();
+  /** The live dev-server handoffs, each its announcing process's (`devHandoffs`). */
+  readonly handoffs = new DevHandoffs();
   private readonly procs = new Set<Proc>();
   private readonly stopPorts: () => void;
   /** Each process's servers and loopback requests, as itself. */
@@ -328,7 +333,31 @@ export class ProcessHost {
     proc.resolveExit(code);
   }
 
+  /**
+   * A server announced by `proc`. The URL is the page's, never the Worker's: a
+   * port this process registered is served at its owner's preview origin
+   * (serverUrl); a port nobody listens on is a dev-server handoff, served at the
+   * runtime's preview URL and recorded as THIS process's (`handoffs`, with its
+   * page-side identity). A port another process listens on is not this one's to
+   * announce. A handoff's root counts only within the process's own working
+   * directory (the host confines it to the project too, host.ts).
+   */
+  private onListening(proc: Proc, message: Extract<WorkerToHost, { type: 'listening' }>): void {
+    const port = Number(message.port);
+    if (!Number.isInteger(port) || port <= 0 || port >= 65536) return;
+    const handoff = !proc.registrations.has(port);
+    if (handoff && this.ports.ownerOf(port)) return;
+    const url = handoff ? this.options.previewUrl : this.serverUrl(port);
+    if (!url) return;
+    if (!handoff) return this.servers.announce({ port, url });
+    const root = typeof message.root === 'string' && baseToProject(proc.info.cwd, message.root) !== undefined ? normalizePath(message.root) : undefined;
+    const context = this.identityOf(proc.pid);
+    this.handoffs.announce({ pid: proc.pid, port, ...(root === undefined ? {} : { root }), ...(context ? { context } : {}) });
+    this.servers.announce(root === undefined ? { port, url } : { port, url, root });
+  }
+
   private cleanup(proc: Proc): void {
+    this.handoffs.end(proc.pid);
     this.served.close(proc);
     proc.connections.closeAll();
     proc.ipc?.closed();
@@ -370,7 +399,8 @@ export class ProcessHost {
       case 'listen':
         return this.served.listen(proc, message);
       case 'unlisten':
-        return this.served.unlisten(proc, message.port);
+        this.served.unlisten(proc, message.port);
+        return this.handoffs.end(proc.pid, message.port); // a handoff withdrawn (interrupted) unlistens the port it announced
       case 'response-head':
       case 'response-chunk':
       case 'response-end':
@@ -379,14 +409,8 @@ export class ProcessHost {
         return this.served.loopback(proc, message);
       case 'request-cancel':
         return proc.loopbacks.get(message.reqId)?.();
-      case 'listening': {
-        // The URL is the page's, never the Worker's: a port this process registered is served at its owner's
-        // preview origin (serverUrl); anything else is the dev-server handoff, served at the runtime's preview URL.
-        const port = Number(message.port);
-        const url = proc.registrations.has(port) ? this.serverUrl(port) : this.options.previewUrl;
-        if (url && Number.isInteger(port) && port > 0 && port < 65536) this.servers.announce({ port, url });
-        return;
-      }
+      case 'listening':
+        return this.onListening(proc, message);
       default:
         // A message of one process kind (python-installed): its policy decides, knowing who sent it — from the
         // page-side record of this Worker, never the message. Each application writes only its own record

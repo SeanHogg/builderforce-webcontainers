@@ -75,7 +75,7 @@ export type { StylesheetContext } from './styles/compile.js';
 export { scopeCssModule, cssModuleToModule } from './styles/cssModules.js';
 export type { ScopedCssModule, ComposedClass } from './styles/cssModules.js';
 export { PACKAGE_STYLE_DIR, packageStylePath, packageStyleSpecifier, linkStylesheetModule } from './styles/packageStyles.js';
-export { previewSocketScript, previewCookieScript, bridgeInsertionPoint, SOCKET_MESSAGE_TYPE, COOKIE_MESSAGE_TYPE, SOCKET_CONNECT_TIMEOUT_MS } from './previewBridge.js';
+export { previewSocketScript, previewFetchScript, previewCookieScript, bridgeInsertionPoint, SOCKET_MESSAGE_TYPE, COOKIE_MESSAGE_TYPE, SOCKET_CONNECT_TIMEOUT_MS } from './previewBridge.js';
 export { mimeFor } from './mime.js';
 export { attributionScript, attributionFromMarker, injectAttribution, ATTRIBUTION_URL, ATTRIBUTION_LABEL, ATTRIBUTION_OFF_MARKER } from './attribution.js';
 export type { AttributionOptions, AttributionSetting } from './attribution.js';

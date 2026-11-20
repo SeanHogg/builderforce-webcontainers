@@ -12,6 +12,12 @@
           "Microsoft.CodeAnalysis.Common": "[5.0.0]"
         }
       },
+      "Microsoft.DotNet.HotReload.WebAssembly.Browser": {
+        "type": "Direct",
+        "requested": "[10.0.115, )",
+        "resolved": "10.0.115",
+        "contentHash": "wv++IOkJ6cKmGgBRaygfo5ftwac7eWodWs3MmgBnQWu/ELmnJMEAutQy2Z3WAG0uyRwRtgHLfKVzwQfIr2svqw=="
+      },
       "Microsoft.NET.Sdk.WebAssembly.Pack": {
         "type": "Direct",
         "requested": "[10.0.15, )",

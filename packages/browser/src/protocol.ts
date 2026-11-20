@@ -113,6 +113,52 @@ export interface WireRequest {
   method?: string;
   headers?: Record<string, string>;
   body?: ArrayBuffer | null;
+  /** A port request a preview page made (never a navigation, never the host's): see {@link RequestOrigin}. */
+  from?: RequestOrigin;
+}
+
+/**
+ * Which preview page made a port request, as the worker knows it from its own
+ * client bindings (never from the request): `port`, the virtual server that
+ * served the page (absent for a dev-server document); `ingress`, the worker
+ * routed it by the application's ingress table (it was a path outside the
+ * preview prefix). The host decides who the page acts as from this.
+ */
+export interface RequestOrigin {
+  port?: number;
+  ingress?: true;
+}
+
+/** One ingress route as the worker applies it: a path prefix (no trailing `/`, `/` the catch-all) and the port that serves it. */
+export interface WireIngressRoute {
+  path: string;
+  port: number;
+}
+
+/**
+ * page → worker, on the attached port, after every attach and whenever it
+ * changes: the ingress table of the application this origin serves (empty:
+ * none). Only the host holds the other end of that port, so a preview can
+ * never set it.
+ */
+export interface WireIngress {
+  type: 'ingress';
+  routes: WireIngressRoute[];
+}
+
+/** The routes of a well-formed ingress message (bad entries dropped), longest path first; null for anything else. */
+export function ingressRoutesOf(value: unknown): WireIngressRoute[] | null {
+  const v = value as WireIngress | null;
+  if (!v || v.type !== 'ingress' || !Array.isArray(v.routes)) return null;
+  return v.routes
+    .filter((route): route is WireIngressRoute => !!route && typeof route.path === 'string' && route.path.startsWith('/') && Number.isInteger(route.port) && route.port > 0 && route.port < 65536)
+    .map((route) => ({ path: route.path, port: route.port }))
+    .sort((a, b) => b.path.length - a.path.length);
+}
+
+/** The route for `pathname`: the longest whose path is it or a whole-segment prefix of it (`/api` takes `/api/x`, never `/apix`). */
+export function matchIngressRoute(routes: readonly WireIngressRoute[], pathname: string): WireIngressRoute | undefined {
+  return routes.find((route) => route.path === '/' || pathname === route.path || pathname.startsWith(route.path + '/'));
 }
 
 /** The path segment that routes a preview request to a virtual server: `/__port/3000/…`. */

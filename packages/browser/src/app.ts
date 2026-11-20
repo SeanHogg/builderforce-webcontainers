@@ -36,3 +36,5 @@ export { trackWrappedFsWrites } from './runtimes/emscripten/wrappedFsWrites.js';
 export type { EmscriptenFsStream, WrappableEmscriptenFs } from './runtimes/emscripten/wrappedFsWrites.js';
 export type { ProcessKindPolicy, PythonExtensionRef, WorkerKind } from './node/index.js';
 export * from '@seanhogg/builderforce-webcontainers-core/app';
+// The app manifest v1 (`builderforce.json`): parse, validate, environments, and `toApplicationSpec` for `startApplicationRuntime`.
+export * from '@seanhogg/builderforce-webcontainers-core/manifest';

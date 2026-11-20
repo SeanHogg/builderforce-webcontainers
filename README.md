@@ -217,10 +217,21 @@ and closing, for a host that lists running servers.
   project's, then `~/.npmrc`) sets the registry, per-scope registries
   (`@acme:registry=…`) and auth tokens (`//npm.acme.dev/:_authToken=${NPM_TOKEN}`);
   a private registry must allow CORS requests with an `Authorization` header.
-* **Dev servers.** `npm run dev` running `vite`, and `npm start` running
-  `react-scripts start`, hand off to the built-in preview: they print its URL,
-  fire `onServerListening` and run until Ctrl-C. (Real Vite needs esbuild's native
-  binary.)
+* **Dev servers.** `npm run dev` running `vite`, `npm start` running
+  `react-scripts start`, and Angular's `ng serve` (directly, via `npx ng serve`
+  or a script; `--port` honoured) hand off to the built-in preview: they print its
+  URL, fire `onServerListening` and run until Ctrl-C. The preview serves the
+  directory the command ran in, so a frontend in `/web` beside an `/api` is
+  served from `/web`. (Real Vite needs esbuild's native binary.)
+* **Ingress.** An application whose spec (or `builderforce.json`) declares
+  `ingress.routes` (`{ path: '/api', serviceId: 'api' }`, longest prefix wins,
+  `/` the catch-all) gets them applied by the preview service worker: a
+  frontend's relative `fetch('/api/items')`, `<img src>`, form or `EventSource`
+  reaches the routed service's port. The table goes host → worker on the
+  attached port only, never from a preview; each request acts as the page's
+  own service (or the frontend), so it passes only along a declared
+  `dependsOn` edge. Absolute `http://localhost:<port>/…` URLs in preview pages
+  (`fetch`, XHR, `EventSource`) are mapped to that port's preview path too.
 * **pnpm and yarn.** `pnpm install|add|remove|run|dlx|<script>` and
   `yarn [install]|add|remove|run|dlx|<script>` drive the same installer and script
   runner as npm (`-D`/`--dev` saves to devDependencies), so a README's commands

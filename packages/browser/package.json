@@ -43,7 +43,14 @@
     "./dotnet-worker.js": "./dist/dotnet-worker.js",
     "./runtimes/dotnet/worker.js": "./dist/runtimes/dotnet/worker.js",
     "./rust-worker.js": "./dist/rust-worker.js",
-    "./runtimes/rust/worker.js": "./dist/runtimes/rust/worker.js"
+    "./runtimes/rust/worker.js": "./dist/runtimes/rust/worker.js",
+    "./launcher/server": {
+      "types": "./dist/launcher/server/index.d.ts",
+      "import": "./dist/launcher/server/index.js"
+    }
+  },
+  "bin": {
+    "bfwc-launch": "dist/launcher/server/cli.js"
   },
   "type": "module",
   "sideEffects": false,
@@ -56,7 +63,7 @@
     "rust-fixtures/bfwc-wasi/src"
   ],
   "scripts": {
-    "build": "node ./node_modules/typescript-7/bin/tsc -p tsconfig.build.json && node scripts/build-sw.mjs",
+    "build": "node ./node_modules/typescript-7/bin/tsc -p tsconfig.build.json && node scripts/build-sw.mjs && node scripts/build-launcher.mjs",
     "build:dotnet": "node scripts/build-dotnet-runtime.mjs",
     "pack:dotnet": "node scripts/pack-dotnet-runtime.mjs",
     "build:rust-fixtures": "node scripts/build-rust-fixtures.mjs",
@@ -97,12 +104,15 @@
   },
   "dependencies": {
     "@seanhogg/builderforce-webcontainers-core": "workspace:^",
-    "esbuild-wasm": "^0.24.0"
+    "esbuild-wasm": "^0.24.0",
+    "node-forge": "^1.4.3"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.16",
     "@php-wasm/node": "3.1.62",
     "@php-wasm/universal": "3.1.62",
+    "@types/node": "^20.19.0",
+    "@types/node-forge": "^1.3.14",
     "@vue/compiler-sfc": "^3.5.0",
     "drizzle-orm": "^0.45.4",
     "esbuild": "^0.24.0",

@@ -3,6 +3,7 @@ import { parse, type SimpleCommand } from '../../src/shell/parse.js';
 import { exec, kernelWith, readAll } from '../node/helpers.js';
 import { fakeRegistry, REGISTRY } from '../installer/fakeRegistry.js';
 import type { Kernel } from '../../src/system/kernel.js';
+import { matchDevServer, runDevServerHandoff } from '../../src/shell/devHandoff.js';
 
 const sh = (kernel: Kernel, script: string, options: { cwd?: string; input?: string } = {}) => exec(kernel, 'bfsh', ['-c', script], options);
 
@@ -161,6 +162,60 @@ describe('shell execution', () => {
     proc.kill('SIGINT');
     await proc.wait();
     expect(await output).toContain('https://app.test/__bfwc/p1/');
+  });
+
+  /** Start `command args` in `cwd`; resolves with what it announced, then stops it. */
+  async function announced(kernel: Kernel, command: string, args: string[], cwd?: string) {
+    const ready = new Promise<{ port: number; url: string; root?: string }>((resolve) => kernel.servers.onListening(resolve));
+    const proc = kernel.run(command, args, { cwd });
+    const server = await ready;
+    proc.kill('SIGINT');
+    await proc.wait();
+    return server;
+  }
+
+  it('announces the working directory as the root, so a frontend in /web is served from /web', async () => {
+    const kernel = kernelWith(
+      {
+        'web/package.json': JSON.stringify({ scripts: { dev: 'vite' }, devDependencies: { vite: '^5.4.0' } }),
+        'web/index.html': '<!doctype html><script type="module" src="/src/main.ts"></script>',
+        'api/package.json': JSON.stringify({ scripts: { start: 'node server.js' } }),
+      },
+      { previewUrl: 'https://app.test/__bfwc/p1/' },
+    );
+    expect(await announced(kernel, 'npm', ['run', 'dev'], '/web')).toEqual({ port: 5173, url: 'https://app.test/__bfwc/p1/', root: '/web' });
+    expect(await announced(kernel, 'bfsh', ['-c', 'cd web && npx vite --port 5180'])).toEqual({ port: 5180, url: 'https://app.test/__bfwc/p1/', root: '/web' });
+  });
+
+  it('hands Angular `ng serve` off (directly, through npx and through `npm start`), honouring --port', async () => {
+    const files = {
+      'package.json': JSON.stringify({ scripts: { start: 'ng serve --port 4300' }, dependencies: { '@angular/core': '^19.0.0' } }),
+      'angular.json': '{}',
+    };
+    const kernel = kernelWith(files, { previewUrl: 'https://app.test/__bfwc/p1/' });
+    expect(await announced(kernel, 'npm', ['start'])).toMatchObject({ port: 4300, root: '/' });
+    expect(await announced(kernel, 'npx', ['ng', 'serve'])).toMatchObject({ port: 4200 });
+    expect(await announced(kernel, 'bfsh', ['-c', 'ng s --port=4321'])).toMatchObject({ port: 4321 });
+    expect(matchDevServer(['ng', 'build'])).toBeUndefined();
+  });
+
+  it('withdraws the handoff when it is interrupted, so the host stops serving its directory', async () => {
+    const withdrawn: number[] = [];
+    const abort = new AbortController();
+    const ctx = {
+      cwd: '/web',
+      env: {},
+      signal: abort.signal,
+      io: { stdout: () => undefined, stderr: () => undefined },
+      system: { previewUrl: 'https://app.test/__bfwc/p1/', announceServer: (port: number) => () => void withdrawn.push(port) },
+    };
+    const running = runDevServerHandoff(ctx as never, ['vite'], matchDevServer(['vite'])!);
+    await Promise.resolve();
+    expect(withdrawn).toEqual([]);
+    abort.abort();
+    expect(await running).toBe(130);
+    expect(withdrawn).toEqual([5173]);
+    expect(matchDevServer(['ng', 'serve'])).toEqual({ tool: 'angular', defaultPort: 4200 });
   });
 });
 

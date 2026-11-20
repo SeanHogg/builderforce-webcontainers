@@ -25,7 +25,7 @@ import type {
   ZipExportOptions,
   ZipImportLimits,
 } from '@seanhogg/builderforce-webcontainers-core';
-import type { ServiceGraphPolicy } from '@seanhogg/builderforce-webcontainers-core/app';
+import type { ApplicationSpec, ServiceGraphPolicy } from '@seanhogg/builderforce-webcontainers-core/app';
 import type { NodeRuntimeOptions, ProcessInfo } from './node/index.js';
 import type { WorkerLike } from './node/processHost.js';
 import type { PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
@@ -258,6 +258,14 @@ export interface PreviewRuntime {
   connect(port: number, caller?: SecurityContext): ByteChannel | undefined;
   /** The runtime's port policy: pass it as `startApplicationRuntime`'s `portPolicy`, so each application's `dependsOn` graph is in force while it runs. */
   readonly portPolicy: ServiceGraphPolicy;
+  /**
+   * Put an application's ingress (`spec.ingress`) in force on its preview origin
+   * — and on the shared origin the instant preview lives on — until the returned
+   * unregister: a page's same-origin request outside `/__bfwc/` goes to the
+   * service its longest matching route names, under the port policy.
+   * `startApplicationRuntime` calls it; the table never comes from a preview.
+   */
+  registerIngress(applicationId: string, spec: ApplicationSpec): () => void;
   /** End every process attributed to an application (or one of its services): pass the runtime as `startApplicationRuntime`'s `processes`. */
   killApplication(applicationId: string, serviceId?: string): void;
   /** The application was disposed (`startApplicationRuntime` calls it): drop its `pip install` record and training state. */

@@ -84,6 +84,8 @@ export interface ApplicationHost extends AttributedProcesses {
   readonly portPolicy: ApplicationPortPolicy;
   /** The application was disposed: drop what the runtime keeps for it (its `pip install` record, training state). */
   forgetApplication?(applicationId: string): void;
+  /** Put the spec's `ingress` in force on the application's preview origins while it runs (a `PreviewRuntime` does); returns the unregister. */
+  registerIngress?(applicationId: string, spec: ApplicationSpec): () => void;
 }
 
 export interface ApplicationRuntimeOptions {

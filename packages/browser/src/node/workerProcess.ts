@@ -165,7 +165,11 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
         return local ? acceptConnection(local.accept) : connections.dial(port);
       },
       serverUrl: (port) => new URL(portPath(message.previewBase, port), message.previewOrigin).href,
-      announceServer: (port, url) => deps.post({ type: 'listening', port, url }),
+      announceServer: (port, url, root) => {
+        deps.post(root === undefined ? { type: 'listening', port, url } : { type: 'listening', port, url, root });
+        // A handoff holds no port here: withdrawing it unlistens the port it announced, which ends it on the page (`devHandoffs`).
+        return () => deps.post({ type: 'unlisten', port });
+      },
       previewUrl: message.previewUrl,
       registry: message.registry,
       packageCache: message.packageCache ? deps.packageCache?.() : undefined,

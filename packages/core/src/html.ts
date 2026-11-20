@@ -12,7 +12,7 @@
  *   • the attribution badge is appended unless the host turned it off.
  */
 import { attributionEnabled, injectAttribution, type AttributionSetting } from './attribution.js';
-import { previewSocketScript, scriptLiteral } from './previewBridge.js';
+import { previewFetchScript, previewSocketScript, scriptLiteral } from './previewBridge.js';
 import { hotUpdateScript } from './hot/client.js';
 import { refreshPreambleScript } from './hot/reactRefresh.js';
 
@@ -133,6 +133,7 @@ export function transformHtml(html: string, options: HtmlOptions): string {
   const bridge = [
     errorBridgeScript(options.nonce, { forwardConsoleErrors: options.forwardConsoleErrors }),
     previewSocketScript(options.nonce),
+    previewFetchScript(),
     hotUpdateScript(base),
     ...(options.scripts ?? []).map(scriptTag),
     ...(options.refreshRuntime ? [refreshPreambleScript(options.refreshRuntime)] : []),

@@ -3,7 +3,9 @@ import {
   ApplicationSpecError,
   assertValidSpec,
   createLifecycle,
+  describeIssue,
   IllegalTransitionError,
+  ingressTable,
   restartDecision,
   serviceEnv,
   serviceGraph,
@@ -83,6 +85,37 @@ describe('validateSpec', () => {
       { code: 'missing-runtime', serviceId: 'c' },
       { code: 'env-name-collision', envName: 'WEB_APP', serviceIds: ['web-app', 'web_app'] },
     ]);
+  });
+
+  it('reports ingress routes to unknown or port-less services, duplicate paths and paths not starting with "/"', () => {
+    const spec: ApplicationSpec = {
+      ...app(svc('api', { port: 8000 }), svc('web', { port: 5173, role: 'frontend', dependsOn: ['api'] }), svc('jobs')),
+      ingress: {
+        routes: [
+          { path: '/api', serviceId: 'api' },
+          { path: '/api/', serviceId: 'api' },
+          { path: 'docs', serviceId: 'api' },
+          { path: '/jobs', serviceId: 'jobs' },
+          { path: '/nope', serviceId: 'ghost' },
+          { path: '/', serviceId: 'web' },
+        ],
+      },
+    };
+    expect(validateSpec(spec)).toEqual([
+      { code: 'ingress-duplicate-path', path: '/api/' },
+      { code: 'ingress-invalid-path', path: 'docs' },
+      { code: 'ingress-missing-port', path: '/jobs', serviceId: 'jobs' },
+      { code: 'ingress-unknown-service', path: '/nope', serviceId: 'ghost' },
+    ]);
+    expect(describeIssue({ code: 'ingress-missing-port', path: '/jobs', serviceId: 'jobs' })).toContain('has no port');
+  });
+
+  it('ingressTable resolves routes to ports, longest first, and picks the catch-all service (else the one frontend) as the page identity', () => {
+    const services = [svc('api', { port: 8000 }), svc('web', { port: 5173, role: 'frontend' }), svc('jobs')];
+    const table = ingressTable({ ...app(...services), ingress: { routes: [ { path: '/', serviceId: 'web' }, { path: '/api/', serviceId: 'api' }, { path: '/jobs', serviceId: 'jobs' } ] } });
+    expect(table).toEqual({ routes: [ { path: '/api', serviceId: 'api', port: 8000 }, { path: '/', serviceId: 'web', port: 5173 } ], frontend: 'web' });
+    expect(ingressTable({ ...app(...services), ingress: { routes: [ { path: '/api', serviceId: 'api' } ] } }).frontend).toBe('web');
+    expect(ingressTable(app(svc('api', { port: 8000 })))).toEqual({ routes: [] });
   });
 
   it('assertValidSpec throws ApplicationSpecError carrying the issues', () => {

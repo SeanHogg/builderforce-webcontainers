@@ -169,8 +169,14 @@ export interface System {
   loopback(port: number, request: HttpRequestData): Promise<HttpStreamResponse | undefined>;
   /** Where a browser reaches a server on `port` (the preview URL), if known. */
   serverUrl(port: number): string | undefined;
-  /** Tell the host a server is reachable without opening a port; used by the dev-server handoff. */
-  announceServer(port: number, url: string): void;
+  /**
+   * Tell the host a server is reachable without opening a port; used by the
+   * dev-server handoff, which names the directory it serves (`root`, its working
+   * directory) so the host's dev server serves that directory at `url`.
+   * Returns the withdrawal, when the host tracks handoffs: called when the
+   * handoff ends (interrupted) so the host stops serving that directory.
+   */
+  announceServer(port: number, url: string, root?: string): (() => void) | void;
   /** The in-browser dev server's preview URL, for `vite`/`react-scripts start` handoff. */
   previewUrl?: string;
   /**

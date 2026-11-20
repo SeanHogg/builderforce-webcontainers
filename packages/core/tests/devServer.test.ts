@@ -188,3 +188,48 @@ describe('DevServer on a React Native Web app', () => {
     expect(text((await server(fs).handle('/App.js')).body)).toMatch(/esm\.sh\/react-native\?/);
   });
 });
+
+describe('DevServer with a served root (a frontend in /web beside an /api)', () => {
+  /** A two-root project: the Vite app in `/web`, a Node API in `/api`, nothing at the top. */
+  function twoRoots(): VirtualFileSystem {
+    const fs = new VirtualFileSystem();
+    fs.writeTree({
+      'builderforce.json': '{"version":1}',
+      'web/package.json': JSON.stringify({ dependencies: { react: '^18.3.1', 'react-dom': '^18.3.1' }, devDependencies: { vite: '^5.4.0' } }),
+      'web/index.html': '<!doctype html><html><head></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+      'web/src/main.tsx': `import { title } from './title'; document.title = title;`,
+      'web/src/title.ts': `export const title = 'web';`,
+      'web/src/app.css': `body { color: red; }`,
+      'api/package.json': JSON.stringify({ dependencies: { express: '^4.19.0' } }),
+      'api/server.js': `require('express')().listen(8000);`,
+    });
+    return fs;
+  }
+
+  it('serves the directory a handoff names as the project: its index.html, src/ and config', async () => {
+    const dev = server(twoRoots());
+    expect((await dev.handle('/')).status).toBe(501); // nothing at the top
+    dev.setRoot('/web');
+    expect(dev.servedRoot).toBe('/web');
+    const page = await dev.handle('/');
+    expect(page.status).toBe(200);
+    expect(text(page.body)).toContain(`src="${BASE}src/main.tsx"`);
+    expect(dev.profile()).toMatchObject({ supported: true, kind: 'vite', framework: 'react', htmlPath: '/index.html' });
+    expect(text((await dev.handle('/src/main.tsx')).body)).toContain(`${BASE}src/title.ts`);
+    expect((await dev.handle('/api/package.json')).status).toBe(404); // outside the served root
+    expect(text((await dev.handle('/api/server.js')).body)).toContain('Cannot find module /api/server.js');
+    dev.setRoot('/');
+    expect((await dev.handle('/web/src/title.ts')).status).toBe(200);
+  });
+
+  it('plans hot updates from project paths inside the served root and ignores the rest', async () => {
+    const fs = twoRoots();
+    const dev = server(fs);
+    dev.setRoot('/web');
+    await dev.handle('/');
+    await dev.handle('/src/app.css');
+    fs.writeFile('/web/src/app.css', 'body { color: blue; }');
+    expect(dev.planUpdate([{ type: 'write', path: '/web/src/app.css' }])).toMatchObject({ type: 'update', styles: [{ path: `${BASE}src/app.css` }] });
+    expect(dev.planUpdate([{ type: 'write', path: '/api/server.js' }])).toBeUndefined();
+  });
+});

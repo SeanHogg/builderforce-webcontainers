@@ -197,5 +197,8 @@ export function createIngressGuard(options: IngressGuardOptions) {
     return !options.hasRemap?.(clientId) && !bindings.has(clientId) && !verdicts.has(clientId);
   }
 
-  return { mayAttach, checkAttach, checkClient, identify, needsLookup, report, release: owners.release };
+  /** The preview `clientId` is bound to (a document or worker served under it), if any — never a host or relay page. */
+  const previewOf = (clientId: string): string | undefined => bindings.get(clientId);
+
+  return { mayAttach, checkAttach, checkClient, identify, needsLookup, previewOf, report, release: owners.release };
 }

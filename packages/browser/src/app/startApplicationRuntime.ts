@@ -109,7 +109,11 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   };
   /** The service graph in force on the runtime's ports while the application runs (W10 control 4). */
   let unregisterGraph: (() => void) | undefined;
+  /** The spec's ingress routes, in force on the application's preview origins while it runs (W11). */
+  let unregisterIngress: (() => void) | undefined;
   const stopAll = async () => {
+    unregisterIngress?.();
+    unregisterIngress = undefined;
     for (const id of graph.stopOrder) await service(id).stop();
     processes.killApplication(applicationId); // whatever outlived its service: the whole attributed set
     unregisterGraph?.();
@@ -130,6 +134,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
       }
       // Before any service runs: its dials are decided against this graph.
       unregisterGraph ??= portPolicy.register(applicationId, spec);
+      if (spec.ingress?.routes.length) unregisterIngress ??= options.runtime.registerIngress?.(applicationId, spec);
       // In start order, so each service exists and is on its way before its dependents look at it.
       await settle(graph.startOrder.map((id) => [id, service(id).start()]));
     },

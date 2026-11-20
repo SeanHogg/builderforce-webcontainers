@@ -1,10 +1,15 @@
 /**
- * Dev-server handoff. `vite`, `vite dev`, `react-scripts start` (what `npm run
- * dev` / `npm start` usually run) need not boot a bundler at all: the runtime
- * already IS a Vite-style dev server, the in-browser DevServer serving the
- * preview, and it starts instantly. So these commands announce that preview as
- * their server (a listening announcement) and stay "running" until Ctrl-C,
- * which is exactly what a host waiting on `npm run dev` expects.
+ * Dev-server handoff. `vite`, `vite dev`, `react-scripts start`, `ng serve`
+ * (what `npm run dev` / `npm start` usually run) need not boot a bundler at
+ * all: the runtime already IS a Vite-style dev server, the in-browser DevServer
+ * serving the preview (it compiles React, Vue, Svelte and Angular), and it
+ * starts instantly. So these commands announce that preview as their server (a
+ * listening announcement) and stay "running" until Ctrl-C, which is exactly
+ * what a host waiting on `npm run dev` expects.
+ *
+ * The project is the working directory: a frontend in `/web` of a project
+ * whose backend is in `/api` is announced with that directory as its root, and
+ * the host serves `/web` (its `index.html`, `src/`, config) at the preview URL.
  *
  * Not for a framework that runs its own server on top of Vite (SvelteKit, Nuxt…,
  * `ownServerReason`): those run the real, installed Vite, on esbuild's and
@@ -15,7 +20,7 @@ import { ownServerReason } from '../detectProject.js';
 import { rootedFileSystem } from '../rootedFs.js';
 
 interface Handoff {
-  tool: string;
+  tool: 'vite' | 'react-scripts' | 'angular';
   defaultPort: number;
 }
 
@@ -25,6 +30,8 @@ export function matchDevServer(argv: string[]): Handoff | undefined {
   const sub = rest[0] !== undefined && !rest[0].startsWith('-') ? rest[0] : undefined;
   if (command === 'vite' && (sub === undefined || sub === 'dev' || sub === 'serve')) return { tool: 'vite', defaultPort: 5173 };
   if ((command === 'react-scripts' || command === 'craco') && sub === 'start') return { tool: 'react-scripts', defaultPort: 3000 };
+  // The Angular CLI's dev server (`ng serve`, alias `ng s`; `ng dev` is not a command).
+  if (command === 'ng' && (sub === 'serve' || sub === 's')) return { tool: 'angular', defaultPort: 4200 };
   return undefined;
 }
 
@@ -42,17 +49,22 @@ function portOf(argv: string[], fallback: number, env: Record<string, string>): 
   return Number.isInteger(port) && port > 0 ? port : fallback;
 }
 
+const BANNERS: Record<Handoff['tool'], (url: string) => string> = {
+  vite: (url) => `\n  VITE (BuilderForce in-browser dev server)  ready\n\n  ➜  Local:   ${url}\n\n`,
+  'react-scripts': (url) => `\nCompiled successfully!\n\nYou can now view the app in the browser.\n\n  Local:  ${url}\n\n`,
+  angular: (url) => `\nApplication bundle generation complete. (BuilderForce in-browser dev server)\n\n  ➜  Local:   ${url}\n\n`,
+};
+
 export async function runDevServerHandoff(ctx: CommandContext, argv: string[], handoff: Handoff): Promise<number> {
   const url = ctx.system.previewUrl!; // devServerHandoff only matches with a preview attached
   const port = portOf(argv, handoff.defaultPort, ctx.env);
-  const banner = handoff.tool === 'vite'
-    ? `\n  VITE (BuilderForce in-browser dev server)  ready\n\n  ➜  Local:   ${url}\n\n`
-    : `\nCompiled successfully!\n\nYou can now view the app in the browser.\n\n  Local:  ${url}\n\n`;
-  ctx.io.stdout(banner);
-  ctx.system.announceServer(port, url);
+  ctx.io.stdout(BANNERS[handoff.tool](url));
+  const withdraw = ctx.system.announceServer(port, url, ctx.cwd);
   await new Promise<void>((resolve) => {
     if (ctx.signal.aborted) resolve();
     ctx.signal.addEventListener('abort', () => resolve());
   });
+  // Interrupted: the host goes back to what it served before (the shell that ran it may live on).
+  withdraw?.();
   return 130;
 }

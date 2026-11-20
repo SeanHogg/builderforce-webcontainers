@@ -13,11 +13,13 @@ import {
   scriptTag,
   parsePortPath,
   previewCookieScript,
+  previewFetchScript,
   previewSocketScript,
   readBody,
   textResponse,
   type CookieJar,
   type PortCookieJars,
+  type SecurityContext,
 } from '@seanhogg/builderforce-webcontainers-core';
 import type { WireReply, WireRequest, WireResponse } from '../protocol.js';
 import type { ProcessHost } from './processHost.js';
@@ -44,7 +46,7 @@ export interface OpenedPortResponse {
 const NO_STORE = { 'cache-control': 'no-store' };
 
 /** Send a preview request to its virtual server; resolves with the head and a body that streams. */
-export async function openPortResponse(host: ProcessHost, request: WireRequest, options: PortResponderOptions = {}): Promise<OpenedPortResponse> {
+export async function openPortResponse(host: ProcessHost, request: WireRequest, options: PortResponderOptions = {}, caller?: SecurityContext): Promise<OpenedPortResponse> {
   const target = parsePortPath(request.path)!;
   const jar = options.cookies?.jar(target.port);
   const headers: Record<string, string> = {};
@@ -52,7 +54,7 @@ export async function openPortResponse(host: ProcessHost, request: WireRequest, 
   const cookie = jar?.header(target.path);
   if (cookie) headers.cookie = cookie;
   const response =
-    (await host.requestStream(target.port, { method: request.method ?? 'GET', url: target.path + request.search, headers, body: request.body ? new Uint8Array(request.body) : null })) ??
+    (await host.requestStream(target.port, { method: request.method ?? 'GET', url: target.path + request.search, headers, body: request.body ? new Uint8Array(request.body) : null }, caller)) ??
     textResponse(502, `Nothing is listening on port ${target.port}. Start a server (node server.js) first.`);
 
   const out: Record<string, string> = {};
@@ -80,7 +82,7 @@ export async function openPortResponse(host: ProcessHost, request: WireRequest, 
 
 /** The same bridge a dev-server page gets (errors, console, sockets), plus cookies and the host's scripts. */
 function bridgeFor(jar: CookieJar | undefined, path: string, scripts: readonly string[], nonce?: string): string {
-  return [errorBridgeScript(nonce), previewSocketScript(nonce), jar ? previewCookieScript(jar.documentCookie(path), nonce) : '', ...scripts.map(scriptTag)].join('');
+  return [errorBridgeScript(nonce), previewSocketScript(nonce), previewFetchScript(), jar ? previewCookieScript(jar.documentCookie(path), nonce) : '', ...scripts.map(scriptTag)].join('');
 }
 
 /** Insert `script` into a streamed document, after `<head>` (see `bridgeInsertionPoint`), passing the rest through as it arrives. */
@@ -127,8 +129,12 @@ export async function servePortRequest(host: ProcessHost, request: WireRequest, 
 }
 
 export interface PortResponder {
-  /** Answer one preview request: post the head, then the body chunk by chunk as the server writes it. */
-  serve(request: WireRequest, post: (reply: WireReply, transfer: Transferable[]) => void): Promise<void>;
+  /**
+   * Answer one preview request: post the head, then the body chunk by chunk as
+   * the server writes it. `caller`: who the request acts as (an ingress hop: the
+   * page's service), decided by the port policy; default the platform.
+   */
+  serve(request: WireRequest, post: (reply: WireReply, transfer: Transferable[]) => void, caller?: SecurityContext): Promise<void>;
   /** The preview stopped reading `reqId`: hang up on the server. */
   cancel(reqId: number): void;
   /** Hang up on every response still streaming. */
@@ -139,11 +145,11 @@ export interface PortResponder {
 export function createPortResponder(host: ProcessHost, options?: PortResponderOptions): PortResponder {
   const streaming = new Map<number, () => void>();
   return {
-    async serve(request, post) {
+    async serve(request, post, caller) {
       const { reqId } = request;
       let opened: OpenedPortResponse;
       try {
-        opened = await openPortResponse(host, request, options);
+        opened = await openPortResponse(host, request, options, caller);
       } catch (error) {
         return post({ type: 'response', reqId, status: 500, headers: { 'content-type': 'text/plain; charset=utf-8', ...NO_STORE }, body: String(error instanceof Error ? error.message : error) }, []);
       }

@@ -4,8 +4,8 @@
  * the lifecycle state machine, per-service environment, restart policy and the
  * `RuntimeProvider` port. The browser package's `./app` subpath runs it.
  */
-export { readinessOf, restartPolicyOf, roleOf } from './spec.js';
-export type { ApplicationSpec, DatabaseSpec, ReadinessKind, ReadinessSpec, RestartPolicy, ServiceRole, ServiceSpec, ServiceType } from './spec.js';
+export { readinessOf, restartPolicyOf, roleOf, ingressTable, ingressPathKey } from './spec.js';
+export type { ApplicationSpec, DatabaseSpec, IngressPortRoute, ApplicationIngressRoute, ApplicationIngress, ReadinessKind, ReadinessSpec, RestartPolicy, ServiceRole, ServiceSpec, ServiceType } from './spec.js';
 export { validateSpec, assertValidSpec, describeIssue, ApplicationSpecError } from './validateSpec.js';
 export type { SpecIssue, SpecIssueCode } from './validateSpec.js';
 export { serviceGraph } from './serviceGraph.js';

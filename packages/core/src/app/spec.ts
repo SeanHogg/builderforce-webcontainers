@@ -75,12 +75,32 @@ export interface ServiceSpec {
   database?: DatabaseSpec;
 }
 
+/** One ingress route: requests whose path starts with `path` go to `serviceId`'s port. */
+export interface ApplicationIngressRoute {
+  /** A path prefix starting with `/`, matched on whole segments (`/api` takes `/api` and `/api/x`, never `/apix`); `/` is the catch-all. */
+  path: string;
+  /** The service whose port serves it; it must declare a `port`. */
+  serviceId: string;
+}
+
+/**
+ * How requests to the application's own origin reach its services (the
+ * manifest's `ingress`): the longest matching route wins. In the browser the
+ * preview service worker applies it, so a frontend's relative `fetch('/api/…')`
+ * reaches the backend's port — under the same port policy as any other dial.
+ */
+export interface ApplicationIngress {
+  routes: ApplicationIngressRoute[];
+}
+
 export interface ApplicationSpec {
   /** Stable project id; services see it as `BUILDERFORCE_PROJECT_ID`. */
   projectId: string;
   services: ServiceSpec[];
   /** Environment for every service (below each service's own `env`). */
   env?: Record<string, string>;
+  /** Path-prefix routing to services' ports (see {@link ApplicationIngress}). */
+  ingress?: ApplicationIngress;
 }
 
 /** The readiness a service is held to, defaults applied. */
@@ -98,4 +118,35 @@ export function restartPolicyOf(service: ServiceSpec): RestartPolicy {
 /** The role a service is held to, defaults applied. */
 export function roleOf(service: ServiceSpec): ServiceRole {
   return service.role ?? 'backend';
+}
+
+/** An ingress path as routes compare it: no trailing `/` (except the catch-all `/`). */
+export function ingressPathKey(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  return trimmed === '' ? '/' : trimmed;
+}
+
+/** One ingress route resolved to its service's port. */
+export interface IngressPortRoute {
+  path: string;
+  serviceId: string;
+  port: number;
+}
+
+/**
+ * The application's ingress as the runtime applies it: each route with its
+ * service's port, longest path first (so the first match is the longest). Routes
+ * naming an unknown service or one without a port are dropped (`validateSpec`
+ * reports them). `frontend`: who a request through the ingress acts as when the
+ * page that made it cannot be told — the catch-all route's service, else the one
+ * `frontend` service; undefined when neither picks one.
+ */
+export function ingressTable(spec: ApplicationSpec): { routes: IngressPortRoute[]; frontend?: string } {
+  const ports = new Map(spec.services.flatMap((service) => (service.port === undefined ? [] : [[service.id, service.port] as const])));
+  const routes = (spec.ingress?.routes ?? [])
+    .flatMap((route) => (ports.has(route.serviceId) && route.path?.startsWith('/') ? [{ path: ingressPathKey(route.path), serviceId: route.serviceId, port: ports.get(route.serviceId)! }] : []))
+    .sort((a, b) => b.path.length - a.path.length);
+  const frontends = spec.services.filter((service) => service.type === 'application' && service.role === 'frontend');
+  const frontend = routes.find((route) => route.path === '/')?.serviceId ?? (frontends.length === 1 ? frontends[0]!.id : undefined);
+  return frontend === undefined ? { routes } : { routes, frontend };
 }

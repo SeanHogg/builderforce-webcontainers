@@ -14,6 +14,7 @@ import { jsonToModule, rawToModule, urlToModule } from './styleModules.js';
 import { packageStylesheetModule, previewCss, stylesheetModule, type DevStyleContext } from './devStyles.js';
 import { loaderFor } from './transformer.js';
 import { extname, normalizePath } from './paths.js';
+import { baseToProject, rootedFileSystem } from './rootedFs.js';
 import { JS_MIME, mimeFor } from './mime.js';
 import { noStyleCompilers, type StyleCompilers } from './styles/compilers.js';
 import { createStyleImportHost, type StyleImportHost, type StyleImportHostOptions } from './styles/imports.js';
@@ -122,21 +123,46 @@ export class DevServer {
   private profileCache?: ProjectProfile;
   private readonly cache = new Map<string, { version: number; file: ServedFile }>();
   private readonly graph = new ModuleGraph();
-  private readonly unwatch: () => void;
+  private unwatch: () => void;
   private readonly hot: boolean;
   private previewScripts: readonly string[];
+  /** The directory of `options.fs` served at `base` (`/`: all of it), and the view of it every read goes through. */
+  private root = '/';
+  private fs: VirtualFileSystem;
 
   constructor(private readonly options: DevServerOptions) {
     if (!options.base.endsWith('/')) throw new Error('DevServer base must end with "/"');
     this.previewScripts = options.previewScripts ?? [];
     this.hot = options.hot !== false;
-    this.unwatch = options.fs.watch((change) => this.onChange(change));
+    this.fs = options.fs;
+    this.unwatch = this.fs.watch((change) => this.onChange(change));
   }
 
   dispose(): void {
     this.unwatch();
     this.cache.clear();
     this.graph.clear();
+  }
+
+  /** The directory served at `base`, relative to `options.fs` (`/` by default). */
+  get servedRoot(): string {
+    return this.root;
+  }
+
+  /**
+   * Serve the project in `root` (a directory of `options.fs`, e.g. `/web` of a
+   * project whose frontend lives there) at `base`: its `index.html`, `src/` and
+   * config, as if it were the whole file system. A dev-server handoff (`vite`,
+   * `ng serve`) run in that directory sets it. Everything cached is dropped.
+   */
+  setRoot(root: string): void {
+    const next = normalizePath(root);
+    if (next === this.root) return;
+    this.unwatch();
+    this.root = next;
+    this.fs = next === '/' ? this.options.fs : rootedFileSystem(this.options.fs, next);
+    this.unwatch = this.fs.watch((change) => this.onChange(change));
+    this.onChange({ type: 'remove', path: '/' }); // structural: forget everything
   }
 
   /** Replace the host scripts injected into preview pages; takes effect on the next page load. */
@@ -146,11 +172,11 @@ export class DevServer {
   }
 
   profile(): ProjectProfile {
-    return (this.profileCache ??= detectProject(this.options.fs));
+    return (this.profileCache ??= detectProject(this.fs));
   }
 
   async handle(requestPath: string, search = ''): Promise<ServedFile> {
-    const { fs } = this.options;
+    const { fs } = this;
     const path = normalizePath(decodeURIComponent(requestPath));
     const query = parseQuery(search);
     const profile = this.profile();
@@ -176,9 +202,14 @@ export class DevServer {
    * What open previews should do about `changes` (one burst of edits): swap
    * stylesheets and re-render React components in place, or reload. Undefined
    * when nothing the preview loaded changed. Bumps the stamps of re-run modules,
-   * so call it once per burst and send the result.
+   * so call it once per burst and send the result. `changes` are paths in
+   * `options.fs`; those outside the served root (`setRoot`) are ignored.
    */
-  planUpdate(changes: readonly FsChange[]): PreviewUpdate | undefined {
+  planUpdate(projectChanges: readonly FsChange[]): PreviewUpdate | undefined {
+    const changes = this.root === '/' ? projectChanges : projectChanges.flatMap((change) => {
+      const path = baseToProject(this.root, change.path);
+      return path === undefined ? [] : [{ ...change, path }];
+    });
     if (!changes.length) return undefined;
     if (!this.hot || changes.some(isStructuralChange)) return { type: 'reload' };
     const plan = planUpdate({
@@ -218,7 +249,8 @@ export class DevServer {
   }
 
   private async produce(file: string, query: ImportQuery | undefined, badge: boolean | undefined): Promise<ServedFile> {
-    const { fs, base } = this.options;
+    const { fs } = this;
+    const { base } = this.options;
     const ext = extname(file);
     const dependencies = new Set<string>();
     try {
@@ -259,17 +291,17 @@ export class DevServer {
     const code = await compileScript(ctx, file);
     if (!this.refreshEnabled()) return code;
     const names = componentNames(code);
-    this.graph.setFacts(file, await refreshFacts(code, this.options.fs.readText(file) ?? '', names));
+    this.graph.setFacts(file, await refreshFacts(code, this.fs.readText(file) ?? '', names));
     return code + refreshFooter(file, names);
   }
 
   private hooksChanged(path: string): boolean {
     const facts = this.graph.factsOf(path);
-    return !!facts && !!loaderFor(extname(path)) && hookSignature(this.options.fs.readText(path) ?? '') !== facts.hooks;
+    return !!facts && !!loaderFor(extname(path)) && hookSignature(this.fs.readText(path) ?? '') !== facts.hooks;
   }
 
   private projectConfig(): ProjectConfig {
-    return (this.config ??= readProjectConfig(this.options.fs));
+    return (this.config ??= readProjectConfig(this.fs));
   }
 
   private refreshEnabled(): boolean {
@@ -280,7 +312,7 @@ export class DevServer {
     if (!profile.supported || !profile.htmlPath) {
       return reply(501, 'text/html; charset=utf-8', `<!doctype html><meta charset="utf-8"><p>${profile.reason ?? 'Unsupported project.'}</p>`);
     }
-    const html = this.options.fs.readText(profile.htmlPath) ?? '';
+    const html = this.fs.readText(profile.htmlPath) ?? '';
     const { base, attribution } = this.options;
     const refreshRuntime = this.refreshEnabled() ? (await this.packageCdn()).urlFor('react-refresh', '/runtime') : undefined;
     return reply(200, 'text/html; charset=utf-8', transformHtml(html, { base, entry: profile.entry, attribution, scripts: this.previewScripts, refreshRuntime, nonce: this.options.previewNonce, forwardConsoleErrors: forwardsConsoleErrors(profile) }));
@@ -293,7 +325,8 @@ export class DevServer {
 
   /** The compile context for one response; `dependencies` collects the local files it reads. */
   private async context(dependencies: Set<string>): Promise<DevStyleContext> {
-    const { fs, transformer, base } = this.options;
+    const { fs } = this;
+    const { transformer, base } = this.options;
     const config = this.projectConfig();
     this.styleImports ??= createStyleImportHost({ fs, dependencies: config.dependencies, ...this.options.styleImports });
     return {

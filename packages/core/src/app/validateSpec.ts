@@ -4,10 +4,10 @@
  * about. `assertValidSpec` throws them together as one `ApplicationSpecError`.
  */
 import { envName } from './serviceEnv.js';
-import { readinessOf, type ApplicationSpec, type ReadinessKind } from './spec.js';
+import { ingressPathKey, readinessOf, type ApplicationSpec, type ReadinessKind } from './spec.js';
 
 /** Starts with a letter, so `<ID>_URL` is a valid environment variable name. */
-const SERVICE_ID = /^[A-Za-z][A-Za-z0-9_-]*$/;
+export const SERVICE_ID =/^[A-Za-z][A-Za-z0-9_-]*$/;
 
 export type SpecIssue =
   | { code: 'missing-project-id' }
@@ -24,7 +24,11 @@ export type SpecIssue =
   | { code: 'missing-health-path'; serviceId: string }
   | { code: 'missing-command'; serviceId: string }
   | { code: 'missing-database'; serviceId: string }
-  | { code: 'training-port'; serviceId: string };
+  | { code: 'training-port'; serviceId: string }
+  | { code: 'ingress-invalid-path'; path: string }
+  | { code: 'ingress-duplicate-path'; path: string }
+  | { code: 'ingress-unknown-service'; path: string; serviceId: string }
+  | { code: 'ingress-missing-port'; path: string; serviceId: string };
 
 export type SpecIssueCode = SpecIssue['code'];
 
@@ -61,6 +65,14 @@ export function describeIssue(issue: SpecIssue): string {
       return `Database service "${issue.serviceId}" has no database settings (engine, provider, persistent).`;
     case 'training-port':
       return `Training service "${issue.serviceId}" has a port; a training service serves nothing.`;
+    case 'ingress-invalid-path':
+      return `Ingress route "${issue.path}" must be a path starting with "/".`;
+    case 'ingress-duplicate-path':
+      return `Ingress route "${issue.path}" is declared more than once.`;
+    case 'ingress-unknown-service':
+      return `Ingress route "${issue.path}" names "${issue.serviceId}", which is not a service of this application.`;
+    case 'ingress-missing-port':
+      return `Ingress route "${issue.path}" names service "${issue.serviceId}", which has no port.`;
   }
 }
 
@@ -111,6 +123,28 @@ export function validateSpec(spec: ApplicationSpec): SpecIssue[] {
     }
   }
   for (const cycle of findCycles(spec)) issues.push({ code: 'dependency-cycle', cycle });
+  issues.push(...validateIngress(spec));
+  return issues;
+}
+
+/** The ingress routes' issues: a path that is not `/…`, a path twice (trailing `/` ignored), a service that is unknown or has no port. */
+function validateIngress(spec: ApplicationSpec): SpecIssue[] {
+  const issues: SpecIssue[] = [];
+  const services = new Map(spec.services.map((service) => [service.id, service]));
+  const paths = new Set<string>();
+  for (const route of spec.ingress?.routes ?? []) {
+    const path = typeof route.path === 'string' ? route.path : String(route.path);
+    if (!path.startsWith('/')) {
+      issues.push({ code: 'ingress-invalid-path', path });
+      continue;
+    }
+    const key = ingressPathKey(path);
+    if (paths.has(key)) issues.push({ code: 'ingress-duplicate-path', path });
+    paths.add(key);
+    const service = services.get(route.serviceId);
+    if (!service) issues.push({ code: 'ingress-unknown-service', path, serviceId: route.serviceId });
+    else if (service.port === undefined) issues.push({ code: 'ingress-missing-port', path, serviceId: route.serviceId });
+  }
   return issues;
 }
 

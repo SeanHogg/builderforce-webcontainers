@@ -60,7 +60,7 @@ export class Kernel {
       connect: async (port) => this.ports.connect(port),
       loopback: (port, request) => this.ports.request(port, request),
       serverUrl,
-      announceServer: (port, url) => this.servers.announce({ port, url }),
+      announceServer: (port, url, root) => this.servers.announce(root === undefined ? { port, url } : { port, url, root }),
       previewUrl: options.previewUrl,
       registry: options.registry,
       packageCache: options.packageCache,

@@ -19,7 +19,8 @@
  * workspace's ports (see `PreviewOrigins.mayServe`).
  */
 import { parsePortPath, type DevServer, type PortCookieJars } from '@seanhogg/builderforce-webcontainers-core';
-import { isPortPath, isWireAttached, isWireCancel, isWireRequest, randomNonce, type WireReply, type WireResponse } from './protocol.js';
+import { isPortPath, isWireAttached, isWireCancel, isWireRequest, randomNonce, type WireIngress, type WireReply, type WireResponse } from './protocol.js';
+import type { IngressView } from './previewIngress.js';
 import { createPortResponder, type ProcessHost } from './node/index.js';
 import type { PreviewTransport } from './transport.js';
 
@@ -45,6 +46,8 @@ export interface PreviewAttachOptions {
   bridgeNonce: string;
   /** Whether a request through this transport may reach `port` (its owner's origin). */
   mayServePort(port: number): boolean;
+  /** The application ingress this origin serves (`previewIngress`): sent to the worker on every attach and change, and whether (and as whom) a page's port request goes ahead. */
+  ingress?: IngressView;
   /** A request was refused here (telemetry). */
   onRefused?(port: number | undefined): void;
 }
@@ -81,7 +84,15 @@ export function attachPreview(options: PreviewAttachOptions): () => void {
       const request = event.data;
       if (isPortPath(request.path)) {
         const port = parsePortPath(request.path)?.port;
-        if (port === undefined || !options.mayServePort(port)) return refuse(request.reqId, reply, port);
+        if (port === undefined) return refuse(request.reqId, reply, port);
+        // A page's request: the origin check first, then ingress narrows who it acts as (`previewIngress`: it never widens).
+        const from = request.from;
+        if (from && options.ingress) {
+          const verdict = options.ingress.decide(port, from, () => options.mayServePort(port));
+          return verdict ? ports.serve(request, reply, verdict.caller) : refuse(request.reqId, reply, port);
+        }
+        // Everything else (the host's own, a navigation) by origin, as before; an ingress-routed one with no ingress here is refused.
+        if (from?.ingress || !options.mayServePort(port)) return refuse(request.reqId, reply, port);
         return ports.serve(request, reply);
       }
       if (!options.server) return refuse(request.reqId, reply);
@@ -89,13 +100,20 @@ export function attachPreview(options: PreviewAttachOptions): () => void {
       reply(message, transfer);
     };
     transport.attach(id, channel.port2, previous === undefined ? { nonce } : { nonce, previous });
+    sendIngress(); // queued on the port until the worker takes it: one per attach (empty included), so a restarted worker knows it has the table
+  };
+  /** The ingress table, to the worker of the latest attach (the host holds the only other end of that port). */
+  const sendIngress = () => {
+    if (options.ingress) current?.port1.postMessage({ type: 'ingress', routes: options.ingress.routes() } satisfies WireIngress);
   };
 
   attach();
   const stopReattach = transport.onReattach((wanted) => {
     if (wanted === id) attach();
   });
+  const stopIngress = options.ingress?.onChange(sendIngress);
   return () => {
+    stopIngress?.();
     stopReattach();
     responder?.dispose();
     responder = undefined;

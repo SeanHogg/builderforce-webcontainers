@@ -212,7 +212,8 @@ export type WorkerToHost =
   | { type: 'unlisten'; port: number }
   | { type: 'loopback'; reqId: number; port: number; request: HttpRequestData }
   | { type: 'request-cancel'; reqId: number }
-  | { type: 'listening'; port: number; url: string }
+  /** `root`: a dev-server handoff's working directory (the directory it asks the dev server to serve). */
+  | { type: 'listening'; port: number; url: string; root?: string }
   /** Open a raw TCP connection to whatever listens on `port`, in any process. */
   | { type: 'dial'; connId: number; port: number }
   /** A Python process's `pip install` succeeded: record it for the processes started after it. */
