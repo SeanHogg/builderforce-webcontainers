@@ -65,7 +65,8 @@ async function confirm(question: string): Promise<boolean> {
 
 function run(command: TrustCommand): Promise<number> {
   return new Promise((done) => {
-    const child = spawn(command.command, command.args, { stdio: 'inherit', shell: false });
+    // An absolute tool path, run in the CA store directory: never resolved against (or run inside) the project.
+    const child = spawn(command.command, command.args, { cwd: command.cwd, stdio: 'inherit', shell: false });
     child.on('error', (error) => {
       console.error(`bfwc-launch: ${error.message}`);
       done(1);

@@ -38,7 +38,8 @@ export function issueLeaf(ca: LocalCa, host: string, now: Date = new Date()): Le
   const notBefore = new Date(now.getTime() - 60 * 60 * 1000);
   cert.validity.notBefore = notBefore;
   cert.validity.notAfter = new Date(Math.min(notBefore.getTime() + LEAF_VALIDITY_DAYS * DAY_MS, caCert.validity.notAfter.getTime()));
-  cert.setSubject([{ name: 'commonName', value: name }]);
+  // No CN for the IP leaf: a CN of "127.0.0.1" is checked against the CA's DNS constraints (OpenSSL) and fails them.
+  cert.setSubject(name === '127.0.0.1' ? [{ name: 'organizationName', value: 'Builderforce Local Launcher' }] : [{ name: 'commonName', value: name }]);
   cert.setIssuer(caCert.subject.attributes);
   cert.setExtensions([
     { name: 'basicConstraints', critical: true, cA: false },

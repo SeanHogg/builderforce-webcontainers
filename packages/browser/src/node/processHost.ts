@@ -31,6 +31,8 @@ import {
   bufferResponse,
   normalizePath,
   createIpcEndpoint,
+  deny,
+  isApplicationId,
   runArguments,
   signalExitCode,
   toRuntimeProcess,
@@ -340,7 +342,9 @@ export class ProcessHost {
    * runtime's preview URL and recorded as THIS process's (`handoffs`, with its
    * page-side identity). A port another process listens on is not this one's to
    * announce. A handoff's root counts only within the process's own working
-   * directory (the host confines it to the project too, host.ts).
+   * directory (the host confines it to the project too, host.ts). While one
+   * application's handoff is live, another application's is refused
+   * (`ingress.handoff_conflict`): it never takes over the shared preview.
    */
   private onListening(proc: Proc, message: Extract<WorkerToHost, { type: 'listening' }>): void {
     const port = Number(message.port);
@@ -352,6 +356,12 @@ export class ProcessHost {
     if (!handoff) return this.servers.announce({ port, url });
     const root = typeof message.root === 'string' && baseToProject(proc.info.cwd, message.root) !== undefined ? normalizePath(message.root) : undefined;
     const context = this.identityOf(proc.pid);
+    // One application's live handoff is never replaced by another application's: the first keeps the shared preview.
+    const rival = isApplicationId(context?.applicationId) ? this.handoffs.list().find((live) => isApplicationId(live.context?.applicationId) && live.context!.applicationId !== context!.applicationId) : undefined;
+    if (rival) {
+      this.identities.report(context!, deny('ingress.handoff_conflict'), { port, liveApplicationId: rival.context!.applicationId, livePort: rival.port });
+      return;
+    }
     this.handoffs.announce({ pid: proc.pid, port, ...(root === undefined ? {} : { root }), ...(context ? { context } : {}) });
     this.servers.announce(root === undefined ? { port, url } : { port, url, root });
   }

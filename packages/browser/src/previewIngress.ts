@@ -25,6 +25,10 @@
  * (`vite`, `ng serve`), the shared origin's dev server serves that application's
  * frontend — so while that handoff is live, a dev-server document on the shared
  * origin acts as that application's frontend, for that application's ports only.
+ * Only when the announcing process IS that application's frontend service, and
+ * the handoff serves neither the whole project nor a directory holding another
+ * registered application (`handoffApplication`); one application's live handoff
+ * is never replaced by another's (`ingress.handoff_conflict`, the process host).
  *
  * Which table an origin serves: an application's own preview origin, that
  * application's; the shared origin, the live handoff's application's, else
@@ -32,14 +36,20 @@
  * most recently registered application served on the shared origin.
  */
 import { ingressTable, type ApplicationSpec } from '@seanhogg/builderforce-webcontainers-core/app';
-import { isApplicationId, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
+import { isApplicationId, normalizePath, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import type { RequestOrigin, WireIngressRoute } from './protocol.js';
 
 interface Registration {
   applicationId: string;
   routes: WireIngressRoute[];
   frontend?: string;
+  /** Its services' directories, project-relative (`/` when a service names none). */
+  directories: string[];
 }
+
+/** Whether project-relative `directory` is `ancestor` or inside it. */
+const within = (directory: string, ancestor: string) => ancestor === '/' || directory === ancestor || directory.startsWith(`${ancestor}/`);
+const projectDirectory = (path: string | undefined) => normalizePath(`/${path ?? ''}`);
 
 /** A page's port request may go ahead, acting as `caller` (absent: the platform, as before ingress). */
 export interface IngressVerdict {
@@ -76,6 +86,13 @@ export interface PreviewIngress {
   view(applicationId: string | undefined): IngressView;
   /** Something a view depends on changed (the live handoff): every view's worker gets its table again. */
   refresh(): void;
+  /**
+   * The application a live dev-server handoff serves the frontend of, or undefined: its identity is honoured only
+   * when the announcing process (`context`, page-side) is that registered application's frontend service (the `/`
+   * route's service, else its single frontend-role service — `ingressTable`), and void when the served directory
+   * (`served`, project-relative) is the whole project or contains another registered application's directory.
+   */
+  handoffApplication(context: SecurityContext | undefined, served: string): string | undefined;
 }
 
 export function createPreviewIngress(options: PreviewIngressOptions): PreviewIngress {
@@ -90,7 +107,11 @@ export function createPreviewIngress(options: PreviewIngressOptions): PreviewIng
 
   function register(applicationId: string, spec: ApplicationSpec): () => void {
     const table = ingressTable(spec);
-    const registration: Registration = { applicationId, routes: table.routes.map(({ path, port }) => ({ path, port })) };
+    const registration: Registration = {
+      applicationId,
+      routes: table.routes.map(({ path, port }) => ({ path, port })),
+      directories: spec.services.map((service) => projectDirectory(service.root)),
+    };
     if (table.frontend !== undefined) registration.frontend = table.frontend;
     registrations.push(registration);
     changed();
@@ -151,5 +172,16 @@ export function createPreviewIngress(options: PreviewIngressOptions): PreviewIng
     };
   }
 
-  return { register, view, refresh: changed };
+  function handoffApplication(context: SecurityContext | undefined, served: string): string | undefined {
+    const applicationId = context?.applicationId;
+    if (!isApplicationId(applicationId)) return undefined;
+    const registration = latest(applicationId);
+    if (registration?.frontend === undefined || registration.frontend !== context!.serviceId) return undefined;
+    const directory = projectDirectory(served);
+    if (directory === '/') return undefined;
+    const others = registrations.filter((other) => other.applicationId !== applicationId);
+    return others.some((other) => other.directories.some((owned) => within(owned, directory))) ? undefined : applicationId;
+  }
+
+  return { register, view, refresh: changed, handoffApplication };
 }

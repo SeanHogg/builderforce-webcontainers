@@ -407,6 +407,14 @@ throwing sink is ignored) and into a bounded ring: `runtime.security().events()`
 and `runtime.security().health()` (`enforcement` and `telemetry`, reported
 separately).
 
+A dev-server handoff (`vite`, `ng serve`) acts as an application's frontend on the
+shared preview origin only when the announcing process is that application's
+frontend service (the `/` ingress route's service, else its single frontend-role
+service) and the handoff serves neither the whole project nor a directory holding
+another application. While one application's handoff is live, another
+application's is refused and reported (`ingress.handoff_conflict`): the first
+keeps the shared preview until it ends.
+
 ## How it works
 
 ```

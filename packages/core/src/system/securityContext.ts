@@ -69,6 +69,11 @@ export type ShieldReasonCode =
   | 'ingress.app_origin_required'
   /** Telemetry, not a refusal: an application started on the shared preview origin under the named opt-out. */
   | 'ingress.shared_preview_origin'
+  /**
+   * A process of one application announced a dev-server handoff while another application's handoff is live:
+   * refused, so the first keeps the shared preview (and its frontend identity) until it ends.
+   */
+  | 'ingress.handoff_conflict'
   /** The embedder's egress policy id for an application is malformed: dropped, so its Workers get the most restrictive policy. */
   | 'egress.policy_invalid'
   /** A message to or from a process Worker could not be delivered across origins (`messageerror`): the process was ended. */

@@ -25,7 +25,7 @@ own origin with `startPreviewRuntime({ relayUrl })`. That origin serves
 `relay.html`, `sw.js` and `process-worker.js` (strings in `@seanhogg/builderforce-webcontainers/assets`)
 with the headers below. Same-origin mode (above) needs `unprotectedSameOrigin: true`,
 or the runtime refuses to boot (`ingress.same_origin_refused`); the relay must be
-https (plain http only on a loopback host, for the local launcher below). Applications (`startApplicationRuntime`) need their own origin
+https — always, the local launcher below included. Applications (`startApplicationRuntime`) need their own origin
 (`previewOrigin`, which needs wildcard DNS and a host route serving the relay files
 on `<key>.preview.example.com`): an application started without one is refused
 (`PreviewShieldError`, `ingress.app_origin_required`) unless you opt out by name
@@ -105,6 +105,14 @@ reaches a sibling application, whatever an application's own code does. (A
 single-label template, `{key}-preview.example.com`, avoids a second-level wildcard
 certificate but cannot get this: those origins stay same-site with `example.com`.)
 
+These strings have ONE owner: `@seanhogg/builderforce-webcontainers/preview-headers`
+(pure, no DOM or Node APIs). `previewHeaders(profile)` builds each set —
+`relay(frameAncestors)`, `serviceWorker()`, `workerScript(extraEgress)`,
+`document(host, frameAncestors)` — under your profile (embedding headers, reporting,
+script type, Worker-script caching); the CSP builders and `DEFAULT_CONNECT_SOURCES`,
+`PREVIEW_DEFAULT_EGRESS` and `PREVIEW_WORKER_SCRIPTS` are exported too. Serve the
+runtime's files with them rather than copying the strings.
+
 A custom `node.createWorker` is called as `createWorker(kind, applicationId, { origin, policy })`:
 it must start an application's Worker on `origin` under `policy`.
 
@@ -125,22 +133,63 @@ Run a project's `builderforce.json` application in an ordinary browser, from Nod
 import { createLocalLauncher } from '@seanhogg/builderforce-webcontainers/launcher/server';
 
 const launcher = await createLocalLauncher({ projectDir, environment: 'local' });
-openInBrowser(launcher.url); // http://localhost:<port>/#token=…
+openInBrowser(launcher.url); // https://localhost:<port>/#token=…
 // later: await launcher.close();
 ```
 
-or `npx bfwc-launch [dir] [--env name] [--port n]`. It binds 127.0.0.1 only and serves,
-on one port, the launcher page on `http://localhost:<port>`, the relay on
-`http://127.0.0.1:<port>` and each application on its own `http://<key>.localhost:<port>`
-(per-application origins hold locally: browsers treat loopback hosts as secure contexts,
-and the preview-origin check accepts plain http on `localhost`, `*.localhost` and
-`127.0.0.1` only). Every other `Host` is refused, and `/__bf/*` (the manifest, the project
-tree, a change stream) needs the per-launch token. The runtime files get the headers
-above, with `frame-ancestors` limited to the launcher page; no reporting endpoint and no
-signed policies (every Worker gets the most restrictive policy). The project tree skips
-`node_modules`, `.git`, `dist`, `.next`, `bin`, `obj`, `vendor`, `__pycache__` and `.venv`,
-caps at 5,000 files, 2 MB per file and 50 MB in all (anything left out is listed), and
-never follows a link out of the project. .NET services need
+or `npx bfwc-launch [dir] [--env name] [--port n] [--trust] [--ca-dir path]`. It binds
+127.0.0.1 only and serves https, on one port: the launcher page on
+`https://localhost:<port>`, the relay on `https://127.0.0.1:<port>` and each application on
+its own `https://<key>.localhost:<port>` — per-application origins hold locally, under the
+same https-only preview-origin rules as production (there is no plain-http exception).
+Every server name (SNI) and `Host` other than those is refused, and `/__bf/*` (the
+manifest, the project tree, a change stream) needs the per-launch token, which the page
+removes from the address bar as soon as it reads it. The runtime files get the headers
+above (from `./preview-headers`), with `frame-ancestors` limited to the launcher page; no
+reporting endpoint and no signed policies (every Worker gets the most restrictive policy).
+The .NET bundle is readable cross-origin only by the launcher's own preview origins.
+
+**The local CA.** Each host gets its own certificate (browsers ignore a `*.localhost`
+wildcard), issued on first use by ONE local certificate authority per user, kept in
+`~/.builderforce/launcher-ca` (`tls: { storeDir }` / `--ca-dir` to move it; the key is
+written 0600 in a 0700 directory). The CA is **name-constrained** (critical
+`nameConstraints`: DNS `localhost`, `.localhost` and IP 127.0.0.1 only, `pathLen 0`, key
+usage `keyCertSign, cRLSign`): even a leaked key cannot mint a certificate a browser accepts
+for a real site. It is valid for five years and regenerated when missing, corrupt or within
+30 days of expiry (then trust it again). Leaves are `serverAuth`, at most 397 days, RSA-2048.
+`tls: false` serves plain http for tests only: the page then refuses to boot an
+application (the runtime runs applications only on https preview origins).
+
+**Trusting it.** Until the browser trusts the CA it warns on every origin.
+`launcher.caCertPath` is its certificate; `caTrustCommand(launcher.ca)` returns the step
+for this platform, which you run after the user approves it (the launcher never runs it;
+`bfwc-launch --trust` asks y/N first, and without `--trust` only prints it). It adds the CA
+to the **current user's** store:
+
+- Windows: `certutil -user -addstore Root <ca.cer>` (Windows asks to confirm).
+- macOS: `security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db <ca.cer>`.
+- Linux: no single command (instructions instead): Chromium/Chrome read the NSS database
+  (`certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Builderforce Local Launcher CA" -i ca.pem`),
+  the system store needs root (`update-ca-certificates`), and Firefox has its own store
+  (Settings › Certificates › Authorities › Import).
+
+`caTrustCheckCommand(ca)` is a cheap "already trusted?" probe where one exists (Windows:
+`certutil -user -verifystore Root <thumbprint>`; macOS: `security verify-cert -c <ca.cer>`).
+
+**Browsers.** Before booting, the page fetches a probe on the relay and on a `*.localhost`
+origin; if either fails (the CA is not trusted, or the name does not resolve) it says so and
+starts nothing. Chromium and Firefox resolve `*.localhost` to loopback themselves; Safari
+may not, so use Chromium or Firefox.
+
+**The project tree** skips `node_modules`, `.git`, `dist`, `.next`, `bin`, `obj`, `vendor`,
+`__pycache__` and `.venv`, caps at 5,000 files, 2 MB per file and 50 MB in all (anything
+left out is listed), never follows a link out of the project, and re-checks a file's real
+path after reading it (a link swapped in meanwhile is dropped, listed as skipped). Changes
+stream from ONE recursive `fs.watch` of the project; a deleted directory removes everything
+under it in the runtime. The watch covers excluded directories too (their events are
+dropped, never read): on Linux, where recursive watching is one inotify watch per
+directory, a large `node_modules` can exhaust `fs.inotify.max_user_watches` — raise it if
+the change stream reports a watch failure. .NET services need
 `@seanhogg/builderforce-webcontainers-dotnet` installed (or `dotnetBundleDir`); without it
 they are declined with that reason.
 

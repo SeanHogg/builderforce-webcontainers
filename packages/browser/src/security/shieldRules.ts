@@ -38,6 +38,7 @@ export const SHIELD_RULES: Readonly<Record<ShieldReasonCode, ShieldRule>> = Obje
   'ingress.app_origin_mismatch': rule('ingress', 'ingress.app-origin', 'high'),
   'ingress.app_origin_required': rule('ingress', 'ingress.app-origin-required', 'high'),
   'ingress.shared_preview_origin': rule('ingress', 'ingress.shared-preview-origin', 'low', 'monitor'),
+  'ingress.handoff_conflict': rule('ingress', 'ingress.handoff-conflict', 'medium'),
   'egress.policy_invalid': rule('network', 'egress.policy-id', 'medium'),
   'process.message_undeliverable': rule('process', 'process.message-delivery', 'medium'),
 });

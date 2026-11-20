@@ -12,7 +12,6 @@ import {
   rootedFileSystem,
   exportZip,
   importZip,
-  isApplicationId,
   normalizePath,
   textResponse,
   type PreviewUpdate,
@@ -32,7 +31,7 @@ import { checkPreviewOrigins } from './previewOrigin.js';
 import { relayConfigUrl } from './relayConfig.js';
 import { createShieldTelemetry } from './security/shieldTelemetry.js';
 import { createPreviewOrigins } from './previewOrigins.js';
-import { createPreviewIngress } from './previewIngress.js';
+import { createPreviewIngress, type PreviewIngress } from './previewIngress.js';
 import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuildWasm.js';
 import { createCdnComponentCompilers } from './componentCompilers.js';
 import { createCdnStyleCompilers } from './styleCompilers.js';
@@ -145,13 +144,18 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     telemetry.report('ingress.app_origin_mismatch', undefined, { port, origin, ownerApplicationId: owner?.applicationId ?? null });
     return false;
   };
-  /** The application whose attributed process announced the live dev-server handoff: the shared dev server serves its frontend. */
+  /** The project directory the live handoff serves (`/`: the whole project — no handoff, or one outside the project). */
+  const handoffServed = (directory: string | undefined) => (directory === undefined ? undefined : baseToProject(root, directory)) ?? '/';
+  /**
+   * The application whose frontend the live dev-server handoff serves: the shared dev server serves it. Only when the
+   * announcing process is that application's frontend service and the served directory is its own (`ingress.handoffApplication`).
+   */
   const handoffApplication = () => {
-    const applicationId = processes.handoffs.current()?.context?.applicationId;
-    return applicationId !== undefined && isApplicationId(applicationId) ? applicationId : undefined;
+    const live = processes.handoffs.current();
+    return live ? ingress.handoffApplication(live.context, handoffServed(live.root)) : undefined;
   };
   // Applications' ingress tables (registered from their specs by `startApplicationRuntime`), per preview origin.
-  const ingress = createPreviewIngress({
+  const ingress: PreviewIngress = createPreviewIngress({
     ownerOf: (port) => processes.ports.ownerOf(port),
     handoffApplication,
     onSharedOrigin: (applicationId) => origins.mayServe(transport.origin, { applicationId, serviceId: '' }),
@@ -183,8 +187,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   // handoff before it is in force again, else the whole project. Confined to the project: a directory outside it
   // serves the project as without a handoff, so a handoff only ever narrows what is served. Open previews reload.
   const stopRoots = processes.handoffs.onChange(() => {
-    const directory = processes.handoffs.current()?.root;
-    const served = (directory === undefined ? undefined : baseToProject(root, directory)) ?? '/';
+    const served = handoffServed(processes.handoffs.current()?.root);
     if (served !== server.servedRoot) {
       server.setRoot(served);
       reload();

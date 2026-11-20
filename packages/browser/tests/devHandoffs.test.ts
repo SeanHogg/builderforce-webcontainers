@@ -5,9 +5,9 @@
  * withdraws it (`unlisten`) or exits — the one before it is in force again.
  */
 import { describe, expect, it } from 'vitest';
-import { VirtualFileSystem, textResponse, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
+import { VirtualFileSystem, textResponse, type SecurityContext, type ShieldDecision } from '@seanhogg/builderforce-webcontainers-core';
 import { DevHandoffs } from '../src/node/devHandoffs.js';
-import { ProcessHost, type WorkerLike } from '../src/node/processHost.js';
+import { ProcessHost, type ProcessHostOptions, type WorkerLike } from '../src/node/processHost.js';
 
 /** A Worker whose messages to the host the test sends itself. */
 function scriptedWorkers() {
@@ -20,9 +20,10 @@ function scriptedWorkers() {
   return { workers, createWorker };
 }
 
-function handoffHost() {
+function handoffHost(security?: ProcessHostOptions['security']) {
   const { workers, createWorker } = scriptedWorkers();
   const processes = new ProcessHost({
+    ...(security ? { security } : {}),
     fs: new VirtualFileSystem(),
     cwd: '/home/project',
     createWorker,
@@ -75,8 +76,39 @@ describe('ProcessHost handoff attribution', () => {
     expect(processes.handoffs.current()?.root).toBe('/home/project/web');
 
     web.send({ type: 'exit', code: 0 });
-    await web.proc.exit;
+    await web.proc.wait();
     expect(processes.handoffs.current()).toBeUndefined();
+    processes.dispose();
+  });
+
+  it('refuses another application’s handoff while one application’s is live, and reports it (N4)', async () => {
+    const decisions: [SecurityContext, ShieldDecision][] = [];
+    const { processes, start } = handoffHost({ onDecision: (context, decision) => decisions.push([context, decision]) });
+    const OTHER: SecurityContext = Object.freeze({ applicationId: 'app:other:fedcba9876543210', serviceId: 'web' });
+    const web = start('/home/project', APP);
+    web.send({ type: 'listening', port: 5173, url: 'ignored', root: '/home/project/web' });
+    const announced: number[] = [];
+    processes.servers.onListening(({ port }) => announced.push(port));
+
+    const rival = start('/home/project', OTHER);
+    rival.send({ type: 'listening', port: 5174, url: 'ignored', root: '/home/project/other' });
+    expect(processes.handoffs.list()).toHaveLength(1);
+    expect(processes.handoffs.current()).toMatchObject({ pid: web.proc.pid, context: APP }); // the first keeps it
+    expect(announced).toEqual([]);
+    expect(decisions.map(([context, decision]) => [context.applicationId, context.serviceId, decision])).toEqual([[OTHER.applicationId, 'web', { allow: false, reason: 'ingress.handoff_conflict' }]]);
+
+    // The same application re-announcing, and a workspace process, are not conflicts.
+    web.send({ type: 'listening', port: 5175, url: 'ignored', root: '/home/project/web' });
+    const shell = start('/home/project');
+    shell.send({ type: 'listening', port: 4200, url: 'ignored', root: '/home/project/admin' });
+    expect(processes.handoffs.list().map((entry) => entry.port)).toEqual([5173, 5175, 4200]);
+    expect(decisions).toHaveLength(1);
+
+    // Once the first application's handoff ends, the other's goes ahead.
+    web.send({ type: 'exit', code: 0 });
+    await web.proc.wait();
+    rival.send({ type: 'listening', port: 5174, url: 'ignored', root: '/home/project/other' });
+    expect(processes.handoffs.current()).toMatchObject({ pid: rival.proc.pid, context: OTHER });
     processes.dispose();
   });
 

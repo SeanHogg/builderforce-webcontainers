@@ -53,9 +53,41 @@ describe('createLocalLauncher: origins and the Host allowlist', () => {
   it('refuses every other Host (DNS rebinding), a wrong port, and a key that is not 32 hex', async () => {
     const { port } = await launch({ 'builderforce.json': NODE_MANIFEST });
     for (const host of ['evil.example', `evil.example:${port}`, `localhost:${port + 1}`, 'localhost', `abc.localhost:${port}`, `${KEY}.localhost.evil:${port}`, `x.${KEY}.localhost:${port}`, `[::1]:${port}`]) {
-      const response = await get(port, host, '/');
+      const response = await get(port, host, '/', {}, 'GET', 'localhost'); // a valid handshake, then the Host guard
       expect(response.status, host).toBe(403);
     }
+  });
+
+  it('serves https with the local CA: a trusted request to localhost succeeds; a server name outside the allowlist gets no certificate', async () => {
+    const { auth, port } = await launch({ 'builderforce.json': NODE_MANIFEST });
+    expect((await get(port, `localhost:${port}`, '/__bf/launch.json', auth)).status).toBe(200);
+    for (const name of ['evil.localhost.example', 'example.com', `abc.localhost`]) {
+      await expect(get(port, `${name}:${port}`, '/__bf/launch.json', auth), name).rejects.toThrow();
+    }
+  });
+
+  it('the app origins’ probe answers the host page only; the .NET bundle is readable only by the launcher’s preview origins', async () => {
+    const bundle = tempProject({ 'manifest.json': '{"format":1}', '_framework/dotnet.js': 'export {};' });
+    cleanups.push(bundle.cleanup);
+    const { port } = await launch({ 'builderforce.json': NODE_MANIFEST }, { dotnetBundleDir: bundle.dir });
+    const probe = await get(port, `${KEY}.localhost:${port}`, '/__bfwc/probe');
+    expect(probe.status).toBe(204);
+    expect(probe.headers['access-control-allow-origin']).toBe(`https://localhost:${port}`);
+    const relayRead = await get(port, `127.0.0.1:${port}`, '/dotnet/_framework/dotnet.js', { Origin: `https://${KEY}.localhost:${port}` });
+    expect(relayRead.headers['access-control-allow-origin']).toBe(`https://${KEY}.localhost:${port}`);
+    for (const origin of ['https://evil.example', `https://localhost:${port}`, `http://${KEY}.localhost:${port}`, 'null']) {
+      const read = await get(port, `127.0.0.1:${port}`, '/dotnet/_framework/dotnet.js', { Origin: origin });
+      expect(read.status, origin).toBe(200);
+      expect(read.headers['access-control-allow-origin'], origin).toBeUndefined();
+    }
+  });
+
+  it('with tls: false, serves http (tests only): the page then refuses to boot applications', async () => {
+    const { launcher, port } = await launch({ 'builderforce.json': NODE_MANIFEST }, { tls: false });
+    expect(launcher.url.startsWith(`http://localhost:${port}/`)).toBe(true);
+    expect(launcher.caCertPath).toBeNull();
+    const info = await json<LaunchInfo>(launcher, '/__bf/launch.json');
+    expect(info.relayUrl).toBe(`http://127.0.0.1:${port}/__bfwc/relay.html`);
   });
 });
 
@@ -82,16 +114,16 @@ describe('createLocalLauncher: the /__bf API', () => {
       environment: 'local',
       manifestText: NODE_MANIFEST,
       manifestSource: 'file',
-      relayUrl: `http://127.0.0.1:${port}/__bfwc/relay.html`,
-      previewOriginTemplate: `http://{key}.localhost:${port}`,
-      hostWorkerUrl: `http://localhost:${port}/__bfwc/process-worker.js`,
+      relayUrl: `https://127.0.0.1:${port}/__bfwc/relay.html`,
+      previewOriginTemplate: `https://{key}.localhost:${port}`,
+      hostWorkerUrl: `https://localhost:${port}/__bfwc/process-worker.js`,
       labels: { restart: 'Neu starten' },
     });
     expect(info.projectId).toMatch(/^p[0-9a-f]{24}$/);
     expect(info.manifestPath.endsWith('builderforce.json')).toBe(true);
     expect(info.dotnet.bundleUrl).toBeNull();
     // The same directory, launched again: the same id (so the same preview origins and storage).
-    const again = await createLocalLauncher({ projectDir: project.dir });
+    const again = await createLocalLauncher({ projectDir: project.dir, tls: TLS });
     cleanups.push(() => again.close());
     expect(again.projectId).toBe(launcher.projectId);
   });
@@ -101,10 +133,10 @@ describe('createLocalLauncher: the /__bf API', () => {
     cleanups.push(bundle.cleanup);
     const { launcher, port } = await launch({ 'server.js': '' }, { manifestText: NODE_MANIFEST, dotnetBundleDir: bundle.dir });
     const info = await json<LaunchInfo>(launcher, '/__bf/launch.json');
-    expect(info).toMatchObject({ manifestText: NODE_MANIFEST, manifestSource: 'override', environment: null, dotnet: { bundleUrl: `http://127.0.0.1:${port}/dotnet/` } });
+    expect(info).toMatchObject({ manifestText: NODE_MANIFEST, manifestSource: 'override', environment: null, dotnet: { bundleUrl: `https://127.0.0.1:${port}/dotnet/` } });
     const file = await get(port, `127.0.0.1:${port}`, '/dotnet/_framework/dotnet.js');
     expect(file.status).toBe(200);
-    expect(file.headers['access-control-allow-origin']).toBe('*');
+    expect(file.headers['access-control-allow-origin']).toBeUndefined(); // never `*`: only the launcher's preview origins
     expect((await get(port, `127.0.0.1:${port}`, '/dotnet/../server.js')).status).toBe(404);
 
     const missing = await launch({ 'server.js': '' });
@@ -171,7 +203,7 @@ describe('createLocalLauncher: the /__bf API', () => {
   it('changes: streams a write and a delete as server-sent events', async () => {
     const { launcher, project } = await launch({ 'builderforce.json': NODE_MANIFEST, 'gone.txt': 'bye' }, { watchDebounceMs: 30 });
     const events: ProjectChange[] = [];
-    const req = request({ host: '127.0.0.1', port: launcher.port, path: '/__bf/changes', headers: { Host: `localhost:${launcher.port}`, [LAUNCH_TOKEN_HEADER]: tokenOf(launcher.url) } });
+    const req = launcherRequest({ host: '127.0.0.1', port: launcher.port, path: '/__bf/changes', headers: { Host: `localhost:${launcher.port}`, [LAUNCH_TOKEN_HEADER]: tokenOf(launcher.url) } });
     const connected = new Promise<void>((resolve, reject) => {
       req.on('response', (res) => {
         expect(res.headers['content-type']).toContain('text/event-stream');
@@ -215,7 +247,7 @@ describe('createLocalLauncher: runtime files and their headers', () => {
       expect(relay.status).toBe(200);
       expect(relay.headers['content-type']).toContain('text/html');
       expect(relay.headers['content-security-policy']).toBe(
-        `default-src 'none'; script-src 'unsafe-inline'; worker-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors http://localhost:${port}`,
+        `default-src 'none'; script-src 'unsafe-inline'; worker-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors https://localhost:${port}`,
       );
       expect(relay.headers['cache-control']).toBe('no-store');
       expect(relay.headers['x-content-type-options']).toBe('nosniff');
@@ -233,7 +265,7 @@ describe('createLocalLauncher: runtime files and their headers', () => {
     for (const query of ['', '?mode=same-origin', '?mode=relay&policy=abc', '?mode=relay&report=https%3A%2F%2Fx.example%2Fr', '?mode=relay&egress=https%3A%2F%2Fevil.example']) {
       const refused = await get(port, host, `/__bfwc/sw.js${query}`);
       expect(refused.status, query).toBe(403);
-      expect(refused.headers['content-security-policy']).toContain(`frame-ancestors http://localhost:${port}`);
+      expect(refused.headers['content-security-policy']).toContain(`frame-ancestors https://localhost:${port}`);
     }
   });
 
@@ -257,7 +289,7 @@ describe('createLocalLauncher: runtime files and their headers', () => {
     expect(missing.status).toBe(404);
     const csp = String(missing.headers['content-security-policy']);
     expect(csp).toContain(`connect-src 'self' ws://${host} wss://${host}`);
-    expect(csp).toContain(`frame-ancestors http://localhost:${port}`);
+    expect(csp).toContain(`frame-ancestors https://localhost:${port}`);
     expect((await get(port, host, '/__bfwc/relay.html', {}, 'POST')).status).toBe(405);
   });
 
@@ -268,7 +300,8 @@ describe('createLocalLauncher: runtime files and their headers', () => {
     expect(index.headers['content-type']).toContain('text/html');
     expect(index.body).toContain('/launcher/page.js');
     const csp = String(index.headers['content-security-policy']);
-    expect(csp).toContain(`frame-src http://127.0.0.1:${port} http://*.localhost:${port}`);
+    expect(csp).toContain(`frame-src https://127.0.0.1:${port} https://*.localhost:${port}`);
+    expect(csp).toContain(`connect-src 'self' https://cdn.jsdelivr.net https://esm.sh https://127.0.0.1:${port}/__bfwc/probe https://*.localhost:${port}/__bfwc/probe`);
     expect(csp).toContain("frame-ancestors 'none'");
     expect((await get(port, page, '/launcher/page.js')).headers['content-type']).toContain('text/javascript');
     expect((await get(port, page, '/launcher/launcher.css')).headers['content-type']).toContain('text/css');
@@ -282,7 +315,7 @@ describe('createLocalLauncher: close()', () => {
   it('frees the port', async () => {
     const project = tempProject({ 'builderforce.json': NODE_MANIFEST });
     cleanups.push(project.cleanup);
-    const launcher = await createLocalLauncher({ projectDir: project.dir });
+    const launcher = await createLocalLauncher({ projectDir: project.dir, tls: TLS });
     await launcher.close();
     await launcher.close(); // idempotent
     await new Promise<void>((resolve, reject) => {

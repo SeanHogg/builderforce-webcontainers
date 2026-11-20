@@ -58,6 +58,45 @@ describe('previewIngress', () => {
     expect(changes).toHaveBeenCalledTimes(4); // two registrations, one unregister, one refresh
   });
 
+  it('honours a handoff’s identity only for the application’s frontend service, serving a directory of its own (N4)', () => {
+    const ingress = createPreviewIngress({ ownerOf: () => undefined });
+    ingress.register(APP, spec());
+    expect(ingress.handoffApplication(as('web'), '/web')).toBe(APP);
+    expect(ingress.handoffApplication(as('web'), '/web/src')).toBe(APP);
+    expect(ingress.handoffApplication(as('api'), '/web')).toBeUndefined(); // a backend's process announcing a handoff is not the frontend
+    expect(ingress.handoffApplication(as('web', 'workspace'), '/web')).toBeUndefined();
+    expect(ingress.handoffApplication(undefined, '/web')).toBeUndefined();
+    expect(ingress.handoffApplication(as('web', 'app:unregistered:1'), '/web')).toBeUndefined();
+    expect(ingress.handoffApplication(as('web'), '/')).toBeUndefined(); // the whole project
+    expect(ingress.handoffApplication(as('web'), '/web/..')).toBeUndefined();
+
+    // Another registered application lives under /web/admin: a handoff of /web would serve it too.
+    const admin: ApplicationSpec = {
+      projectId: 'admin',
+      services: [{ id: 'admin', type: 'application', runtime: 'node', command: 'npm', role: 'frontend', root: '/web/admin/', port: 4200 }],
+      ingress: { routes: [{ path: '/', serviceId: 'admin' }] },
+    };
+    const unregisterAdmin = ingress.register(OTHER, admin);
+    expect(ingress.handoffApplication(as('web'), '/web')).toBeUndefined();
+    expect(ingress.handoffApplication(as('web'), '/web/src')).toBe(APP);
+    expect(ingress.handoffApplication(as('admin', OTHER), '/web/admin')).toBe(OTHER);
+    expect(ingress.handoffApplication(as('admin', OTHER), '/web')).toBeUndefined(); // holds APP's /web
+    unregisterAdmin();
+    expect(ingress.handoffApplication(as('web'), '/web')).toBe(APP);
+  });
+
+  it('the frontend is the `/` route’s service, else the single frontend-role service, else none (N4)', () => {
+    const ingress = createPreviewIngress({ ownerOf: () => undefined });
+    const base = spec();
+    const noCatchAll = (services: ApplicationSpec['services']): ApplicationSpec => ({ ...base, services, ingress: { routes: [{ path: '/api', serviceId: 'api' }] } });
+    ingress.register(APP, noCatchAll(base.services));
+    expect(ingress.handoffApplication(as('web'), '/web')).toBe(APP); // the single frontend-role service
+    const twoFrontends = 'app:two:1';
+    ingress.register(twoFrontends, noCatchAll([...base.services, { id: 'docs', type: 'application', runtime: 'node', role: 'frontend', root: '/docs', port: 5174 }]));
+    expect(ingress.handoffApplication(as('web', twoFrontends), '/web')).toBeUndefined();
+    expect(ingress.handoffApplication(as('docs', twoFrontends), '/docs')).toBeUndefined();
+  });
+
   describe('decide: the origin check first, ingress only narrows', () => {
     const admitted = () => true;
     const refusedByOrigin = () => false;
