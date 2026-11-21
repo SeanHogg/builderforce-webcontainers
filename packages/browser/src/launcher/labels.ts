@@ -46,6 +46,12 @@ export interface LauncherLabels {
   severityInfo: string;
   noManifest: string;
   legacyManifest: string;
+  /** A root manifest from an older version: read, with this notice. `{path}` is where it is. */
+  legacyManifestLocation: string;
+  /** The manifest resolves outside the project and was not read. `{path}` is where it is. */
+  manifestOutsideProject: string;
+  /** A manifest is there but could not be read. `{path}`, `{reason}`. */
+  manifestUnreadable: string;
   invalidManifest: string;
   declinedServices: string;
   dotnetDeclined: string;
@@ -96,6 +102,9 @@ export const DEFAULT_LAUNCHER_LABELS: Readonly<LauncherLabels> = Object.freeze({
   severityInfo: 'Info',
   noManifest: 'This project has no builderforce.json. Run /manifest init to create one.',
   legacyManifest: 'This builderforce.json is an older format; run /manifest init.',
+  legacyManifestLocation: 'The manifest at {path} is in the old location. Move it to .builderforce/builderforce.json (/manifest move); the root file is still read for now, never written.',
+  manifestOutsideProject: 'The manifest at {path} resolves outside the project (a link), so it was not read.',
+  manifestUnreadable: 'The manifest at {path} could not be read: {reason}',
   invalidManifest: 'builderforce.json has errors, so nothing was started.',
   declinedServices: 'Some services cannot run in the browser, so nothing was started.',
   dotnetDeclined: 'The .NET runtime bundle is not available: {reason}',

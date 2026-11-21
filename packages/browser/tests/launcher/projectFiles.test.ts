@@ -6,7 +6,8 @@
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readContained, readProjectChange } from '../../src/launcher/server/projectFiles.js';
+import { readProjectChange } from '../../src/launcher/server/projectFiles.js';
+import { readContained } from '../../src/shared/containedFile.js';
 import { tempProject } from './launcherHelpers.js';
 
 const cleanups: (() => void)[] = [];

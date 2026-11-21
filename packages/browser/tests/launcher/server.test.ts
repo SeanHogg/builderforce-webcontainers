@@ -4,7 +4,7 @@
  * change stream, the runtime files' headers on each origin, and `close()`.
  * Needs the built package (dist/assets.js, dist/launcher/page.js).
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -126,6 +126,16 @@ describe('createLocalLauncher: the /__bf API', () => {
     const again = await createLocalLauncher({ projectDir: project.dir, tls: TLS });
     cleanups.push(() => again.close());
     expect(again.projectId).toBe(launcher.projectId);
+  });
+
+  it('launch.json: a canonical .builderforce/builderforce.json is read as the file, with the project directory and no deprecation', async () => {
+    const { launcher, project } = await launch({ '.builderforce/builderforce.json': NODE_MANIFEST, 'builderforce.json': '{"version":1,"name":"stale root"}' });
+    const info = await json<LaunchInfo>(launcher, '/__bf/launch.json');
+    expect(info).toMatchObject({ manifestText: NODE_MANIFEST, manifestSource: 'file' });
+    expect(info.manifestPath).toBe(join(realpathSync(project.dir), '.builderforce', 'builderforce.json'));
+    expect(info.projectDir).toBe(realpathSync(project.dir));
+    expect(info.deprecation).toBeUndefined();
+    expect(info.manifestOutside).toBeUndefined();
   });
 
   it('launch.json: the manifest override, a missing manifest, and a .NET bundle directory', async () => {
@@ -296,7 +306,7 @@ describe('createLocalLauncher: runtime files and their headers', () => {
 
   it('regression: a preview URL opened in its own tab is redirected to the host page\'s /preview, not answered "Not found."', async () => {
     const { port } = await launch({ 'builderforce.json': NODE_MANIFEST });
-    for (const [host, path] of [[`127.0.0.1:${port}`, '/__bfwc/p938597a5800961552f10d8ce/'], [`${KEY}.localhost:${port}`, '/__bfwc/p938597a5800961552f10d8ce/__port/8000/items?x=1']] as const) {
+    for (const [host, path] of [[`127.0.0.1:${port}`, '/__bfwc/p938597a5800961552f10d8ce/'], [`${KEY}.localhost:${port}`, '/__bfwc/p938597a5800961552f10d8ce/__port/8000/']] as const) {
       const tab = await get(port, host, path, { 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none' });
       expect(tab.status, host).toBe(302);
       const location = new URL(String(tab.headers['location']));
@@ -313,6 +323,11 @@ describe('createLocalLauncher: runtime files and their headers', () => {
     for (const site of ['cross-site', 'same-site', undefined]) {
       const headers: Record<string, string> = { 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', ...(site ? { 'Sec-Fetch-Site': site } : {}) };
       expect((await get(port, `127.0.0.1:${port}`, '/__bfwc/pabc/', headers)).status, String(site)).toBe(404);
+    }
+    // regression: a link from mail or chat (`none`) opens a preview ROOT only — never a deeper path or a query into the running app.
+    const user = { 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none' };
+    for (const deep of ['/__bfwc/pabc/__port/8000/delete?all=1', '/__bfwc/pabc/__port/8000/delete', '/__bfwc/pabc/?x=1', '/__bfwc/pabc/src/main.js', '/__bfwc/pabc/__port/0/', '/__bfwc/pabc/__port/8000']) {
+      expect((await get(port, `${KEY}.localhost:${port}`, deep, user)).status, deep).toBe(404);
     }
     // Not a navigation (a script, a fetch, no Fetch Metadata), and not a preview path: still a 404.
     expect((await get(port, `127.0.0.1:${port}`, '/__bfwc/pabc/main.js', { 'Sec-Fetch-Dest': 'script' })).status).toBe(404);
@@ -343,7 +358,14 @@ describe('createLocalLauncher: runtime files and their headers', () => {
     const src = `https://${KEY}.localhost:${port}/__bfwc/pabc/__port/8000/?a=1&b="2"`;
     const shown = await get(port, page, `/preview?src=${encodeURIComponent(src)}`, { 'Sec-Fetch-Site': 'same-origin' });
     expect(shown.status).toBe(200);
-    expect((await get(port, page, `/preview?src=${encodeURIComponent(src)}`, { 'Sec-Fetch-Site': 'none' })).status).toBe(200);
+    // From outside the browser (`none`): a preview root only, never a query or a deeper path.
+    const root = `https://${KEY}.localhost:${port}/__bfwc/pabc/__port/8000/`;
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(root)}`, { 'Sec-Fetch-Site': 'none' })).status).toBe(200);
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(src)}`, { 'Sec-Fetch-Site': 'none' })).status).toBe(403);
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(`${root}delete`)}`, { 'Sec-Fetch-Site': 'none' })).status).toBe(403);
+    // regression: nor a fragment, which a hash-routed app follows like a path.
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(`${root}#/admin/delete-all`)}`, { 'Sec-Fetch-Site': 'none' })).status).toBe(403);
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(`https://${KEY}.localhost:${port}/__bfwc/pabc/#/x`)}`, { 'Sec-Fetch-Site': 'none' })).status).toBe(403);
     expect(shown.headers['content-type']).toContain('text/html');
     expect(shown.body).toContain(`<iframe class="bf-preview-page-frame" src="https://${KEY}.localhost:${port}/__bfwc/pabc/__port/8000/?a=1&#38;b=%222%22"`);
     expect(shown.body).toContain('Aperçu &#60;x&#62;');

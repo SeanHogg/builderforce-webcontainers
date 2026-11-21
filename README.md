@@ -41,6 +41,38 @@ not run yet: Nuxt 3's parser has only a threaded WebAssembly build, which needs
 cross-origin isolation, and Nuxt 4 stalls during start-up (see the
 [ROADMAP](ROADMAP.md)). The roadmap is how it closes the rest of the gap.
 
+## What's new in 2026.11.11
+
+- **The manifest location is checked.** The launcher page now shows a notice
+  when it reads a root `builderforce.json` or `bfwc.app.json` from an older
+  version: move it to `.builderforce/builderforce.json` (`/manifest move`). A
+  manifest whose real path leaves the project, such as a `.builderforce` linked
+  elsewhere, is refused and never read, and the launch stops with that reason
+  (not "run /manifest init", which would write through the same link). Reads
+  go through the same contained reader as the project file API, capped at
+  1 MiB. A `.builderforce` that is a file, or a
+  manifest path that is a directory, counts as missing instead of failing the
+  launch. A manifest that is there but cannot be read (no permission, over
+  1 MiB) stops the launch with the reason; a stale root file is never read in
+  its place. Three new overridable labels: `legacyManifestLocation`,
+  `manifestOutsideProject` and `manifestUnreadable`.
+- **`paths` are validated.** An empty or absolute `paths.logs`,
+  `paths.diagnostics` or `paths.methodology`, a `..` segment, or an unknown key
+  is an `invalid-path` (or `invalid-value`) warning. `parseManifest` leaves it
+  out, so the default under `.builderforce/` applies.
+- **The launcher names the project after its directory.** With the manifest in
+  `.builderforce/` and no `name`, the header showed ".builderforce".
+  `LaunchInfo.projectDir` now carries the project directory.
+- **Links from outside the browser open a preview root only.** A link in mail
+  or chat (`Sec-Fetch-Site: none`) opens `/__bfwc/<id>/` or
+  `/__bfwc/<id>/__port/<n>/` through `/preview`. A deeper path, a query or a
+  fragment gets a 404 or a 403, so a link cannot drive a request into the
+  running app.
+  The launcher's own "Open in new tab" is unchanged.
+- **Eval-free export names.** String-literal export names
+  (`export { x as "a-b" }`) are decoded without `eval`, like import specifiers
+  in 2026.11.10.
+
 ## What's new in 2026.11.10
 
 - **Launcher previews render.** A React app run by `bfwc-launch` showed an

@@ -13,7 +13,7 @@ import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The bundle's declaration imports nothing (scripts load it directly), so the Node-side launcher may import it.
 import { DOTNET_BUNDLE } from '../../runtimes/dotnet/dotnetBundle.js';
-import { isInside } from './projectFiles.js';
+import { isInside } from '../../shared/containedFile.js';
 
 /** The bundle's npm package: spelled once, in `DOTNET_BUNDLE.npmPackage`. */
 export const DOTNET_BUNDLE_PACKAGE = DOTNET_BUNDLE.npmPackage;

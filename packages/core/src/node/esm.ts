@@ -16,7 +16,7 @@
  * import runs, which covers the common cyclic case.
  */
 import { init, parse } from 'es-module-lexer';
-import { importSpecifier } from '../importSpecifier.js';
+import { exportNames, importSpecifier } from '../importSpecifier.js';
 
 /** Resolve before the first transform (the lexer is WebAssembly). */
 export const esmReady: Promise<void> = init;
@@ -124,7 +124,8 @@ export function rewriteDynamicImports(source: string): string {
 }
 
 export function esmToCjs(source: string): string {
-  const [imports, exports] = parse(source);
+  const [imports, lexedExports] = parse(source);
+  const exports = exportNames(source, lexedExports);
   const edits: Edit[] = [];
   const getters = new Map<string, string>();
   const removedKeywords = new Set<number>();

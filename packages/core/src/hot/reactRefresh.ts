@@ -1,5 +1,6 @@
 import { init, parse } from 'es-module-lexer';
 import { contentHash } from '../hash.js';
+import { exportNames } from '../importSpecifier.js';
 import type { ProjectConfig } from '../projectConfig.js';
 import type { ModuleFacts } from './moduleGraph.js';
 
@@ -78,7 +79,7 @@ export function hookSignature(source: string): string {
  */
 export async function refreshFacts(code: string, source: string, components: readonly string[]): Promise<ModuleFacts> {
   await init;
-  const [, exports] = parse(code);
+  const exports = exportNames(code, parse(code)[1]);
   const known = new Set(components);
   // The lexer names the local behind most exports; spell out the default forms it may not.
   const defaultExpression =

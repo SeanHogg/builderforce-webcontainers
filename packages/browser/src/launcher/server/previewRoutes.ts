@@ -13,12 +13,12 @@ import type { LauncherLabels } from '../labels.js';
 import { DOTNET_BUNDLE_PREFIX, isPreviewPath, PREVIEW_PROBE_PATH, PREVIEW_SCRIPT_PREFIX, previewPageHref } from '../protocol.js';
 import { readDotnetBundleFile } from './dotnetBundle.js';
 import type { LauncherHosts } from './hosts.js';
-import { send, sendText } from './httpResponses.js';
+import { send, sendText, tokenMatches } from './httpResponses.js';
 import type { LauncherAssets } from './launcherAssets.js';
 import {
   PREVIEW_WORKER_SCRIPTS, previewDocumentHeaders, probeHeaders, relayHeaders, serviceWorkerAllowed, serviceWorkerHeaders, workerScriptHeaders, type PreviewScript,
 } from './previewHeaders.js';
-import { mintPreviewTicket, previewBootstrapHeaders, previewBootstrapHtml } from './previewPage.js';
+import { isPreviewRoot, mintPreviewTicket, previewBootstrapHeaders, previewBootstrapHtml } from './previewPage.js';
 
 /** Header a preview page must send to POST a load report. */
 export const REPORT_TOKEN_HEADER = 'x-bfwc-report-token';
@@ -53,10 +53,6 @@ function bundleCors(origin: string | string[] | undefined, hosts: LauncherHosts)
   const named = typeof origin === 'string' ? hosts.classifyOrigin(origin) : null;
   const allowed = named !== null && named.kind !== 'page';
   return allowed ? { 'Access-Control-Allow-Origin': origin as string, Vary: 'Origin' } : { Vary: 'Origin' };
-}
-
-function tokenMatches(presented: string | string[] | undefined, token: string): boolean {
-  return typeof presented === 'string' && presented.length === token.length && presented === token;
 }
 
 export async function servePreviewOrigin(req: IncomingMessage, res: ServerResponse, url: URL, host: string, context: PreviewRouteContext): Promise<void> {
@@ -108,7 +104,8 @@ export async function servePreviewOrigin(req: IncomingMessage, res: ServerRespon
   // A preview path no service worker answered (previewPage.ts): a tab the user opened goes to the host page's `/preview`, a frame waits for the worker.
   if (isPreviewPath(url.pathname)) {
     const destination = req.headers['sec-fetch-dest'];
-    if (destination === 'document' && req.headers['sec-fetch-site'] === 'none') {
+    // Only a preview ROOT, never a deeper path or a query: a link in mail or chat must not drive a request into the running app.
+    if (destination === 'document' && req.headers['sec-fetch-site'] === 'none' && isPreviewRoot(url)) {
       const location = `${context.hosts.pageOrigin}${previewPageHref(url.href, mintPreviewTicket(context.previewSecret, url.href))}`;
       return send(req, res, 302, { ...documentHeaders, 'Cache-Control': 'no-store', Location: location });
     }

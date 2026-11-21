@@ -16,7 +16,8 @@ function info(manifest: unknown, overrides: Partial<LaunchInfo> = {}): LaunchInf
     projectId: 'p0123456789abcdef01234567',
     environment: null,
     manifestText: manifest === null ? null : typeof manifest === 'string' ? manifest : JSON.stringify(manifest),
-    manifestPath: '/work/shop/builderforce.json',
+    projectDir: '/work/shop',
+    manifestPath: '/work/shop/.builderforce/builderforce.json',
     manifestSource: manifest === null ? 'missing' : 'file',
     relayUrl: 'https://127.0.0.1:4000/__bfwc/relay.html',
     previewOriginTemplate: 'https://{key}.localhost:4000',
@@ -32,6 +33,31 @@ describe('planLaunch', () => {
   it('an http launcher: blocked before anything else, since the runtime runs applications only on https preview origins', () => {
     const plan = planLaunch(info(null, { relayUrl: 'http://127.0.0.1:4000/__bfwc/relay.html', previewOriginTemplate: 'http://{key}.localhost:4000' }), labels);
     expect(plan).toMatchObject({ kind: 'blocked', reason: 'insecure', summary: labels.insecureLauncher });
+  });
+
+  it('regression: a canonical .builderforce/ manifest with no name is named after the project directory, never ".builderforce"', () => {
+    for (const overrides of [
+      { projectDir: '/work/shop', manifestPath: '/work/shop/.builderforce/builderforce.json', manifestSource: 'file' as const },
+      { projectDir: 'C:\\work\\shop', manifestPath: 'C:\\work\\shop\\.builderforce\\builderforce.json', manifestSource: 'override' as const },
+    ]) {
+      const plan = planLaunch(info({ version: 1, services: { web } }, overrides), labels);
+      expect(plan.header.name).toBe('shop');
+    }
+    expect(planLaunch(info(null, { projectDir: '/work/shop/' }), labels).header.name).toBe('shop');
+  });
+
+  it('a root manifest from an older version runs, with a visible notice to move it; one outside the project is an error', () => {
+    const legacy = planLaunch(info({ version: 1, services: { web } }, { manifestSource: 'legacy', manifestPath: '/work/shop/builderforce.json', deprecation: 'x' }), labels);
+    expect(legacy.kind).toBe('ready');
+    expect(legacy.messages[0]).toEqual({ severity: 'warning', kind: 'issue', subject: '/work/shop/builderforce.json', text: labels.legacyManifestLocation.replace('{path}', '/work/shop/builderforce.json') });
+    const custom = planLaunch(info({ version: 1, services: { web } }, { manifestSource: 'legacy' }), { ...labels, legacyManifestLocation: 'Bougez {path}' });
+    expect(custom.messages[0]!.text).toBe('Bougez /work/shop/.builderforce/builderforce.json');
+    const outside = planLaunch(info(null, { manifestOutside: true }), labels);
+    expect(outside).toMatchObject({ kind: 'blocked', reason: 'outside', summary: labels.manifestOutsideProject.replace('{path}', '/work/shop/.builderforce/builderforce.json') });
+    expect((outside as { summary: string }).summary).not.toContain('/manifest init');
+    const unreadable = planLaunch(info(null, { manifestUnreadable: 'EACCES: permission denied' }), labels);
+    expect(unreadable).toMatchObject({ kind: 'blocked', reason: 'unreadable', summary: 'The manifest at /work/shop/.builderforce/builderforce.json could not be read: EACCES: permission denied' });
+    expect(planLaunch(info({ version: 1, services: { web } }), labels).messages).toEqual([]);
   });
 
   it('no manifest: blocked, pointing at /manifest init', () => {

@@ -4,12 +4,11 @@
  * a preview origin), and the `/__bf/*` API — every endpoint of which needs the
  * per-launch token in {@link LAUNCH_TOKEN_HEADER}.
  */
-import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { LauncherLabels } from '../labels.js';
 import { LAUNCH_PATHS, LAUNCH_TOKEN_HEADER, PAGE_ASSET_PREFIX, PREVIEW_PAGE_PATH, PREVIEW_PROBE_PATH, PREVIEW_SCRIPT_PREFIX, type LaunchInfo, type ProjectChange, type ProjectSnapshot } from '../protocol.js';
 import type { LauncherHosts } from './hosts.js';
-import { send, sendText } from './httpResponses.js';
+import { send, sendText, tokenMatches } from './httpResponses.js';
 import { PAGE_FILES, type LauncherAssets } from './launcherAssets.js';
 import { apiHeaders, pageHeaders, workerScriptHeaders } from './previewHeaders.js';
 import { previewPageAllowed, previewPageHtml, previewPageTarget } from './previewPage.js';
@@ -32,13 +31,6 @@ export interface PageRouteContext {
 
 /** How often an idle change stream sends a comment, so proxies and the page see it is alive. */
 const HEARTBEAT_MS = 15_000;
-
-function tokenMatches(presented: string | string[] | undefined, token: string): boolean {
-  if (typeof presented !== 'string') return false;
-  const a = Buffer.from(presented, 'utf8');
-  const b = Buffer.from(token, 'utf8');
-  return a.byteLength === b.byteLength && timingSafeEqual(a, b);
-}
 
 function serveChanges(req: IncomingMessage, res: ServerResponse, context: PageRouteContext): void {
   res.writeHead(200, { ...apiHeaders('text/event-stream; charset=utf-8'), Connection: 'keep-alive' });

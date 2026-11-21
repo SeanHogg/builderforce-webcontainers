@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { decodeStringLiteral, importSpecifier } from '../src/importSpecifier.js';
+import { decodeStringLiteral, exportNames, importSpecifier } from '../src/importSpecifier.js';
+import { refreshFacts } from '../src/hot/reactRefresh.js';
 import { rewriteImports } from '../src/rewriteImports.js';
 import { esmReady, esmToCjs } from '../src/node/esm.js';
 
@@ -93,5 +94,17 @@ describe('regression: imports are rewritten under a CSP without unsafe-eval (bla
     expect(forbidden).toBe(allowed);
     expect(forbidden).toContain('__bfwc_import("pkg")');
     expect(forbidden).toContain('__bfwc_import("./b.js")');
+  });
+
+  it('string-literal export names survive with eval forbidden (CommonJS wrapper and React Refresh facts)', async () => {
+    const source = 'const x = 1;\nfunction App() { return null; }\nexport { x as "a-b", App as "default" };';
+    await esmReady;
+    const allowed = esmToCjs(source);
+    const allowedFacts = await refreshFacts(source, source, ['App']);
+    forbidEval();
+    expect(esmToCjs(source)).toBe(allowed);
+    expect(allowed).toContain('"a-b": () => x');
+    expect(await refreshFacts(source, source, ['App'])).toEqual(allowedFacts);
+    expect(exportNames(source, [{ s: source.indexOf('"a-b"'), e: source.indexOf('"a-b"') + 5, ls: source.indexOf('x as'), le: source.indexOf('x as') + 1 }])[0]).toMatchObject({ n: 'a-b', ln: 'x' });
   });
 });

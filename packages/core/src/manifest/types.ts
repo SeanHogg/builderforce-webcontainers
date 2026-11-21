@@ -243,7 +243,8 @@ export interface AppManifest {
   environments?: Record<string, EnvironmentSpec>;
   /**
    * Project-relative overrides for logs, diagnostics, and methodology.
-   * Absolute paths and `..` segments are invalid and omitted by the reader.
+   * An empty or absolute path, a `..` segment, or a key other than these three is an
+   * `invalid-path` / `invalid-value` warning, and `parseManifest` omits it.
    * Defaults, when an override is absent or invalid: `.builderforce/methodology`,
    * `.builderforce/logs`, `.builderforce/diagnostics`.
    */

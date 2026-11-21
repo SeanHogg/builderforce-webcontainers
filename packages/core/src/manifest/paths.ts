@@ -5,6 +5,16 @@
  */
 export type WorkspacePathKey = 'logs' | 'diagnostics' | 'methodology';
 
+/** Every `paths` key, in a stable order. */
+export const WORKSPACE_PATH_KEYS: readonly WorkspacePathKey[] = ['logs', 'diagnostics', 'methodology'];
+
+/** Why each rejected path is rejected, in a sentence. */
+export const PATH_ISSUE_DETAIL: Readonly<Record<PathIssueCode, string>> = {
+  'path-absolute': 'It is absolute.',
+  'path-parent': 'It has a ".." segment.',
+  'path-empty': 'It is empty.',
+};
+
 export interface ManifestPaths {
   logs?: string;
   diagnostics?: string;
@@ -35,4 +45,19 @@ export function validateWorkspacePath(value: string): PathIssueCode | null {
   if (path.startsWith('/') || path.startsWith('\\') || DRIVE_PREFIX.test(path)) return 'path-absolute';
   if (path.split(/[/\\]/).some((segment) => segment === '..')) return 'path-parent';
   return null;
+}
+
+/**
+ * The overrides of `paths` that may be used: each valid string entry; an absent,
+ * non-string, unknown, empty, absolute or `..` entry is left out (its default
+ * applies). `validateManifest` reports what was left out.
+ */
+export function usableWorkspacePaths(paths: unknown): ManifestPaths {
+  const usable: ManifestPaths = {};
+  if (typeof paths !== 'object' || paths === null || Array.isArray(paths)) return usable;
+  for (const key of WORKSPACE_PATH_KEYS) {
+    const value = (paths as Record<string, unknown>)[key];
+    if (typeof value === 'string' && validateWorkspacePath(value) === null) usable[key] = value.trim();
+  }
+  return usable;
 }

@@ -9,8 +9,8 @@
  * partition, where no service worker exists — the request reached this server, which
  * answered "Not found.".
  *
- * - A top-level navigation the USER started (`Sec-Fetch-Site: none`) to a preview path
- *   is redirected to the host page's `/preview?src=<url>&ticket=<…>` (`previewPageHtml`),
+ * - A top-level navigation the USER started (`Sec-Fetch-Site: none`) to a preview ROOT
+ *   (`isPreviewRoot`: no deeper path, no query) is redirected to the host page's `/preview?src=<url>&ticket=<…>` (`previewPageHtml`),
  *   which frames the same URL full size: under the host page's site again, so the relay's
  *   worker — and the launcher tab's runtime behind it — serves it. The page holds no
  *   token, runs no script, and frames only this launcher's preview origins (its CSP
@@ -23,10 +23,12 @@
  *   has not re-registered it): the bootstrap page waits for the worker and reloads
  *   once it is active, or says the preview is not running.
  */
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import type { LauncherLabels } from '../labels.js';
-import { isPreviewPath, PREVIEW_PAGE_PARAM, PREVIEW_PAGE_TICKET } from '../protocol.js';
+import { PREVIEW_ID } from '../../protocol.js';
+import { isPreviewPath, PREVIEW_PAGE_PARAM, PREVIEW_PAGE_TICKET, PREVIEW_SCRIPT_PREFIX } from '../protocol.js';
 import type { LauncherHosts } from './hosts.js';
+import { tokenMatches } from './httpResponses.js';
 import type { HeaderSet } from './previewHeaders.js';
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -65,22 +67,36 @@ export function previewTicketValid(secret: Uint8Array, src: string, ticket: stri
   const dot = ticket.indexOf('.');
   const expires = Number(ticket.slice(0, dot));
   if (dot < 1 || !Number.isSafeInteger(expires) || expires < now || expires > now + PREVIEW_TICKET_TTL_MS) return false;
-  const presented = Buffer.from(ticket.slice(dot + 1), 'utf8');
-  const expected = Buffer.from(ticketMac(secret, expires, src), 'utf8');
-  return presented.byteLength === expected.byteLength && timingSafeEqual(presented, expected);
+  return tokenMatches(ticket.slice(dot + 1), ticketMac(secret, expires, src));
 }
 
-/** Fetch Metadata of a navigation the user started (typed, bookmarked, opened from a terminal) or the page itself made. */
-export const userNavigation = (site: string | string[] | undefined) => site === 'none' || site === 'same-origin';
+const PREVIEW_ROOT = /^\/__bfwc\/([^/]+)\/(?:__port\/[1-9][0-9]{0,4}\/)?$/;
 
 /**
- * Whether `/preview` may frame `src` for this request: a navigation the user or the
- * launcher page started, or one carrying a fresh ticket the preview origin's redirect
- * minted. Another site linking here gets neither, so it cannot make the running
+ * Whether `url` is a preview's ROOT — `/__bfwc/<id>/` or a server's
+ * `/__bfwc/<id>/__port/<n>/` — with no deeper path, no query and no fragment: what a launcher or a
+ * dev server prints, and the only thing a navigation from outside the browser
+ * (`Sec-Fetch-Site: none`: a link in mail, chat, a terminal) may open. A deeper path
+ * (`/__port/8000/delete?all=1`) would let such a link drive a request into the running app.
+ */
+export function isPreviewRoot(url: URL): boolean {
+  // No query and no fragment: a hash-routed app would follow `#/admin/delete` just as it would a path.
+  if (url.search || url.hash || !url.pathname.startsWith(PREVIEW_SCRIPT_PREFIX)) return false;
+  const root = PREVIEW_ROOT.exec(url.pathname);
+  return !!root && PREVIEW_ID.test(root[1]!);
+}
+
+/**
+ * Whether `/preview` may frame `src` for this request:
+ * - the launcher page's own link (`same-origin`): any of its previews;
+ * - a fresh ticket the preview origin's redirect minted for exactly `src`;
+ * - a navigation from outside the browser (`none`): a preview root only.
+ * Another site linking here gets none of these, so it cannot make the running
  * runtime serve a request of its choosing.
  */
 export function previewPageAllowed(url: URL, site: string | string[] | undefined, secret: Uint8Array, src: string, now: number = Date.now()): boolean {
-  if (userNavigation(site)) return true;
+  if (site === 'same-origin') return true;
+  if (site === 'none' && isPreviewRoot(new URL(src))) return true;
   const tickets = url.searchParams.getAll(PREVIEW_PAGE_TICKET);
   return tickets.length === 1 && previewTicketValid(secret, src, tickets[0]!, now);
 }

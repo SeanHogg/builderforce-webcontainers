@@ -11,6 +11,7 @@ import { isValidTimeZone, parseCron } from './cron.js';
 import { parseDuration } from './duration.js';
 import { manifestIssue, type ManifestIssue } from './issues.js';
 import { environmentsOf, hasOwnKey, isRecord, isSafeKey, overrideIssues } from './overrides.js';
+import { PATH_ISSUE_DETAIL, validateWorkspacePath, WORKSPACE_PATH_KEYS } from './paths.js';
 import { commandLineIssues } from './serviceCommand.js';
 import { ENVIRONMENT_TIERS, HTTP_METHODS, MANIFEST_TARGETS, type AppManifest } from './types.js';
 
@@ -258,6 +259,26 @@ function validateEnvironments(manifest: AppManifest, issues: Issues): void {
   }
 }
 
+/** `paths.*`: project-relative and inside the project. A bad override is a warning — `parseManifest` leaves it out and the default applies. */
+function validatePaths(paths: unknown, issues: Issues): void {
+  if (paths === undefined) return;
+  if (!isRecord(paths)) {
+    issues.push(manifestIssue('invalid-value', 'paths', { severity: 'warning', detail: 'Expected an object with logs, diagnostics or methodology.' }));
+    return;
+  }
+  for (const [key, value] of Object.entries(paths)) {
+    const path = `paths.${key}`;
+    if (!(WORKSPACE_PATH_KEYS as readonly string[]).includes(key)) {
+      issues.push(manifestIssue('invalid-value', path, { severity: 'warning', detail: `Use one of: ${WORKSPACE_PATH_KEYS.join(', ')}.` }));
+    } else if (typeof value !== 'string') {
+      issues.push(manifestIssue('invalid-value', path, { severity: 'warning', value: String(value), detail: 'Expected a string.' }));
+    } else {
+      const code = validateWorkspacePath(value);
+      if (code) issues.push(manifestIssue('invalid-path', path, { severity: 'warning', value, detail: PATH_ISSUE_DETAIL[code] }));
+    }
+  }
+}
+
 /** Every issue in the manifest; empty when it is valid. */
 export function validateManifest(manifest: AppManifest): ManifestIssue[] {
   const issues: Issues = [];
@@ -276,5 +297,6 @@ export function validateManifest(manifest: AppManifest): ManifestIssue[] {
   validateJobs(jobs, services, issues);
   validateIngress(raw.ingress, services, issues);
   validateEnvironments(manifest, issues);
+  validatePaths(raw.paths, issues);
   return issues;
 }

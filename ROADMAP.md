@@ -57,6 +57,13 @@ ships on its own.
   - **A tested full-stack example.** Vite + React front end, a Laravel-style API (`composer install` → `artisan migrate` → `artisan serve`) and PGlite through `startApplicationRuntime`, with `/api` ingress; walkthrough in the README.
   - **Manifest command lines, Copy diagnostics, broader redaction.** A manifest `command` (and a job's `run.command`) is split into program and arguments; a line that needs a shell runs as `bfsh -c <line>` for a node service on the browser target and is a typed issue elsewhere (new codes `shell-command-unsupported`, `shell-command-with-args`, `command-backslash`); the node decline list sees inside shell lines. The launcher page gains "Copy diagnostics" (a redacted launch report), and `scrubCredentials` catches any `*_TOKEN`/`*_PASSWORD`/`*_KEY`-style key, quoted JSON keys and `Authorization` headers of any scheme.
   - **Docs.** The 2026.11.5 entry and upgrade guide, `attribution: false` as the one supported badge switch, the .NET bundle from npm (`@seanhogg/builderforce-webcontainers-dotnet`), and an "Assets fetched at runtime" table. Service failures surface through `app.onStateChange` / `app.onError` / `ApplicationStartError`, not a blank frame.
+- 2026.11.10: **Launcher previews.** Imports are rewritten under a CSP without `'unsafe-eval'` (es-module-lexer decodes specifiers with `eval`), so a launcher preview no longer stays blank; a preview opened in its own tab goes through the launcher page's `/preview`, framed in the partition its service worker lives in.
+- 2026.11.11: **The manifest in `.builderforce/` (item 28) and launcher hardening.** This release adds:
+  - `.builderforce/builderforce.json` is canonical. A root `builderforce.json` or `bfwc.app.json` is read as a fallback, never written, and the launcher page shows a notice to move it (`legacyManifestLocation`). A manifest whose real path leaves the project (a symlinked `.builderforce`) is refused and never read (`manifestOutsideProject`); a `.builderforce` that is a file, or a manifest path that is a directory, counts as missing.
+  - `paths` (`logs`, `diagnostics`, `methodology`) are validated: an empty or absolute path, a `..` segment or an unknown key is an `invalid-path` / `invalid-value` warning, and `parseManifest` leaves it out so the default applies.
+  - The launcher header names the project after its directory (`LaunchInfo.projectDir`), never `.builderforce`.
+  - A link from outside the browser (mail, chat) opens only a preview ROOT through `/preview`; a deeper path or a query is refused, so it cannot drive a request into the running app. The report token is compared in constant time with the launch token's helper.
+  - String-literal export names are decoded without `eval` too.
 
 ## Shipped in 2026.10.3
 
@@ -170,16 +177,8 @@ Known limits of what shipped, roughly in the order they are worth closing:
 
 Reported by the Universal Code VS Code extension, which runs generated apps in a
 webview through `/preview`, after its upgrade to 2026.11.5. Each item below was
-checked against the source. Items 19–27 shipped in 2026.11.9 (see "Shipped").
+checked against the source. Items 19–27 shipped in 2026.11.9 and item 28 in 2026.11.11 (see "Shipped").
 
-28. **The manifest belongs in `.builderforce/`, not the project root**
-   (Builderforce PRD 49 §6). `./manifest` and `bfwc-launch` read
-   `.builderforce/builderforce.json`. A root `builderforce.json` or
-   `bfwc.app.json` is read as a fallback with a deprecation issue and is never
-   written. The manifest gains `paths` (`logs`, `diagnostics`, `methodology`):
-   each must be project-relative and stay inside the project (no `..`, no
-   absolute path), and an invalid one is reported as a typed issue and falls back
-   to the `.builderforce/` default.
 29. **`createLocalLauncher` gaps for hosts that wrap it as `/preview`.** Checked
    against `packages/browser/src/launcher/server/` on 2026-11-21:
    - `frameAncestors` is fixed to the launcher page's own origin
@@ -188,7 +187,7 @@ checked against the source. Items 19–27 shipped in 2026.11.9 (see "Shipped").
    - Manifest `setup[]` steps, `startPage`, and a static fallback when there is
      no manifest are not supported.
    - No token-protected `POST /__bf/report`, and no `onReport`/`onLog`/`onError`
-     callbacks. Reports are written to the manifest's diagnostics folder (item 28).
+     callbacks. Reports are written to the manifest's diagnostics folder (`paths.diagnostics`, shipped in 2026.11.11).
    - Manifest `egress[]` is not validated by the launcher.
    - CDN pins cannot be passed through.
    - **Blocking:** no `assetsDir` option. Asset lookup uses `import.meta.url`

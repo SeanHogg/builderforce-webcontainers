@@ -97,3 +97,34 @@ export function importSpecifier(source: string, entry: LexedImport): string | un
   const literal = entry.d === -1 ? source.slice(entry.s - 1, entry.e + 1) : source.slice(entry.s, entry.e).trim();
   return decodeStringLiteral(literal);
 }
+
+/** The lexer's export record, as far as this needs it. */
+export interface LexedExport {
+  /** The exported name; undefined when the lexer could not decode a quoted one. */
+  n?: string;
+  /** The local name; undefined when there is none or the lexer could not decode a quoted one. */
+  ln?: string;
+  s: number;
+  e: number;
+  ls: number;
+  le: number;
+}
+
+/** A name span as written: a quoted string-literal name decoded, an identifier as is. */
+function nameAt(source: string, start: number, end: number): string | undefined {
+  const text = source.slice(start, end);
+  return text[0] === '"' || text[0] === "'" ? decodeStringLiteral(text) : text;
+}
+
+/**
+ * Export records with their names decoded without `eval`: the lexer decodes a
+ * string-literal name (`export { x as "a-b" }`) with `eval` too, and leaves it
+ * undefined under a CSP that forbids it.
+ */
+export function exportNames<T extends LexedExport>(source: string, exports: readonly T[]): T[] {
+  return exports.map((entry) => ({
+    ...entry,
+    n: entry.n ?? nameAt(source, entry.s, entry.e),
+    ln: entry.ln ?? (entry.ls >= 0 ? nameAt(source, entry.ls, entry.le) : undefined),
+  }));
+}

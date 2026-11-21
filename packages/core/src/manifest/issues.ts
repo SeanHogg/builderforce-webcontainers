@@ -55,6 +55,8 @@ export type ManifestIssueCode =
   | 'shell-command-with-args'
   /** An unquoted backslash before an ordinary character, which the shell drops (`C:\app\x.js` reads `C:appx.js`). A warning. `value` is the line. */
   | 'command-backslash'
+  /** A `paths.*` override is empty, absolute or climbs out with `..`. A warning: the default under `.builderforce/` is used. `value` is the path; `detail` says why. */
+  | 'invalid-path'
   /** The produced `ApplicationSpec` failed `validateSpec`. `spec` holds the issue. */
   | 'spec';
 
@@ -155,6 +157,8 @@ export function describeManifestIssue(issue: ManifestIssue): string {
       return `${at}: command "${issue.value ?? '?'}" needs a shell, so it cannot take "args" as well; put the whole command line in "command".`;
     case 'command-backslash':
       return `${at} has command "${issue.value ?? '?'}" with a backslash the shell drops (a backslash escapes the next character). Use forward slashes in paths, or quote the word.`;
+    case 'invalid-path':
+      return `${at} is "${issue.value ?? ''}", which is not a project-relative path inside the project; the default is used.${detail}`;
     case 'spec':
       return issue.spec ? describeIssue(issue.spec) : `The application spec is invalid.${detail}`;
   }

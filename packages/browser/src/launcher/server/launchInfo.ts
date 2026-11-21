@@ -39,11 +39,14 @@ export async function buildLaunchInfo(input: LaunchInfoInput): Promise<LaunchInf
   const { hosts } = input;
   return {
     projectId: input.projectId,
+    projectDir: input.root,
     environment: input.environment ?? null,
     manifestText: input.manifestText ?? located?.text ?? null,
     manifestPath: located?.path ?? manifestWritePath(input.root),
     manifestSource: input.manifestText !== undefined ? 'override' : located?.source ?? 'missing',
     ...(located?.deprecation ? { deprecation: located.deprecation } : {}),
+    ...(located?.outside ? { manifestOutside: true as const } : {}),
+    ...(located?.unreadable ? { manifestUnreadable: located.unreadable } : {}),
     relayUrl: `${hosts.relayOrigin}${PREVIEW_SCRIPT_PREFIX}relay.html`,
     previewOriginTemplate: hosts.appOriginTemplate,
     hostWorkerUrl: `${hosts.pageOrigin}${PREVIEW_SCRIPT_PREFIX}process-worker.js`,

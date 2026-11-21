@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -50,5 +50,15 @@ describe('buildLaunchInfo manifest source', () => {
     });
     expect(info.manifestSource).toBe('override');
     expect(info.manifestPath).toBe(manifestWritePath(dir));
+    expect(info.projectDir).toBe(dir);
+  });
+
+  it('a manifest linked outside the project is flagged, never read', async () => {
+    const dir = root();
+    const elsewhere = root();
+    writeFileSync(join(elsewhere, 'builderforce.json'), '{"version":1}');
+    symlinkSync(elsewhere, join(dir, '.builderforce'), 'junction');
+    const info = await buildLaunchInfo({ root: dir, projectId: 'p1', hosts, dotnet: { dir: null, reason: 'none' } });
+    expect(info).toMatchObject({ manifestText: null, manifestSource: 'missing', manifestOutside: true });
   });
 });

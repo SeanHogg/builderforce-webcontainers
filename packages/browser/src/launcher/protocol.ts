@@ -84,6 +84,8 @@ export type LaunchDotnet = { bundleUrl: string } | { bundleUrl: null; reason: st
 export interface LaunchInfo {
   /** Stable per project directory (a hash of its path): the runtime's `id`, so preview origins are the same on every launch. */
   projectId: string;
+  /** The project directory on disk (its real path): the header names the project after it when the manifest has no `name`. */
+  projectDir: string;
   /** The environment asked for; null lets the page pick (the first `browser` environment, else the first). */
   environment: string | null;
   /** The manifest text (or the launcher's override); null when the project has none. */
@@ -94,6 +96,10 @@ export interface LaunchInfo {
   manifestSource: 'file' | 'legacy' | 'override' | 'missing';
   /** Set when `manifestSource` is `legacy`. */
   deprecation?: string;
+  /** The manifest at `manifestPath` resolves outside the project (a symlinked `.builderforce`): refused, never read. */
+  manifestOutside?: true;
+  /** A manifest is at `manifestPath` but could not be read; the reason. */
+  manifestUnreadable?: string;
   /** The relay page on the shared preview origin (`https://127.0.0.1:<port>/__bfwc/relay.html`). */
   relayUrl: string;
   /** Each application's preview origin, `{key}` replaced by `previewOriginKey` (`https://{key}.localhost:<port>`). */

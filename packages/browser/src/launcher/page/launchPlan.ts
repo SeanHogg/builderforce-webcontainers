@@ -35,17 +35,17 @@ export interface LaunchHeader {
   target: string | null;
 }
 
-export type BlockedReason = 'no-manifest' | 'legacy' | 'invalid' | 'declined' | 'insecure';
+export type BlockedReason = 'no-manifest' | 'outside' | 'unreadable' | 'legacy' | 'invalid' | 'declined' | 'insecure';
 
 export type LaunchPlan =
   | { kind: 'blocked'; reason: BlockedReason; header: LaunchHeader; summary: string; messages: PlanMessage[] }
   | { kind: 'ready'; header: LaunchHeader; spec: ApplicationSpec; messages: PlanMessage[] };
 
-/** The project's name for the header: the manifest's, else its directory's. */
+/** The project's name for the header: the manifest's, else the project directory's (never the manifest's own folder, `.builderforce`). */
 function projectName(info: LaunchInfo, manifest: AppManifest | null): string {
   if (manifest && typeof manifest.name === 'string' && manifest.name.trim()) return manifest.name.trim();
-  const segments = info.manifestPath.split(/[\\/]/).filter(Boolean);
-  return segments[segments.length - 2] ?? info.projectId;
+  const segments = info.projectDir.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? info.projectId;
 }
 
 /** The environment to run when none was asked for: the first one targeting the browser, else the first declared. */
@@ -58,11 +58,33 @@ function issueMessage(issue: ManifestIssue): PlanMessage {
   return { severity: issue.severity, kind: 'issue', ...(issue.path ? { subject: issue.path } : {}), text: describeManifestIssue(issue) };
 }
 
+/**
+ * Where the manifest was found, when that needs saying: a root file from an older
+ * version (read, with a notice to move it). Shown on every plan, above its other
+ * messages. One that resolves outside the project blocks the launch with that summary.
+ */
+function locationNotices(info: LaunchInfo, labels: LauncherLabels): PlanMessage[] {
+  const path = info.manifestPath;
+  if (info.manifestSource === 'legacy') return [{ severity: 'warning', kind: 'issue', subject: path, text: formatLabel(labels.legacyManifestLocation, { path }) }];
+  return [];
+}
+
 export function planLaunch(info: LaunchInfo, labels: LauncherLabels): LaunchPlan {
+  const plan = planFromManifest(info, labels);
+  const notices = locationNotices(info, labels);
+  return notices.length ? { ...plan, messages: [...notices, ...plan.messages] } : plan;
+}
+
+function planFromManifest(info: LaunchInfo, labels: LauncherLabels): LaunchPlan {
   const blank: LaunchHeader = { name: projectName(info, null), environment: info.environment, tier: null, target: null };
   // The runtime runs applications only on https preview origins (no http exception): an http launcher (`tls: false`) boots nothing.
   if (!info.relayUrl.startsWith('https:') || !info.previewOriginTemplate.startsWith('https:')) {
     return { kind: 'blocked', reason: 'insecure', header: blank, summary: labels.insecureLauncher, messages: [] };
+  }
+  // A manifest outside the project is not "no manifest": `/manifest init` would write through the same link.
+  if (info.manifestOutside) return { kind: 'blocked', reason: 'outside', header: blank, summary: formatLabel(labels.manifestOutsideProject, { path: info.manifestPath }), messages: [] };
+  if (info.manifestUnreadable !== undefined) {
+    return { kind: 'blocked', reason: 'unreadable', header: blank, summary: formatLabel(labels.manifestUnreadable, { path: info.manifestPath, reason: info.manifestUnreadable }), messages: [] };
   }
   if (info.manifestText === null) return { kind: 'blocked', reason: 'no-manifest', header: blank, summary: labels.noManifest, messages: [] };
 
