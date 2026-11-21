@@ -167,8 +167,10 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
     void settled.then((code) => exited(run, code));
 
     try {
-      // A one-off's readiness is its exit: ready once its output is in the log too (`exited` takes it from there).
-      const isReady = readiness.kind === 'exit-zero' ? handle.ready().then(() => settled.then(() => undefined)) : handle.ready();
+      // A one-off that is ready because it exited is ready once its output is in the log too (`exited` takes it
+      // from there). A provider may also call it ready while it still runs: that is ready now, as before — waiting
+      // for an exit that has not happened would hold a running service in `starting` until its readiness timeout.
+      const isReady = readiness.kind === 'exit-zero' ? handle.ready().then(() => exitedThenDrained(run, handle, settled)) : handle.ready();
       await within(isReady, {
         ms: timeoutMs,
         onTimeout: () => {
@@ -189,6 +191,11 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
       return end(run, { phase: 'readiness', message: reason });
     }
     if (active === run) becomeReady(run);
+  }
+
+  /** Once the process has exited, its exit handled after the drain (`settled`); at once while it still runs. */
+  async function exitedThenDrained(run: ServiceRun, handle: ServiceHandle, settled: Promise<number>): Promise<void> {
+    if (run.exitCode !== undefined || (await exitWithin(handle, 0)) !== undefined) await settled;
   }
 
   /**

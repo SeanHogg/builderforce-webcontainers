@@ -69,9 +69,6 @@ cross-origin isolation, and Nuxt 4 stalls during start-up (see the
   report, now catches any key ending in a secret word (`GITHUB_TOKEN=`,
   `DB_PASSWORD=`, `OPENAI_API_KEY:`), quoted JSON keys
   (`"token":"…"`), and `Authorization` headers of any scheme.
-
-## What's new in 2026.11.8
-
 - **Diagnostics.** `runtime.diagnostics()` returns one load report: phase
   timings (runtime start, service worker ready, compiler load, preview first
   paint), package CDN request count, total time and errors, requests per
@@ -89,7 +86,7 @@ cross-origin isolation, and Nuxt 4 stalls during start-up (see the
   `origins` and the runtime adds them to the preview egress;
   `createEsmShCdnFactory({ origin })` does this for an esm.sh mirror. A custom
   CDN with no `origins` logs one warning instead of producing a blank page.
-  See [Since 2026.11.8](#since-2026118).
+  See [Since 2026.11.9](#since-2026119).
 - **Laravel's `php artisan serve` runs.** A Vite frontend, a Laravel API and
   Postgres start end to end as one application, and a setup step's output
   (`composer install`, `npm install`) ends with its last line before a service
@@ -204,7 +201,7 @@ const runtime = await startPreviewRuntime({
 In relay mode, the preview origin serves its files with the headers in
 [Preview origin headers](packages/browser/README.md#preview-origin-headers).
 
-#### Since 2026.11.8
+#### Since 2026.11.9
 
 - A custom `cdn` factory may declare `origins`. The runtime adds them to the
   preview CSP automatically. esm.sh's default factory declares
@@ -215,7 +212,7 @@ In relay mode, the preview origin serves its files with the headers in
 - `previewCspMode: 'report-only'` reports violations without blocking anything.
   Use it while you migrate.
 - `runtime.diagnostics()` returns one load report, CSP violations included.
-- **Check your `sw.js` gate.** 2026.11.8 is the first runtime that honours
+- **Check your `sw.js` gate.** 2026.11.9 is the first runtime that honours
   `csp=report-only` in the `sw.js` URL, and preview code can register `sw.js`
   again with any query. So every embedder's gate must be an allowlist of the
   query keys it checks. It must refuse `csp`, unless you deliberately run

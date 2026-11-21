@@ -48,13 +48,14 @@ ships on its own.
     - the host page reads the project through a token-gated, contained file API and live sync;
     - each application gets its own `https://<key>.localhost` origin.
   - **Shared preview headers.** `./preview-headers` is now the single owner of the preview-origin headers and CSP.
-- 2026.11.8: **Integrator feedback** (items 19–27, reported after the 2026.11.5 upgrade). See the README's "What's new in 2026.11.8" and "Since 2026.11.8". **Embedders must update their `sw.js` gate:** this is the first runtime that honours `csp=report-only` from the service-worker URL, so the gate must be an allowlist of query keys that refuses `csp` and duplicate keys (the launcher and the Builderforce API now do). This release adds:
+- 2026.11.9: **Integrator feedback** (items 19–27, reported after the 2026.11.5 upgrade). 2026.11.8 was tagged but never published (its release tests failed). See the README's "What's new in 2026.11.9" and "Since 2026.11.9". **Embedders must update their `sw.js` gate:** this is the first runtime that honours `csp=report-only` from the service-worker URL, so the gate must be an allowlist of query keys that refuses `csp` and duplicate keys (the launcher and the Builderforce API now do). This release adds:
   - **CDN origins in the preview CSP.** A `cdn` factory declares `origins` (`createEsmShCdnFactory({ origin })` for esm.sh mirrors); they are validated and added to the egress, and a CDN without usable origins warns once per runtime instead of producing a blank page. Egress is exactly own origin + CDN origins + `previewEgress`.
   - **CSP violations in the host page.** `runtime.onCspViolation` reports directive and blocked origin only (never a path), deduped and capped in the page and again in the host. `previewCspMode: 'report-only'` for migrations.
   - **`runtime.diagnostics()`** and **`app.diagnostics()`**: phase timings, CDN and per-origin request totals, the slowest requests, recent violations, cold/warm cache, what could not be measured, and per-service state with the last log lines. Registration failures of `sw.js` name the configuration the gate may have refused.
   - **Laravel's `php artisan serve`** runs (it spawned `php -S` through `proc_open`, which php-wasm lacks — the cause of a blank Angular + Laravel preview). Laravel's semantics: global options, `host:port`, `SERVER_HOST`/`SERVER_PORT` from the environment or `.env`, `public/` docroot, Laravel's `server.php` router when installed.
   - **Output ends before state changes.** A process's output (`combinedOutput`, `app.logs(id)`) always delivers its last line before the service becomes ready, stopped or failed, on stop, restart and dispose too; a provider that never closes its stream is bounded by `stopTimeoutMs` with a logged note. Trailing bytes of an incomplete UTF-8 sequence are no longer dropped.
   - **A tested full-stack example.** Vite + React front end, a Laravel-style API (`composer install` → `artisan migrate` → `artisan serve`) and PGlite through `startApplicationRuntime`, with `/api` ingress; walkthrough in the README.
+  - **Manifest command lines, Copy diagnostics, broader redaction.** A manifest `command` (and a job's `run.command`) is split into program and arguments; a line that needs a shell runs as `bfsh -c <line>` for a node service on the browser target and is a typed issue elsewhere (new codes `shell-command-unsupported`, `shell-command-with-args`, `command-backslash`); the node decline list sees inside shell lines. The launcher page gains "Copy diagnostics" (a redacted launch report), and `scrubCredentials` catches any `*_TOKEN`/`*_PASSWORD`/`*_KEY`-style key, quoted JSON keys and `Authorization` headers of any scheme.
   - **Docs.** The 2026.11.5 entry and upgrade guide, `attribution: false` as the one supported badge switch, the .NET bundle from npm (`@seanhogg/builderforce-webcontainers-dotnet`), and an "Assets fetched at runtime" table. Service failures surface through `app.onStateChange` / `app.onError` / `ApplicationStartError`, not a blank frame.
 
 ## Shipped in 2026.10.3
@@ -169,7 +170,7 @@ Known limits of what shipped, roughly in the order they are worth closing:
 
 Reported by the Universal Code VS Code extension, which runs generated apps in a
 webview through `/preview`, after its upgrade to 2026.11.5. Each item below was
-checked against the source. Items 19–27 shipped in 2026.11.8 (see "Shipped").
+checked against the source. Items 19–27 shipped in 2026.11.9 (see "Shipped").
 
 28. **The manifest belongs in `.builderforce/`, not the project root**
    (Builderforce PRD 49 §6). `./manifest` and `bfwc-launch` read
