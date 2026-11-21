@@ -6,11 +6,13 @@
  */
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { LAUNCH_PATHS, LAUNCH_TOKEN_HEADER, PAGE_ASSET_PREFIX, PREVIEW_PROBE_PATH, PREVIEW_SCRIPT_PREFIX, type LaunchInfo, type ProjectChange, type ProjectSnapshot } from '../protocol.js';
+import type { LauncherLabels } from '../labels.js';
+import { LAUNCH_PATHS, LAUNCH_TOKEN_HEADER, PAGE_ASSET_PREFIX, PREVIEW_PAGE_PATH, PREVIEW_PROBE_PATH, PREVIEW_SCRIPT_PREFIX, type LaunchInfo, type ProjectChange, type ProjectSnapshot } from '../protocol.js';
 import type { LauncherHosts } from './hosts.js';
 import { send, sendText } from './httpResponses.js';
 import { PAGE_FILES, type LauncherAssets } from './launcherAssets.js';
 import { apiHeaders, pageHeaders, workerScriptHeaders } from './previewHeaders.js';
+import { previewPageAllowed, previewPageHtml, previewPageTarget } from './previewPage.js';
 import type { ProjectWatch } from './projectWatch.js';
 
 export interface PageRouteContext {
@@ -22,6 +24,10 @@ export interface PageRouteContext {
   watch: ProjectWatch;
   /** Every open `/__bf/changes` stream, so `close()` can end them. */
   streams: Set<ServerResponse>;
+  /** The `/preview` page's text. */
+  labels: LauncherLabels;
+  /** Checks the preview origin's redirect ticket. */
+  previewSecret: Uint8Array;
 }
 
 /** How often an idle change stream sends a comment, so proxies and the page see it is alive. */
@@ -89,6 +95,16 @@ export async function servePageOrigin(req: IncomingMessage, res: ServerResponse,
   // No script on the host origin may become a service worker.
   if (req.headers['service-worker'] !== undefined) return sendText(req, res, 403, headersFor('text/plain; charset=utf-8'), 'Not a service worker.');
   if (url.pathname === '/' || url.pathname === '/index.html') return send(req, res, 200, headersFor(PAGE_FILES['index.html']!), assets.page['index.html']);
+  // A preview in its own tab, framed under this origin so the relay's service worker serves it (previewPage.ts).
+  if (url.pathname === PREVIEW_PAGE_PATH) {
+    const src = previewPageTarget(url, hosts);
+    if (!src) return sendText(req, res, 400, headersFor('text/plain; charset=utf-8'), context.labels.previewInvalid);
+    // Only the user or the launcher page opens it; another site's link gets nothing framed (previewPage.ts).
+    if (!previewPageAllowed(url, req.headers['sec-fetch-site'], context.previewSecret, src)) {
+      return sendText(req, res, 403, headersFor('text/plain; charset=utf-8'), context.labels.previewInvalid);
+    }
+    return send(req, res, 200, headersFor('text/html; charset=utf-8'), previewPageHtml(src, context.labels));
+  }
   if (url.pathname.startsWith(PAGE_ASSET_PREFIX)) {
     const name = url.pathname.slice(PAGE_ASSET_PREFIX.length);
     const type = Object.hasOwn(PAGE_FILES, name) ? PAGE_FILES[name] : undefined;

@@ -294,6 +294,107 @@ describe('createLocalLauncher: runtime files and their headers', () => {
     expect((await get(port, host, '/__bfwc/relay.html', {}, 'POST')).status).toBe(405);
   });
 
+  it('regression: a preview URL opened in its own tab is redirected to the host page\'s /preview, not answered "Not found."', async () => {
+    const { port } = await launch({ 'builderforce.json': NODE_MANIFEST });
+    for (const [host, path] of [[`127.0.0.1:${port}`, '/__bfwc/p938597a5800961552f10d8ce/'], [`${KEY}.localhost:${port}`, '/__bfwc/p938597a5800961552f10d8ce/__port/8000/items?x=1']] as const) {
+      const tab = await get(port, host, path, { 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none' });
+      expect(tab.status, host).toBe(302);
+      const location = new URL(String(tab.headers['location']));
+      expect(location.origin + location.pathname).toBe(`https://localhost:${port}/preview`);
+      expect(location.searchParams.get('src')).toBe(`https://${host}${path}`);
+      expect(location.searchParams.get('ticket')).toMatch(/^\d+\.[A-Za-z0-9_-]+$/);
+      expect(tab.headers['cache-control']).toBe('no-store');
+      // The redirect's ticket opens /preview, which the browser reaches as a cross-site navigation.
+      const shown = await get(port, `localhost:${port}`, location.pathname + location.search, { 'Sec-Fetch-Site': 'cross-site' });
+      expect(shown.status, host).toBe(200);
+      expect(shown.body).toContain('bf-preview-page-frame');
+    }
+    // Another site navigating a tab to a preview URL gets no redirect (and so no ticket).
+    for (const site of ['cross-site', 'same-site', undefined]) {
+      const headers: Record<string, string> = { 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', ...(site ? { 'Sec-Fetch-Site': site } : {}) };
+      expect((await get(port, `127.0.0.1:${port}`, '/__bfwc/pabc/', headers)).status, String(site)).toBe(404);
+    }
+    // Not a navigation (a script, a fetch, no Fetch Metadata), and not a preview path: still a 404.
+    expect((await get(port, `127.0.0.1:${port}`, '/__bfwc/pabc/main.js', { 'Sec-Fetch-Dest': 'script' })).status).toBe(404);
+    expect((await get(port, `127.0.0.1:${port}`, '/__bfwc/pabc/')).status).toBe(404);
+    expect((await get(port, `127.0.0.1:${port}`, '/other/', { 'Sec-Fetch-Dest': 'document' })).status).toBe(404);
+  });
+
+  it('regression: a framed preview path no service worker answered gets the bootstrap (waits for the worker, reloads), framed only by the host page', async () => {
+    const { port } = await launch({ 'builderforce.json': NODE_MANIFEST });
+    const frame = await get(port, `127.0.0.1:${port}`, '/__bfwc/pabc/', { 'Sec-Fetch-Dest': 'iframe', 'Sec-Fetch-Mode': 'navigate' });
+    expect(frame.status).toBe(503);
+    expect(frame.headers['content-type']).toContain('text/html');
+    expect(frame.body).toContain('Starting the preview');
+    expect(frame.body).toContain('location.reload()');
+    const csp = String(frame.headers['content-security-policy']);
+    expect(csp).toMatch(/script-src 'sha256-[A-Za-z0-9+/=]+'/);
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain(`frame-ancestors https://localhost:${port}`);
+    expect(csp).not.toContain('unsafe-inline');
+    const script = /<script>([\s\S]*)<\/script>/.exec(frame.body)![1]!;
+    const { createHash } = await import('node:crypto');
+    expect(csp).toContain(`'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`);
+  });
+
+  it('regression: the host page\'s /preview frames one of this launcher\'s previews full size, and nothing else', async () => {
+    const { port } = await launch({ 'builderforce.json': NODE_MANIFEST }, { labels: { preview: 'Aperçu <x>' } });
+    const page = `localhost:${port}`;
+    const src = `https://${KEY}.localhost:${port}/__bfwc/pabc/__port/8000/?a=1&b="2"`;
+    const shown = await get(port, page, `/preview?src=${encodeURIComponent(src)}`, { 'Sec-Fetch-Site': 'same-origin' });
+    expect(shown.status).toBe(200);
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(src)}`, { 'Sec-Fetch-Site': 'none' })).status).toBe(200);
+    expect(shown.headers['content-type']).toContain('text/html');
+    expect(shown.body).toContain(`<iframe class="bf-preview-page-frame" src="https://${KEY}.localhost:${port}/__bfwc/pabc/__port/8000/?a=1&#38;b=%222%22"`);
+    expect(shown.body).toContain('Aperçu &#60;x&#62;');
+    expect(shown.body).not.toContain('<script');
+    const csp = String(shown.headers['content-security-policy']);
+    expect(csp).toContain(`frame-src https://127.0.0.1:${port} https://*.localhost:${port}`);
+    expect(csp).toContain("frame-ancestors 'none'");
+    for (const bad of [
+      'https://evil.example/__bfwc/pabc/',
+      `https://localhost:${port}/__bfwc/pabc/`,
+      `http://127.0.0.1:${port}/__bfwc/pabc/`,
+      `https://127.0.0.1:${port + 1}/__bfwc/pabc/`,
+      `https://127.0.0.1:${port}/__bfwc/relay.html`,
+      `https://user:pw@127.0.0.1:${port}/__bfwc/pabc/`,
+      'javascript:alert(1)',
+      'not a url',
+    ]) {
+      expect((await get(port, page, `/preview?src=${encodeURIComponent(bad)}`)).status, bad).toBe(400);
+    }
+    expect((await get(port, page, '/preview')).status).toBe(400);
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(src)}&src=${encodeURIComponent(src)}`)).status).toBe(400);
+  });
+
+  it('regression: another site cannot make /preview frame a preview (no ticket, a forged, foreign or expired one)', async () => {
+    const { port } = await launch({ 'builderforce.json': NODE_MANIFEST });
+    const page = `localhost:${port}`;
+    const src = `https://${KEY}.localhost:${port}/__bfwc/pabc/__port/8000/delete?all=1`;
+    const other = `https://${KEY}.localhost:${port}/__bfwc/pabc/`;
+    const crossSite = { 'Sec-Fetch-Site': 'cross-site' };
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(src)}`, crossSite)).status).toBe(403);
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(src)}`)).status).toBe(403); // no Fetch Metadata
+    const redirect = await get(port, `${KEY}.localhost:${port}`, '/__bfwc/pabc/', { 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Site': 'none' });
+    const ticket = new URL(String(redirect.headers['location'])).searchParams.get('ticket')!;
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(other)}&ticket=${encodeURIComponent(ticket)}`, crossSite)).status).toBe(200);
+    // The ticket is bound to its src, its MAC and its expiry.
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(src)}&ticket=${encodeURIComponent(ticket)}`, crossSite)).status).toBe(403);
+    const [expires, mac] = ticket.split('.');
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(other)}&ticket=${expires}.${mac!.slice(1)}A`, crossSite)).status).toBe(403);
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(other)}&ticket=${Number(expires) + 1}.${mac}`, crossSite)).status).toBe(403);
+    expect((await get(port, page, `/preview?src=${encodeURIComponent(other)}&ticket=${encodeURIComponent(ticket)}&ticket=${encodeURIComponent(ticket)}`, crossSite)).status).toBe(403);
+  });
+
+  it('preview tickets expire', async () => {
+    const { mintPreviewTicket, previewTicketValid, PREVIEW_TICKET_TTL_MS } = await import('../../src/launcher/server/previewPage.js');
+    const secret = new Uint8Array(32).fill(7);
+    const ticket = mintPreviewTicket(secret, 'https://x/', 1_000);
+    expect(previewTicketValid(secret, 'https://x/', ticket, 1_000)).toBe(true);
+    expect(previewTicketValid(secret, 'https://x/', ticket, 1_000 + PREVIEW_TICKET_TTL_MS + 1)).toBe(false);
+    expect(previewTicketValid(new Uint8Array(32).fill(8), 'https://x/', ticket, 1_000)).toBe(false);
+  });
+
   it('the host page: its document, bundle and stylesheet, and the database Worker script; framed by nobody', async () => {
     const { port } = await launch({ 'builderforce.json': NODE_MANIFEST });
     const page = `localhost:${port}`;

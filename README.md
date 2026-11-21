@@ -41,6 +41,34 @@ not run yet: Nuxt 3's parser has only a threaded WebAssembly build, which needs
 cross-origin isolation, and Nuxt 4 stalls during start-up (see the
 [ROADMAP](ROADMAP.md)). The roadmap is how it closes the rest of the gap.
 
+## What's new in 2026.11.10
+
+- **Launcher previews render.** A React app run by `bfwc-launch` showed an
+  empty frame with only the badge: the dev server sent its modules with bare
+  imports (`react`, `react/jsx-runtime`) left in, and the browser refused them.
+  es-module-lexer decodes each import specifier with `eval`, which the launcher
+  page's CSP forbids, so every specifier came back empty and none was rewritten.
+  Specifiers are now decoded without `eval`, so imports
+  are rewritten to the package CDN under any CSP. The CSP itself is unchanged.
+- **"Open in new tab" works.** A preview opened in its own tab (the launcher's
+  link, or the `Local:` URL Vite prints) answered "Not found.". Preview origins
+  are a different site from the launcher page, so the relay's service worker
+  lives in the launcher page's storage partition, and a top-level tab on a
+  preview origin has none. The preview origin now redirects such a tab to the
+  launcher page's new `/preview?src=<url>`, which frames the preview full size
+  under the same partition, served by the running launcher tab. The page runs
+  no script, holds no token, and frames only this launcher's preview origins.
+  A framed preview that loads before its service worker is active gets a small
+  bootstrap page (one hash-pinned script) that reloads once the worker is
+  active, or says the preview is not running. Three new overridable labels:
+  `previewStarting`, `previewNotRunning` and `previewInvalid`.
+- **The manifest lives in `.builderforce/`.** `.builderforce/builderforce.json`
+  is the canonical manifest (`./manifest` exports `locateManifest` and
+  `manifestWritePath`; `bfwc-launch` reads it there). A root `builderforce.json`
+  or `bfwc.app.json` is a deprecated fallback: still read, never written. The
+  manifest gains `paths` (`logs`, `diagnostics`, `methodology`), each
+  project-relative inside the project, defaulting under `.builderforce/`.
+
 ## What's new in 2026.11.9
 
 - **A manifest `command` is a command line.** `npm install`, `npm run dev` and

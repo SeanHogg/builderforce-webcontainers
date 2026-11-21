@@ -23,7 +23,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo, Server } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { LauncherLabels } from '../labels.js';
+import { resolveLabels, type LauncherLabels } from '../labels.js';
 import { LAUNCH_TOKEN_PARAM } from '../protocol.js';
 import { resolveDotnetBundle } from './dotnetBundle.js';
 import { classifyHostname, launcherHosts, type LauncherHosts } from './hosts.js';
@@ -102,7 +102,10 @@ export async function createLocalLauncher(options: LocalLauncherOptions): Promis
   const root = await realpath(options.projectDir);
   const assets = await loadLauncherAssets(options.distDir ?? options.assetsDir);
   const projectId = projectIdOf(root);
+  const labels = resolveLabels(options.labels);
   const token = randomBytes(24).toString('base64url');
+  /** Signs `/preview` tickets (previewPage.ts). */
+  const previewSecret = randomBytes(32);
   const dotnet = resolveDotnetBundle(root, options.dotnetBundleDir);
   const tls = options.tls === undefined ? { storeDir: defaultCaStoreDir() } : options.tls;
   const ca = tls === false ? null : await loadOrCreateLocalCa(tls.storeDir);
@@ -123,11 +126,13 @@ export async function createLocalLauncher(options: LocalLauncherOptions): Promis
         token,
         watch,
         streams,
+        labels,
+        previewSecret,
         launchInfo: () => buildLaunchInfo({ root, projectId, hosts: hosts!, environment: options.environment, manifestText: options.manifestText, dotnet, labels: options.labels }),
         files: () => readProjectTree(root, options.limits),
       });
     }
-    return servePreviewOrigin(req, res, url, req.headers.host!.toLowerCase(), { hosts: hosts!, assets, dotnetDir: dotnet.dir, reportToken: options.reportToken });
+    return servePreviewOrigin(req, res, url, req.headers.host!.toLowerCase(), { hosts: hosts!, assets, dotnetDir: dotnet.dir, reportToken: options.reportToken, labels, previewSecret });
   }
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {

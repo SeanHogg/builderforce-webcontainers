@@ -32,6 +32,12 @@ export interface LauncherLabels {
   preview: string;
   openInNewTab: string;
   noPreview: string;
+  /** A preview tab or frame no service worker serves yet (the preview origin's bootstrap page). */
+  previewStarting: string;
+  /** The bootstrap gave up: no launcher tab runs this preview. */
+  previewNotRunning: string;
+  /** `/preview?src=` named something that is not one of this launcher's previews. */
+  previewInvalid: string;
   problems: string;
   noProblems: string;
   declined: string;
@@ -79,6 +85,9 @@ export const DEFAULT_LAUNCHER_LABELS: Readonly<LauncherLabels> = Object.freeze({
   preview: 'Preview',
   openInNewTab: 'Open in new tab',
   noPreview: 'No service serves a page yet.',
+  previewStarting: 'Starting the preview…',
+  previewNotRunning: 'This preview is not running. Keep the launcher tab open, or start the project again with bfwc-launch.',
+  previewInvalid: 'That address is not a preview of this launcher.',
   problems: 'Issues and declines',
   noProblems: 'No issues.',
   declined: 'Declined',

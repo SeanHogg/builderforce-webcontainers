@@ -16,6 +16,7 @@
  * import runs, which covers the common cyclic case.
  */
 import { init, parse } from 'es-module-lexer';
+import { importSpecifier } from '../importSpecifier.js';
 
 /** Resolve before the first transform (the lexer is WebAssembly). */
 export const esmReady: Promise<void> = init;
@@ -140,10 +141,11 @@ export function esmToCjs(source: string): string {
       edits.push({ start: imp.s, end: imp.e, text: '__bfwc_meta' });
       continue;
     }
-    if (imp.t !== 1 || imp.n === undefined) continue;
+    const specifier = imp.t === 1 ? importSpecifier(source, imp) : undefined;
+    if (specifier === undefined) continue;
     const statement = source.slice(imp.ss, imp.se);
     const ns = `__bfwc_m${counter++}`;
-    const load = `const ${ns} = ${call(imp.n)};`;
+    const load = `const ${ns} = ${call(specifier)};`;
 
     if (statement.startsWith('export')) {
       reexportStarts.add(imp.ss);
@@ -157,7 +159,7 @@ export function esmToCjs(source: string): string {
 
     const clause = /^import\s*([\s\S]*?)\s*from\s*["']/.exec(statement)?.[1];
     if (clause === undefined) {
-      edits.push({ start: imp.ss, end: imp.se, text: `${call(imp.n)};` });
+      edits.push({ start: imp.ss, end: imp.se, text: `${call(specifier)};` });
       continue;
     }
     const parts: string[] = [load];

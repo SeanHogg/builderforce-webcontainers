@@ -1,13 +1,16 @@
 /**
  * The preview origins' answers — the relay's (`127.0.0.1:<port>`) and each
  * application's (`<key>.localhost:<port>`): the relay page, `sw.js` and the
- * process Workers under `/__bfwc/`, the .NET bundle under `/dotnet/`, and a 404
- * (with the preview document policy) for anything else. Routed the way the
+ * process Workers under `/__bfwc/`, the .NET bundle under `/dotnet/`, a preview
+ * path no service worker answered (`previewPage.ts`: a tab is redirected to the host
+ * page's `/preview`, a frame gets the bootstrap), and a 404 (with the preview
+ * document policy) for anything else. Routed the way the
  * Builderforce API routes its preview hosts (`browserPreviewOrigin.ts`): a script
  * is registered as a service worker only as `sw.js`, and only in relay mode.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { DOTNET_BUNDLE_PREFIX, PREVIEW_PROBE_PATH, PREVIEW_SCRIPT_PREFIX } from '../protocol.js';
+import type { LauncherLabels } from '../labels.js';
+import { DOTNET_BUNDLE_PREFIX, isPreviewPath, PREVIEW_PROBE_PATH, PREVIEW_SCRIPT_PREFIX, previewPageHref } from '../protocol.js';
 import { readDotnetBundleFile } from './dotnetBundle.js';
 import type { LauncherHosts } from './hosts.js';
 import { send, sendText } from './httpResponses.js';
@@ -15,6 +18,7 @@ import type { LauncherAssets } from './launcherAssets.js';
 import {
   PREVIEW_WORKER_SCRIPTS, previewDocumentHeaders, probeHeaders, relayHeaders, serviceWorkerAllowed, serviceWorkerHeaders, workerScriptHeaders, type PreviewScript,
 } from './previewHeaders.js';
+import { mintPreviewTicket, previewBootstrapHeaders, previewBootstrapHtml } from './previewPage.js';
 
 /** Header a preview page must send to POST a load report. */
 export const REPORT_TOKEN_HEADER = 'x-bfwc-report-token';
@@ -26,6 +30,10 @@ export interface PreviewRouteContext {
   dotnetDir: string | null;
   /** When set, `POST /__bfwc/report` is accepted with this token. Otherwise the path is a 404. */
   reportToken?: string;
+  /** The bootstrap page's text. */
+  labels: LauncherLabels;
+  /** Signs the redirect's `/preview` ticket (per launch, never sent anywhere). */
+  previewSecret: Uint8Array;
 }
 
 function scriptOf(pathname: string): PreviewScript | 'relay.html' | null {
@@ -96,6 +104,15 @@ export async function servePreviewOrigin(req: IncomingMessage, res: ServerRespon
       // Immutable bytes: an application's Worker on its own origin reads them from the relay's.
       return send(req, res, 200, { ...documentHeaders, 'Content-Type': file.contentType, 'Cache-Control': 'public, max-age=3600', ...bundleCors(req.headers.origin, context.hosts) }, file.body);
     }
+  }
+  // A preview path no service worker answered (previewPage.ts): a tab the user opened goes to the host page's `/preview`, a frame waits for the worker.
+  if (isPreviewPath(url.pathname)) {
+    const destination = req.headers['sec-fetch-dest'];
+    if (destination === 'document' && req.headers['sec-fetch-site'] === 'none') {
+      const location = `${context.hosts.pageOrigin}${previewPageHref(url.href, mintPreviewTicket(context.previewSecret, url.href))}`;
+      return send(req, res, 302, { ...documentHeaders, 'Cache-Control': 'no-store', Location: location });
+    }
+    if (destination === 'iframe' || destination === 'frame') return send(req, res, 503, previewBootstrapHeaders(frameAncestors), previewBootstrapHtml(context.labels));
   }
   sendText(req, res, 404, documentHeaders, 'Not found.');
 }

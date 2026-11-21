@@ -4,6 +4,7 @@
  * launcher page (`dist/launcher/page.js`) reads. Pure types and constants, shared
  * by both sides, so neither spells a path or a header twice.
  */
+import { PREVIEW_ID } from '../protocol.js';
 import type { LauncherLabels } from './labels.js';
 
 /** The header the page forwards the per-launch token in. Every `/__bf/*` endpoint answers 403 without it. */
@@ -28,6 +29,41 @@ export const PREVIEW_SCRIPT_PREFIX = '/__bfwc/';
  * application origins resolve and that their certificates are trusted.
  */
 export const PREVIEW_PROBE_PATH = '/__bfwc/probe';
+
+/**
+ * The preview page on the host page's origin: `/preview?src=<a preview URL>` frames
+ * that preview full size. A preview opened in its own tab ("Open in new tab", the
+ * `Local:` URL a dev server prints) lands here: framed under the host page's site, it
+ * shares the storage partition — and so the service worker — the launcher's relay
+ * registered. A top-level tab on the preview origin itself is a different partition
+ * with no service worker in it, so the preview origin redirects such a navigation here.
+ *
+ * Only the user may open it, never another site: it is answered for a navigation the
+ * user started (`Sec-Fetch-Site: none`), one from the launcher page itself
+ * (`same-origin`), or one carrying a fresh {@link PREVIEW_PAGE_TICKET} the preview
+ * origin's redirect minted (a redirect from another origin reads `cross-site`).
+ */
+export const PREVIEW_PAGE_PATH = '/preview';
+
+/** The query parameter of {@link PREVIEW_PAGE_PATH} naming the preview URL to frame. */
+export const PREVIEW_PAGE_PARAM = 'src';
+
+/** The query parameter carrying the redirect's short-lived ticket for `src`. */
+export const PREVIEW_PAGE_TICKET = 'ticket';
+
+/** The host-origin-relative URL that shows `previewUrl` full size in its own tab (`ticket`: the redirect's). */
+export function previewPageHref(previewUrl: string, ticket?: string): string {
+  const href = `${PREVIEW_PAGE_PATH}?${PREVIEW_PAGE_PARAM}=${encodeURIComponent(previewUrl)}`;
+  return ticket === undefined ? href : `${href}&${PREVIEW_PAGE_TICKET}=${encodeURIComponent(ticket)}`;
+}
+
+/** Whether `pathname` is a preview's path on a preview origin (`/__bfwc/<id>/…`), not a runtime file (`/__bfwc/sw.js`). */
+export function isPreviewPath(pathname: string): boolean {
+  if (!pathname.startsWith(PREVIEW_SCRIPT_PREFIX)) return false;
+  const rest = pathname.slice(PREVIEW_SCRIPT_PREFIX.length);
+  const slash = rest.indexOf('/');
+  return slash > 0 && PREVIEW_ID.test(rest.slice(0, slash));
+}
 
 /** The application key the page probes `*.localhost` with (any 32-hex key resolves the same way). */
 export const PROBE_KEY = '0'.repeat(32);

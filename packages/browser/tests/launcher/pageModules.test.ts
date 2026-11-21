@@ -157,3 +157,18 @@ describe('labels', () => {
     expect(formatLabel('Port {port} of {name}', { port: 3000 })).toBe('Port 3000 of {name}');
   });
 });
+
+describe('regression: "Open in new tab" goes through the host page\'s /preview', () => {
+  it('previewPageHref names the preview URL; isPreviewPath tells a preview path from a runtime file', async () => {
+    const { isPreviewPath, previewPageHref } = await import('../../src/launcher/protocol.js');
+    const url = 'https://127.0.0.1:61071/__bfwc/p938597a5800961552f10d8ce/';
+    expect(previewPageHref(url)).toBe(`/preview?src=${encodeURIComponent(url)}`);
+    expect(new URL(previewPageHref(url), 'https://localhost:61071').searchParams.get('src')).toBe(url);
+    expect(isPreviewPath('/__bfwc/p938597a5800961552f10d8ce/')).toBe(true);
+    expect(isPreviewPath('/__bfwc/p9/__port/8000/x')).toBe(true);
+    expect(isPreviewPath('/__bfwc/sw.js')).toBe(false);
+    expect(isPreviewPath('/__bfwc/relay.html')).toBe(false);
+    expect(isPreviewPath('/__bfwc/p9')).toBe(false);
+    expect(isPreviewPath('/dotnet/x/')).toBe(false);
+  });
+});

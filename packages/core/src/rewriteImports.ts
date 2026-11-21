@@ -1,4 +1,5 @@
 import { init, parse } from 'es-module-lexer';
+import { importSpecifier } from './importSpecifier.js';
 
 /**
  * Rewrite every import specifier in an ES module — static `import`/`export … from`,
@@ -7,7 +8,9 @@ import { init, parse } from 'es-module-lexer';
  * non-literal dynamic imports and `import.meta`.
  *
  * Positions come from es-module-lexer rather than a regex, so specifiers inside
- * strings, comments and template literals are never touched.
+ * strings, comments and template literals are never touched. Specifiers are
+ * decoded without `eval` (`importSpecifier`), so this works under a CSP that
+ * forbids it.
  */
 export async function rewriteImports(code: string, map: (specifier: string) => string | undefined): Promise<string> {
   await init;
@@ -15,9 +18,10 @@ export async function rewriteImports(code: string, map: (specifier: string) => s
   let out = '';
   let cursor = 0;
   for (const entry of imports) {
-    if (entry.d === -2 || entry.n === undefined) continue; // import.meta, or a non-literal dynamic import
-    const replacement = map(entry.n);
-    if (replacement === undefined || replacement === entry.n) continue;
+    const specifier = importSpecifier(code, entry);
+    if (specifier === undefined) continue; // import.meta, or a non-literal dynamic import
+    const replacement = map(specifier);
+    if (replacement === undefined || replacement === specifier) continue;
     const dynamic = entry.d > -1;
     out += code.slice(cursor, entry.s) + (dynamic ? JSON.stringify(replacement) : replacement);
     cursor = entry.e;

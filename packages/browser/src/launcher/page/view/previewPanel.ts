@@ -1,5 +1,10 @@
-/** The preview: the primary frontend service in a frame, with a link that opens it in its own tab. */
+/**
+ * The preview: the primary frontend service in a frame, with a link that opens it in its own tab —
+ * through this origin's `/preview` page, which frames it there: a top-level tab on the preview
+ * origin itself has no service worker (another storage partition), so it could not load.
+ */
 import type { LauncherLabels } from '../../labels.js';
+import { previewPageHref } from '../../protocol.js';
 import { el, replaceChildren } from './dom.js';
 
 export function createPreviewPanel(labels: LauncherLabels) {
@@ -21,7 +26,7 @@ export function createPreviewPanel(labels: LauncherLabels) {
         replaceChildren(body, [el('p', { className: 'bf-empty', text: labels.noPreview })]);
         return;
       }
-      link.href = url;
+      link.href = previewPageHref(url);
       link.hidden = false;
       title.textContent = serviceId ? `${labels.preview} · ${serviceId}` : labels.preview;
       replaceChildren(body, [el('iframe', { className: 'bf-frame', attrs: { src: url, title: serviceId ?? labels.preview } })]);
