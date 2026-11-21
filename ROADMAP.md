@@ -150,6 +150,85 @@ Known limits of what shipped, roughly in the order they are worth closing:
 18. **Process start-up cost.** Each process receives a full snapshot of the file
    system; a shared, copy-on-read store (or OPFS) would make spawning O(1).
 
+## Integrator feedback (2026-11-21)
+
+Reported by the Universal Code VS Code extension, which runs generated apps in a
+webview through `/preview`, after its upgrade to 2026.11.5. Each item below was
+checked against the source. Items that are already shipped are listed at the end.
+
+19. **A custom `cdn` silently drops esm.sh from the preview CSP.** In
+   `packages/browser/src/host.ts:71-74`, `previewEgress()` adds
+   `DEFAULT_CDN_ORIGIN` only when `cdn` is unset, and it never adds the custom
+   CDN's own origin. `PackageCdnFactory` does not expose an origin to add. The
+   result is a blank preview, and the host page gets no message. Fix: give
+   `PackageCdnFactory` an `origin` (or `origins`) and always add it to the
+   egress. If a custom CDN declares no origin, log one console warning that
+   names the gap.
+20. **What `previewEgress` adds to is undocumented.** The runtime's only built-in
+   egress is the default CDN, and it is dropped when `cdn` is set (item 19).
+   An integrator who sets both `cdn` and an array therefore loses esm.sh and reads
+   that as "the array replaced the defaults". Fix: state the exact composition in
+   the `previewEgress` doc comment and in the README's preview-origin section:
+   own origin, plus the CDN origin(s), plus the declared list. Then decide
+   whether an explicit `extraEgress` and `includeDefaults` pair is still needed
+   once item 19 lands.
+21. **No in-page signal of what the CSP blocked.** `cspReportUrl` sends
+   violation reports to a server endpoint, but the host page gets nothing.
+   Integrators write their own `securitypolicyviolation` collectors. For example,
+   OpenStreetMap tiles were blocked with no signal at all. Fix: forward each
+   preview `securitypolicyviolation` (directive and blocked origin, no URL path)
+   through the preview bridge as `onCspViolation`. Also add a report-only
+   option, `previewCspMode: 'report-only'`, for migrations.
+22. **The CSP default shipped without a changelog entry or a migration note.** The
+   default preview policy now blocks ordinary third-party resources such as map
+   tiles, web fonts and public APIs. Nothing under "Shipped" says so, and there is no
+   upgrade guide. Fix: add a 2026.11.5 entry under "Shipped" and a README
+   "Upgrading to 2026.11.5" note. The note covers the CSP default, `previewEgress`,
+   `cspReportUrl`, and same-origin previews needing `unprotectedSameOrigin: true`
+   (`previewOrigin.ts:124-139`), with a before/after snippet.
+23. **There are two ways to turn off the badge, and the docs don't say which to use.**
+   `attribution: false` is the host option. The `bfwc-badge off` shell command
+   (`core/src/shell/hiddenCommands.ts`, marker `/.bfwc/attribution-off`) is
+   described in source as maintainer-only. Fix: the README names
+   `attribution: false` as the supported switch and says `bfwc-badge` is an
+   internal toggle.
+24. **No tested example of a multi-service, multi-runtime app.** The `./app`
+   README shows Node with Node. Integrators are building a Vite front end (Angular
+   or React) with a PHP (Laravel), .NET or Node API on PGlite Postgres. Their
+   `angular-laravel` starter shows a blank frame after `composer install`, and the
+   cause has not been found. Fix: add an end-to-end fixture and test for an
+   Angular or React app on Vite, with a Laravel API and a PGlite database through
+   `startApplicationRuntime`, plus a README walkthrough. Then reproduce the
+   blank frame against that fixture.
+25. **It is not documented whether a setup step's output stream closes when it exits.**
+   Integrators currently stop waiting 1 s after a `composer install` or
+   `npm install` exits, in case the stream stays open. Fix: add a test that every
+   provider's `combinedOutput` and `app.logs(id)` close, or deliver their last
+   line, when the process exits. Then state the guarantee in the README, or fix
+   the providers that break it.
+26. **Hosts can't easily find the .NET bundle or the assets fetched at runtime.**
+   The bundle has been published as `@seanhogg/builderforce-webcontainers-dotnet`
+   since 2026.11.6. The README's .NET section still says that this package never
+   contains it and that it must be built with `scripts/build-dotnet-runtime.mjs`.
+   Fix: point the README at the npm package and give a `bundleUrl` example that
+   serves it. Also add an "Assets fetched at runtime" table, covering esm.sh,
+   PGlite from jsDelivr, php-wasm, Composer and NuGet, Pyodide, and the
+   compilers. The table gives each asset's origin and how to self-host it, for
+   hosts with a strict CSP or no network.
+27. **No single diagnostics call.** Integrators build their own load reports
+   from several sources: phase timings, requests by origin, the slowest
+   requests, CSP blocks and service logs. Fix: add
+   `runtime.diagnostics()`. It returns phase timings (runtime start, compiler
+   download and compile, first paint), CDN request count and total time,
+   per-origin request results, CSP violations (item 21), and, for apps, service
+   states with their last log lines. It must report whether the cache was cold or
+   warm, so slowdown reports come with numbers.
+
+Already shipped. Each is answered in the README; no work is needed:
+- Service failure events: `app.onStateChange` (`failed` state), `app.onError`
+  with restart intent, and `ApplicationStartError`. Integrators should surface
+  these instead of treating a blank frame as the failure signal.
+
 ## Principles
 
 - Ports over hard dependencies: compiler, package CDN and transport are swappable.
