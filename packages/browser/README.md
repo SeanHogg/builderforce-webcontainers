@@ -290,6 +290,15 @@ to the **current user's** store:
 `caTrustCheckCommand(ca)` is a cheap "already trusted?" probe where one exists (Windows:
 `certutil -user -verifystore Root <thumbprint>`; macOS: `security verify-cert -c <ca.cer>`).
 
+**The page.** The preview shows the frontend service by default; click any service that
+serves HTTP on a port (its card, or the card's head button — Enter/Space) to show it in the
+preview instead, with the heading and "Open in new tab" following. Databases and port-less
+one-offs are not previewable. If the chosen service stops or fails, the preview returns to
+the default and says so. The services list shows Running services by default (up, on their
+way, or failed — a failure is never hidden); finished one-off setup steps (exit-zero
+readiness) and stopped services show under All, with a count of what is hidden. The choice
+lasts for the page session. Every string is a `LauncherLabels` key.
+
 **Browsers.** Before booting, the page fetches a probe on the relay and on a `*.localhost`
 origin; if either fails (the CA is not trusted, or the name does not resolve) it says so and
 starts nothing. Chromium and Firefox resolve `*.localhost` to loopback themselves; Safari

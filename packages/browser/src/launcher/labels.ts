@@ -18,6 +18,28 @@ export interface LauncherLabels {
   tierNonProduction: string;
   services: string;
   noServices: string;
+  /** The services filter's group name. */
+  servicesFilter: string;
+  /** The filter showing services that are up, on their way, or failed (the default). */
+  servicesFilterRunning: string;
+  /** The filter showing every service. `{count}` is how many there are. */
+  servicesFilterAll: string;
+  /** Under the Running filter: how many finished or stopped services are hidden. `{count}`. */
+  servicesHidden: string;
+  /** The button beside `servicesHidden` that switches to the All filter. */
+  servicesShowAll: string;
+  /** The Running filter with nothing to show (every service finished or stopped). */
+  noRunningServices: string;
+  /** The affordance on a service card that shows it in the preview. */
+  previewAction: string;
+  /** The mark on the card the preview shows. */
+  previewing: string;
+  /** A previewable card's tooltip. `{service}`. */
+  previewService: string;
+  /** The chosen service stopped or failed for good, or is gone; the preview went back to the default. `{service}`. */
+  previewSelectionLost: string;
+  /** The chosen service is not serving right now (restarting); the default shows until it is. `{service}`. */
+  previewSelectionWaiting: string;
   port: string;
   restarts: string;
   restart: string;
@@ -77,6 +99,17 @@ export const DEFAULT_LAUNCHER_LABELS: Readonly<LauncherLabels> = Object.freeze({
   tierNonProduction: 'Non-production',
   services: 'Services',
   noServices: 'No services.',
+  servicesFilter: 'Show services',
+  servicesFilterRunning: 'Running',
+  servicesFilterAll: 'All ({count})',
+  servicesHidden: '{count} hidden: finished setup steps or stopped services.',
+  servicesShowAll: 'Show all',
+  noRunningServices: 'No service is running.',
+  previewAction: 'Preview',
+  previewing: 'In preview',
+  previewService: 'Show {service} in the preview',
+  previewSelectionLost: '{service} is no longer serving, so the preview went back to the default service.',
+  previewSelectionWaiting: '{service} is not serving right now; the preview returns to it when it is.',
   port: 'Port {port}',
   restarts: 'Restarts: {count}',
   restart: 'Restart',

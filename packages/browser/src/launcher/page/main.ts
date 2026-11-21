@@ -3,7 +3,7 @@
  * reads the launch (token from the URL fragment), decides what it can run
  * (`launchPlan.ts`), boots the runtime and the application (`bootApplication.ts`),
  * keeps the runtime's files in step with the disk (`liveSync.ts`), and shows each
- * service's state and logs, the primary frontend in a frame, and every issue and
+ * service's state and logs, the primary frontend (or the service chosen on its card) in a frame, and every issue and
  * decline (`view/`).
  */
 import type { ApplicationRuntime, ServiceLogEntry } from '../../app/types.js';
@@ -11,7 +11,7 @@ import { DEFAULT_LAUNCHER_LABELS, formatLabel, resolveLabels, type LauncherLabel
 import type { LaunchInfo } from '../protocol.js';
 import { bootApplication } from './bootApplication.js';
 import { createLaunchClient, readLaunchToken, type LaunchClient } from './launchConfig.js';
-import { planLaunch, primaryServiceOf } from './launchPlan.js';
+import { planLaunch } from './launchPlan.js';
 import { probeOrigins } from './originProbe.js';
 import { startLiveSync } from './liveSync.js';
 import { runtimeDeps } from './runtimeDeps.js';
@@ -55,13 +55,7 @@ async function run(client: LaunchClient, info: LaunchInfo, view: LauncherView, l
   view.header.setStatus(labels.bootingRuntime);
   const { runtime, application } = await bootApplication(plan, info, snapshot, runtimeDeps);
   hold.application = application;
-  const refresh = () => {
-    const services = application.listServices();
-    view.services.render(services);
-    view.logs.setServices(services.map((service) => service.id));
-    const primary = primaryServiceOf(services);
-    view.preview.show(primary?.url, primary?.id);
-  };
+  const refresh = () => view.update(application.listServices());
   application.onStateChange(refresh);
   application.onError(refresh);
   refresh();

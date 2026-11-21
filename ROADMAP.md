@@ -64,6 +64,7 @@ ships on its own.
   - The launcher header names the project after its directory (`LaunchInfo.projectDir`), never `.builderforce`.
   - A link from outside the browser (mail, chat) opens only a preview ROOT through `/preview`; a deeper path or a query is refused, so it cannot drive a request into the running app. The report token is compared in constant time with the launch token's helper.
   - String-literal export names are decoded without `eval` too.
+- 2026.11.12: **Launcher: preview any service, and a Running / All filter.** Clicking a service that serves HTTP (not a database, not a port-less one-off) shows it in the preview pane; the heading and "Open in new tab" follow it, and the choice is held through a restart or a crash the runtime will recover from, falling back to the frontend with a notice only when the service stops for good. The Services panel shows **Running** by default — finished setup steps (`install-web`, `install-api`) are under **All (n)** — and a failed service is never hidden. 11 new `LauncherLabels` keys (`servicesFilter*`, `servicesHidden`, `servicesShowAll`, `noRunningServices`, `preview*`).
 
 ## Shipped in 2026.10.3
 

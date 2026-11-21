@@ -57,6 +57,9 @@ importers:
       fake-indexeddb:
         specifier: ^6.0.0
         version: 6.2.6
+      jsdom:
+        specifier: 26.1.0
+        version: 26.1.0
       pg:
         specifier: ^8.23.1
         version: 8.23.1
