@@ -58,6 +58,10 @@ cross-origin isolation, and Nuxt 4 stalls during start-up (see the
   launcher page's new `/preview?src=<url>`, which frames the preview full size
   under the same partition, served by the running launcher tab. The page runs
   no script, holds no token, and frames only this launcher's preview origins.
+  Only the user can open it, never another site: the redirect happens only for
+  a tab the user opened (`Sec-Fetch-Site: none`) and carries a 60-second ticket
+  signed for that one URL, and `/preview` otherwise answers only the launcher
+  page's own link.
   A framed preview that loads before its service worker is active gets a small
   bootstrap page (one hash-pinned script) that reloads once the worker is
   active, or says the preview is not running. Three new overridable labels:
