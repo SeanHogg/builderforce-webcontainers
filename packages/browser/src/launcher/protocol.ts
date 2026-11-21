@@ -50,12 +50,14 @@ export interface LaunchInfo {
   projectId: string;
   /** The environment asked for; null lets the page pick (the first `browser` environment, else the first). */
   environment: string | null;
-  /** `builderforce.json`'s text (or the launcher's override); null when the project has none. */
+  /** The manifest text (or the launcher's override); null when the project has none. */
   manifestText: string | null;
-  /** Where `builderforce.json` is (or would be) on disk. */
+  /** Where the manifest was read, or the canonical `.builderforce/builderforce.json` when missing. */
   manifestPath: string;
-  /** Where `manifestText` came from. */
-  manifestSource: 'file' | 'override' | 'missing';
+  /** Where `manifestText` came from. `legacy` is a root file from an older version — read, never written. */
+  manifestSource: 'file' | 'legacy' | 'override' | 'missing';
+  /** Set when `manifestSource` is `legacy`. */
+  deprecation?: string;
   /** The relay page on the shared preview origin (`https://127.0.0.1:<port>/__bfwc/relay.html`). */
   relayUrl: string;
   /** Each application's preview origin, `{key}` replaced by `previewOriginKey` (`https://{key}.localhost:<port>`). */

@@ -16,11 +16,16 @@ import {
   PREVIEW_WORKER_SCRIPTS, previewDocumentHeaders, probeHeaders, relayHeaders, serviceWorkerAllowed, serviceWorkerHeaders, workerScriptHeaders, type PreviewScript,
 } from './previewHeaders.js';
 
+/** Header a preview page must send to POST a load report. */
+export const REPORT_TOKEN_HEADER = 'x-bfwc-report-token';
+
 export interface PreviewRouteContext {
   hosts: LauncherHosts;
   assets: LauncherAssets;
   /** The .NET bundle's directory, when there is one. */
   dotnetDir: string | null;
+  /** When set, `POST /__bfwc/report` is accepted with this token. Otherwise the path is a 404. */
+  reportToken?: string;
 }
 
 function scriptOf(pathname: string): PreviewScript | 'relay.html' | null {
@@ -42,9 +47,21 @@ function bundleCors(origin: string | string[] | undefined, hosts: LauncherHosts)
   return allowed ? { 'Access-Control-Allow-Origin': origin as string, Vary: 'Origin' } : { Vary: 'Origin' };
 }
 
+function tokenMatches(presented: string | string[] | undefined, token: string): boolean {
+  return typeof presented === 'string' && presented.length === token.length && presented === token;
+}
+
 export async function servePreviewOrigin(req: IncomingMessage, res: ServerResponse, url: URL, host: string, context: PreviewRouteContext): Promise<void> {
   const frameAncestors = [context.hosts.pageOrigin];
   const documentHeaders = previewDocumentHeaders(host, frameAncestors);
+  if (url.pathname === '/__bfwc/report') {
+    if (!context.reportToken) return sendText(req, res, 404, documentHeaders, 'Not found.');
+    if (req.method !== 'POST') return sendText(req, res, 405, { ...documentHeaders, Allow: 'POST' }, 'Method not allowed.');
+    if (!tokenMatches(req.headers[REPORT_TOKEN_HEADER], context.reportToken)) {
+      return sendText(req, res, 403, documentHeaders, 'The report token is missing or wrong.');
+    }
+    return send(req, res, 204, documentHeaders);
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     sendText(req, res, 405, { ...documentHeaders, Allow: 'GET, HEAD' }, 'Method not allowed.');
     return;

@@ -42,6 +42,7 @@ export const APP_MANIFEST_SCHEMA_V1 = {
     jobs: keyedBy('job'),
     ingress: ref('ingress'),
     environments: { type: 'object', additionalProperties: ref('environment') },
+    paths: ref('paths'),
   },
   required: ['version'],
   additionalProperties: false,
@@ -140,6 +141,15 @@ export const APP_MANIFEST_SCHEMA_V1 = {
         services: { type: 'object', additionalProperties: { type: 'object' } },
         resources: { type: 'object', additionalProperties: { type: 'object' } },
         jobs: { type: 'object', additionalProperties: { type: 'object' } },
+      },
+      additionalProperties: false,
+    },
+    paths: {
+      type: 'object',
+      properties: {
+        logs: { type: 'string', description: 'Project-relative. Default .builderforce/logs. No absolute path, no .. segment.' },
+        diagnostics: { type: 'string', description: 'Project-relative. Default .builderforce/diagnostics. No absolute path, no .. segment.' },
+        methodology: { type: 'string', description: 'Project-relative. Default .builderforce/methodology. No absolute path, no .. segment.' },
       },
       additionalProperties: false,
     },

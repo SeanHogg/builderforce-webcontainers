@@ -1,6 +1,6 @@
 {
   "name": "@seanhogg/builderforce-webcontainers",
-  "version": "2026.11.9",
+  "version": "2026.11.10",
   "description": "BuilderForce WebContainers — browser runtime. Boots an in-browser dev server for a project held in memory and serves it to an iframe through a service worker. Open source, no COOP/COEP, no session caps.",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -51,6 +51,10 @@
     "./launcher/server": {
       "types": "./dist/launcher/server/index.d.ts",
       "import": "./dist/launcher/server/index.js"
+    },
+    "./manifest": {
+      "types": "./dist/manifest/index.d.ts",
+      "import": "./dist/manifest/index.js"
     }
   },
   "bin": {

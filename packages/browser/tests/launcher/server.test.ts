@@ -113,7 +113,7 @@ describe('createLocalLauncher: the /__bf API', () => {
       projectId: launcher.projectId,
       environment: 'local',
       manifestText: NODE_MANIFEST,
-      manifestSource: 'file',
+      manifestSource: 'legacy',
       relayUrl: `https://127.0.0.1:${port}/__bfwc/relay.html`,
       previewOriginTemplate: `https://{key}.localhost:${port}`,
       hostWorkerUrl: `https://localhost:${port}/__bfwc/process-worker.js`,

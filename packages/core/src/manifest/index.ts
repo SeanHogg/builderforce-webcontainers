@@ -6,6 +6,8 @@
  * environment to an `ApplicationSpec`. Pure: no browser or Node APIs.
  */
 export { APP_MANIFEST_SCHEMA_URL, DEFAULT_ENVIRONMENTS, ENVIRONMENT_TIERS, HTTP_METHODS, MANIFEST_TARGETS } from './types.js';
+export { validateWorkspacePath } from './paths.js';
+export type { ManifestPaths, PathIssue, PathIssueCode, WorkspacePathKey } from './paths.js';
 export type {
   AppManifest,
   Availability,

@@ -56,8 +56,12 @@ export interface LocalLauncherOptions {
   labels?: Partial<LauncherLabels>;
   /** The .NET runtime bundle's directory; default `@seanhogg/builderforce-webcontainers-dotnet` when it resolves. */
   dotnetBundleDir?: string;
-  /** This package's built `dist/` (default: found beside this module). */
+  /** This package's built `dist/` (default: found beside this module). `assetsDir` is the same directory under its PRD 49 name. */
   distDir?: string;
+  /** Alias of `distDir`: the built asset directory the launcher serves. */
+  assetsDir?: string;
+  /** When set, preview pages may POST `/__bfwc/report` with header `x-bfwc-report-token`. */
+  reportToken?: string;
   /** Override the tree caps (tests). */
   limits?: ProjectLimits;
   /** The change stream's debounce (default 120ms). */
@@ -96,7 +100,7 @@ function listen(server: Server, port: number): Promise<number> {
 
 export async function createLocalLauncher(options: LocalLauncherOptions): Promise<LocalLauncher> {
   const root = await realpath(options.projectDir);
-  const assets = await loadLauncherAssets(options.distDir);
+  const assets = await loadLauncherAssets(options.distDir ?? options.assetsDir);
   const projectId = projectIdOf(root);
   const token = randomBytes(24).toString('base64url');
   const dotnet = resolveDotnetBundle(root, options.dotnetBundleDir);
@@ -123,7 +127,7 @@ export async function createLocalLauncher(options: LocalLauncherOptions): Promis
         files: () => readProjectTree(root, options.limits),
       });
     }
-    return servePreviewOrigin(req, res, url, req.headers.host!.toLowerCase(), { hosts: hosts!, assets, dotnetDir: dotnet.dir });
+    return servePreviewOrigin(req, res, url, req.headers.host!.toLowerCase(), { hosts: hosts!, assets, dotnetDir: dotnet.dir, reportToken: options.reportToken });
   }
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {

@@ -6,14 +6,13 @@
  * server never judges it.
  */
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { locateManifest, MANIFEST_FILE, manifestWritePath } from '../../manifest/locate.js';
 import type { LauncherLabels } from '../labels.js';
 import { DOTNET_BUNDLE_PREFIX, PREVIEW_SCRIPT_PREFIX, type LaunchInfo } from '../protocol.js';
 import type { DotnetBundleSource } from './dotnetBundle.js';
 import type { LauncherHosts } from './hosts.js';
 
-export const MANIFEST_FILE = 'builderforce.json';
+export { MANIFEST_FILE };
 
 /**
  * A stable project id for `projectDir` (its real path): `p` + 24 hex of SHA-256. It is
@@ -35,26 +34,16 @@ export interface LaunchInfoInput {
   labels?: Partial<LauncherLabels>;
 }
 
-async function readManifest(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
 export async function buildLaunchInfo(input: LaunchInfoInput): Promise<LaunchInfo> {
-  const manifestPath = join(input.root, MANIFEST_FILE);
-  const fromFile = input.manifestText === undefined ? await readManifest(manifestPath) : null;
-  const manifestText = input.manifestText ?? fromFile;
+  const located = input.manifestText === undefined ? await locateManifest(input.root) : null;
   const { hosts } = input;
   return {
     projectId: input.projectId,
     environment: input.environment ?? null,
-    manifestText,
-    manifestPath,
-    manifestSource: input.manifestText !== undefined ? 'override' : fromFile === null ? 'missing' : 'file',
+    manifestText: input.manifestText ?? located?.text ?? null,
+    manifestPath: located?.path ?? manifestWritePath(input.root),
+    manifestSource: input.manifestText !== undefined ? 'override' : located?.source ?? 'missing',
+    ...(located?.deprecation ? { deprecation: located.deprecation } : {}),
     relayUrl: `${hosts.relayOrigin}${PREVIEW_SCRIPT_PREFIX}relay.html`,
     previewOriginTemplate: hosts.appOriginTemplate,
     hostWorkerUrl: `${hosts.pageOrigin}${PREVIEW_SCRIPT_PREFIX}process-worker.js`,

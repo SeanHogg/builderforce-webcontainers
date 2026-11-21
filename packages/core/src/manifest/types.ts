@@ -241,6 +241,13 @@ export interface AppManifest {
   jobs?: Record<string, JobSpec>;
   ingress?: IngressSpec;
   environments?: Record<string, EnvironmentSpec>;
+  /**
+   * Project-relative overrides for logs, diagnostics, and methodology.
+   * Absolute paths and `..` segments are invalid and omitted by the reader.
+   * Defaults, when an override is absent or invalid: `.builderforce/methodology`,
+   * `.builderforce/logs`, `.builderforce/diagnostics`.
+   */
+  paths?: import('./paths.js').ManifestPaths;
 }
 
 /** The environments a manifest that declares none has. */
