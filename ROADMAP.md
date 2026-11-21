@@ -223,6 +223,34 @@ checked against the source. Items that are already shipped are listed at the end
    per-origin request results, CSP violations (item 21), and, for apps, service
    states with their last log lines. It must report whether the cache was cold or
    warm, so slowdown reports come with numbers.
+28. **The manifest belongs in `.builderforce/`, not the project root**
+   (Builderforce PRD 49 §6). `./manifest` and `bfwc-launch` read
+   `.builderforce/builderforce.json`. A root `builderforce.json` or
+   `bfwc.app.json` is read as a fallback with a deprecation issue and is never
+   written. The manifest gains `paths` (`logs`, `diagnostics`, `methodology`):
+   each must be project-relative and stay inside the project (no `..`, no
+   absolute path), and an invalid one is reported as a typed issue and falls back
+   to the `.builderforce/` default.
+29. **`createLocalLauncher` gaps for hosts that wrap it as `/preview`.** Checked
+   against `packages/browser/src/launcher/server/` on 2026-11-21:
+   - `frameAncestors` is fixed to the launcher page's own origin
+     (`previewRoutes.ts:46`). Add an option so an embedding webview can frame it.
+   - No API ingress or same-origin `/api` proxy to a host-side service.
+   - Manifest `setup[]` steps, `startPage`, and a static fallback when there is
+     no manifest are not supported.
+   - No token-protected `POST /__bf/report`, and no `onReport`/`onLog`/`onError`
+     callbacks. Reports are written to the manifest's diagnostics folder (item 28).
+   - Manifest `egress[]` is not validated by the launcher.
+   - CDN pins cannot be passed through.
+   - **Blocking:** no `assetsDir` option. Asset lookup uses `import.meta.url`
+     (`launcherAssets.ts:43`, `dotnetBundle.ts:47`), which breaks when a host
+     bundles the launcher.
+   - No `ignoredDirs` for the file API and live sync.
+   - LAN access needs a decision (the launcher is 127.0.0.1-only today, which is
+     the safe default).
+   Not applicable here: the reported unauthenticated `/__dotnet/*` route is in the
+   integrator's own wrapper. This launcher serves only the public .NET bundle under
+   `/dotnet/`, contained to the bundle directory.
 
 Already shipped. Each is answered in the README; no work is needed:
 - Service failure events: `app.onStateChange` (`failed` state), `app.onError`
