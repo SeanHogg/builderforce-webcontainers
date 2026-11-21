@@ -29,7 +29,13 @@ const ORDINARY = /[A-Za-z0-9._/:,@+-]/;
 /** A bracketed IPv6 literal (`[::]`, `[::1]`, `[fe80::1%eth0]`), not a glob class. */
 const IPV6_BRACKET = /^\[[0-9A-Fa-f.]*:[0-9A-Fa-f:.%\w]*\]/;
 /** Redirects whose next word is their target, not an argument. */
-const REDIRECT_WITH_TARGET = new Set(['>', '>>', '<', '2>', '2>>', '&>', '<<', '<<-']);
+const REDIRECT_WITH_TARGET = new Set(['>', '>>', '<', '2>', '2>>', '&>']);
+/**
+ * Redirects with no target word: they stay inside the simple command. `<<` /
+ * `<<-` belong here because the tokenizer reads a here-document's delimiter into
+ * its `heredoc` token, so the word after it is the command's own.
+ */
+const REDIRECT_WITHOUT_TARGET = new Set(['2>&1', '>&2', '<<', '<<-']);
 
 interface RawScan {
   /** An unquoted, unescaped `*`, `?` or `[` the shell would expand. */
@@ -132,10 +138,17 @@ export function shellCommandWords(line: string): string[][] {
     current = [];
   };
   for (const token of tokens) {
-    if (token.type === 'heredoc') continue;
+    if (token.type === 'heredoc') {
+      // An unquoted body expands, so its `$(…)` runs commands too.
+      if (token.body) substitutions(token.body);
+      continue;
+    }
     if (token.type === 'op') {
       if (REDIRECT_WITH_TARGET.has(token.op)) skipTarget = true;
-      else if (token.op !== '2>&1' && token.op !== '>&2') end();
+      else if (!REDIRECT_WITHOUT_TARGET.has(token.op)) {
+        skipTarget = false;
+        end();
+      }
       continue;
     }
     substitutions(token.word);

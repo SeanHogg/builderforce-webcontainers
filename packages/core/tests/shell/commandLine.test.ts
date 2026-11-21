@@ -78,4 +78,19 @@ describe('shellCommandWords', () => {
     expect(shellCommandWords('X=`wrangler whoami` node s.js')).toEqual([['wrangler', 'whoami'], ['node', 's.js']]);
     expect(shellCommandWords('echo "${A:-$(docker ps)}"')).toContainEqual(['docker', 'ps']);
   });
+
+  it('regression: a here-document delimiter is not a redirect target, so the next word is kept', () => {
+    expect(shellCommandWords('cat <<EOF\nhi\nEOF\ndocker compose up')).toEqual([['cat'], ['docker', 'compose', 'up']]);
+    expect(shellCommandWords('cat <<-EOF notes.txt\n\thi\n\tEOF')).toEqual([['cat', 'notes.txt']]);
+    expect(shellCommandWords("cat <<'EOF' > .env\nPORT=3000\nEOF\nwrangler dev")).toEqual([['cat'], ['wrangler', 'dev']]);
+  });
+
+  it('regression: an unquoted here-document body runs its command substitutions; a quoted one does not', () => {
+    expect(shellCommandWords('cat <<EOF\n$(docker ps)\nEOF')).toContainEqual(['docker', 'ps']);
+    expect(shellCommandWords("cat <<'EOF'\n$(docker ps)\nEOF")).toEqual([['cat']]);
+  });
+
+  it('regression: a redirect with no target does not swallow the next command', () => {
+    expect(shellCommandWords('echo hi > && docker compose up')).toEqual([['echo', 'hi'], ['docker', 'compose', 'up']]);
+  });
 });

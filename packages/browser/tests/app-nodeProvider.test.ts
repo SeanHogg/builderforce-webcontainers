@@ -103,6 +103,12 @@ describe('node provider', () => {
     expect(acceptsNodeService(app('sh', ['-c', 'npm install && npm run dev']))).toEqual({ ok: true });
   });
 
+  it('regression: a here-document does not hide the next command from the decline list', () => {
+    const app = (command: string, args: string[]) => ({ id: 'app', type: 'application' as const, runtime: 'node', command, args });
+    expect(acceptsNodeService(app('bfsh', ['-c', 'cat <<EOF > .env\nPORT=3000\nEOF\ndocker compose up']))).toMatchObject({ ok: false, reason: expect.stringContaining('Docker') });
+    expect(acceptsNodeService(app('bfsh', ['-c', 'cat <<EOF\nhi\nEOF\nnpm run dev']))).toEqual({ ok: true });
+  });
+
   it('runs an API and a dependent service that calls it after readiness; stops both in reverse order', async () => {
     const processes = kernel(FILES);
     const runtime = startApplicationRuntime(SPEC, { runtime: stubRuntime(), providers: [createNodeProvider(nodeHost(processes), { probeIntervalMs: 20 })], readinessTimeoutMs: 20_000 });
