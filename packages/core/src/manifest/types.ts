@@ -127,7 +127,15 @@ export interface ManifestService {
   runtime: string;
   /** Project-relative directory. Default `/`. */
   root?: string;
+  /**
+   * A command line, not just a program name: `npm run dev`, `uvicorn main:app --port 8000`,
+   * `"/path with space/node" server.js`. Its words become the program and leading arguments
+   * (before `args`). A line that needs a shell (`&&`, `|`, redirects, `FOO=1 cmd`, `$VAR`)
+   * runs through `bfsh -c` for a node service on the browser target, takes no `args`, and is
+   * an issue on any other runtime or target. Use forward slashes in paths: an unquoted `\` escapes.
+   */
   command: string;
+  /** Arguments after the command line's own. */
   args?: string[];
   port?: number;
   /** Default `backend`. A `frontend` never receives credentials. */
@@ -151,6 +159,7 @@ export interface ManifestService {
 /** Run a command in a service's environment. */
 export interface JobRun {
   service: string;
+  /** A command line (`npm run migrate`), read like a service's `command`. */
   command: string;
 }
 

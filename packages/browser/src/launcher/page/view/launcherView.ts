@@ -4,6 +4,8 @@
  * screen — see launcher.css).
  */
 import type { LauncherLabels } from '../../labels.js';
+import { buildDiagnosticsReport } from '../diagnosticsReport.js';
+import { createCopyButton } from './copyButton.js';
 import { el } from './dom.js';
 import { createHeaderBar } from './headerBar.js';
 import { createLogPanel } from './logPanel.js';
@@ -14,7 +16,21 @@ import { createServicesPanel, type ServicesPanelActions } from './servicesPanel.
 export function createLauncherView(container: HTMLElement, labels: LauncherLabels, actions: ServicesPanelActions) {
   const header = createHeaderBar(labels);
   const preview = createPreviewPanel(labels);
-  const logs = createLogPanel(labels);
+  // "Copy diagnostics" reads every panel's state at the moment of the click.
+  const copy = createCopyButton({ idle: labels.copyDiagnostics, copied: labels.copyDiagnosticsDone, failed: labels.copyDiagnosticsFailed }, () => {
+    const { summary, messages } = problems.snapshot();
+    return buildDiagnosticsReport({
+      now: new Date(),
+      pageUrl: location.href,
+      userAgent: navigator.userAgent,
+      ...header.snapshot(),
+      ...(summary ? { summary } : {}),
+      services: services.current(),
+      problems: messages,
+      logs: logs.allLines(),
+    });
+  });
+  const logs = createLogPanel(labels, [copy]);
   const services = createServicesPanel(labels, {
     restart: actions.restart,
     showLogs: (serviceId) => {

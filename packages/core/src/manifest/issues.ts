@@ -49,6 +49,12 @@ export type ManifestIssueCode =
   | 'frontend-uses-credentials'
   /** Jobs are declared but the environment's target does not run them yet. */
   | 'jobs-not-run'
+  /** A service command line needs a shell (`&&`, `|`, redirects, `FOO=1 cmd`, `$VAR`), and its runtime or target has none. `value` is the line; `detail` says which. */
+  | 'shell-command-unsupported'
+  /** A command line that needs a shell, plus `args`: joined as text they could be swallowed (`#`, a trailing `&`), so everything belongs in `command`. `value` is the line. */
+  | 'shell-command-with-args'
+  /** An unquoted backslash before an ordinary character, which the shell drops (`C:\app\x.js` reads `C:appx.js`). A warning. `value` is the line. */
+  | 'command-backslash'
   /** The produced `ApplicationSpec` failed `validateSpec`. `spec` holds the issue. */
   | 'spec';
 
@@ -143,6 +149,12 @@ export function describeManifestIssue(issue: ManifestIssue): string {
       return `${at} is a frontend using "${issue.value ?? '?'}"; a frontend's code ships to the browser, so it never receives its credentials.`;
     case 'jobs-not-run':
       return `${at} will not run on this target.${detail}`;
+    case 'shell-command-unsupported':
+      return `${at} has command "${issue.value ?? '?'}", which needs a shell (operators, redirects, variable assignments, expansions or globs). Use a single program and its arguments.${detail}`;
+    case 'shell-command-with-args':
+      return `${at}: command "${issue.value ?? '?'}" needs a shell, so it cannot take "args" as well; put the whole command line in "command".`;
+    case 'command-backslash':
+      return `${at} has command "${issue.value ?? '?'}" with a backslash the shell drops (a backslash escapes the next character). Use forward slashes in paths, or quote the word.`;
     case 'spec':
       return issue.spec ? describeIssue(issue.spec) : `The application spec is invalid.${detail}`;
   }

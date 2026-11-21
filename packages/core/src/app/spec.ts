@@ -58,7 +58,10 @@ export interface ServiceSpec {
   role?: ServiceRole;
   /** The service's directory, project-relative (`/` is the project, `/apps/api` a folder in it). Default `/`. */
   root?: string;
-  /** `node`, `npm`, … */
+  /**
+   * The program: `node`, `npm`, `uvicorn`, … A manifest's command line (`npm run dev`) arrives
+   * here already split by `toApplicationSpec` — program here, its words at the head of `args`.
+   */
   command?: string;
   args?: string[];
   /** Extra environment; wins over everything the runtime injects. */

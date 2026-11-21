@@ -11,6 +11,7 @@ import { isValidTimeZone, parseCron } from './cron.js';
 import { parseDuration } from './duration.js';
 import { manifestIssue, type ManifestIssue } from './issues.js';
 import { environmentsOf, hasOwnKey, isRecord, isSafeKey, overrideIssues } from './overrides.js';
+import { commandLineIssues } from './serviceCommand.js';
 import { ENVIRONMENT_TIERS, HTTP_METHODS, MANIFEST_TARGETS, type AppManifest } from './types.js';
 
 const READINESS_KINDS = ['http', 'port', 'query', 'exitZero', 'started'] as const;
@@ -144,6 +145,7 @@ function validateServices(services: Record<string, unknown>, resources: Record<s
     if (hasOwnKey(resources, id)) issues.push(manifestIssue('duplicate-id', path, { value: id }));
     if (!isNonEmptyString(entry.runtime)) issues.push(manifestIssue('missing-field', path, { value: 'runtime' }));
     if (!isNonEmptyString(entry.command)) issues.push(manifestIssue('missing-field', path, { value: 'command' }));
+    else issues.push(...commandLineIssues(path, entry.command, Array.isArray(entry.args) ? entry.args : undefined));
     checkType(entry.root, 'string', `${path}.root`, issues);
     stringArray(entry.args, `${path}.args`, issues);
     if (entry.port !== undefined) {
@@ -208,6 +210,8 @@ function validateJobs(jobs: Record<string, unknown>, services: Record<string, un
       if (serviceId !== undefined && service === undefined) issues.push(manifestIssue('unknown-service', `${actionPath}.service`, { value: String(serviceId) }));
       if (entry.run !== undefined) {
         if (!isNonEmptyString(action.command)) issues.push(manifestIssue('missing-field', actionPath, { value: 'command' }));
+        // The same command-line reading a service's command gets, so a job's line is checked before any target runs it.
+        else issues.push(...commandLineIssues(actionPath, action.command, undefined));
       } else {
         if (!(typeof action.path === 'string' && action.path.startsWith('/'))) issues.push(manifestIssue('invalid-value', `${actionPath}.path`, { value: action.path === undefined ? undefined : String(action.path), detail: 'An endpoint path starts with "/".' }));
         checkEnum(action.method, HTTP_METHODS, `${actionPath}.method`, issues);

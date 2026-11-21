@@ -104,6 +104,12 @@ h2 { font-size: 1rem; }
   min-width: 0;
 }
 .bf-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.bf-panel-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.bf-button[data-copy='ok'] { border-color: var(--bf-ok); color: var(--bf-ok); }
+.bf-button[data-copy='failed'] { border-color: var(--bf-error); color: var(--bf-error); }
+.bf-copy { display: inline-flex; }
+/* Out of sight but not out of the accessibility tree: the copy fallback's textarea and the copy result's live region. */
+.bf-offscreen { position: fixed; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; opacity: 0; pointer-events: none; }
 
 .bf-preview-body { min-height: 360px; display: flex; }
 .bf-frame { flex: 1; width: 100%; min-height: 60vh; border: 1px solid var(--bf-border); border-radius: var(--bf-radius); background: #fff; }

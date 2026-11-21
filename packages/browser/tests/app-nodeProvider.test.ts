@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Kernel, defaultPrograms } from '@seanhogg/builderforce-webcontainers-core';
+import { toApplicationSpec } from '@seanhogg/builderforce-webcontainers-core/manifest';
 import { acceptsNodeService, createNodeProvider, startApplicationRuntime, type ApplicationSpec, type NodeServiceHost, type ServiceLogEntry } from '../src/app.js';
 import type { PreviewRuntime } from '../src/host.js';
 import { stubRuntime, until } from './app-fakeProvider.js';
@@ -75,6 +76,31 @@ describe('node provider', () => {
     expect(acceptsNodeService({ id: 'edge', type: 'application', runtime: 'node', command: 'npx', args: ['wrangler', 'dev'], port: 8787 })).toMatchObject({ ok: false, reason: expect.stringContaining('wrangler dev') });
     expect(acceptsNodeService({ id: 'q', type: 'application', runtime: 'node', command: 'node', port: 1, readiness: { kind: 'query' } })).toMatchObject({ ok: false });
     expect(acceptsNodeService(SPEC.services[0]!)).toEqual({ ok: true });
+  });
+
+  it('regression: declines a declined program inside a manifest command line, shell line or not', () => {
+    const serviceOf = (command: string) => {
+      const { spec } = toApplicationSpec({ version: 1, services: { app: { runtime: 'node', command } } }, 'local', { projectId: 'p' });
+      return spec!.services[0]!;
+    };
+    // Plain words split into program + args.
+    expect(serviceOf('docker compose up')).toMatchObject({ command: 'docker', args: ['compose', 'up'] });
+    expect(acceptsNodeService(serviceOf('docker compose up'))).toMatchObject({ ok: false, reason: expect.stringContaining('Docker') });
+    // A shell line is one `-c` argument: each command in it is checked.
+    expect(serviceOf('cd infra && docker compose up')).toMatchObject({ command: 'bfsh', args: ['-c', 'cd infra && docker compose up'] });
+    expect(acceptsNodeService(serviceOf('cd infra && docker compose up'))).toMatchObject({ ok: false, reason: expect.stringContaining('Docker') });
+    expect(acceptsNodeService(serviceOf('WRANGLER_LOG=debug wrangler dev'))).toMatchObject({ ok: false, reason: expect.stringContaining('wrangler dev') });
+    expect(acceptsNodeService(serviceOf('npm install && npm run dev > dev.log'))).toEqual({ ok: true });
+  });
+
+  it('regression: unwraps sh/bash -c lines and command substitutions before the decline check', () => {
+    const app = (command: string, args: string[]) => ({ id: 'app', type: 'application' as const, runtime: 'node', command, args });
+    expect(acceptsNodeService(app('sh', ['-c', 'docker compose up']))).toMatchObject({ ok: false, reason: expect.stringContaining('Docker') });
+    expect(acceptsNodeService(app('/bin/bash', ['-e', '-c', 'cd infra && wrangler dev']))).toMatchObject({ ok: false, reason: expect.stringContaining('wrangler dev') });
+    expect(acceptsNodeService(app('bfsh', ['-c', 'echo $(docker compose up)']))).toMatchObject({ ok: false, reason: expect.stringContaining('Docker') });
+    expect(acceptsNodeService(app('bfsh', ['-c', 'echo `docker ps`']))).toMatchObject({ ok: false });
+    expect(acceptsNodeService(app('bfsh', ['-c', "sh -c 'bash -c \"docker compose up\"'"]))).toMatchObject({ ok: false });
+    expect(acceptsNodeService(app('sh', ['-c', 'npm install && npm run dev']))).toEqual({ ok: true });
   });
 
   it('runs an API and a dependent service that calls it after readiness; stops both in reverse order', async () => {

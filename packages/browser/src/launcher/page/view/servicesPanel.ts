@@ -33,9 +33,16 @@ export function createServicesPanel(labels: LauncherLabels, actions: ServicesPan
     ]);
   }
 
+  let shown: readonly ServiceSnapshot[] = [];
+
   return {
     root,
+    /** The services as last rendered. */
+    current(): readonly ServiceSnapshot[] {
+      return shown;
+    },
     render(services: readonly ServiceSnapshot[]): void {
+      shown = [...services];
       replaceChildren(list, services.length > 0 ? services.map(card) : [el('li', { className: 'bf-empty', text: labels.noServices })]);
     },
   };

@@ -5,7 +5,7 @@
  * in-runtime localhost health check (`http`), or a clean exit (`exit-zero`).
  * What it cannot run it declines with a reason, so a host can pick another target.
  */
-import { readinessOf, type Acceptance, type ReadinessKind, type RuntimeProvider, type ServiceHandle, type ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
+import { readinessOf, shellCommandWords, type Acceptance, type ReadinessKind, type RuntimeProvider, type ServiceHandle, type ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
 import { portHeld, untilHttpHealthy, type NodeServiceHost } from './nodeReadiness.js';
 import type { RuntimeProcess, ServerAddress } from '@seanhogg/builderforce-webcontainers-core';
 
@@ -34,11 +34,28 @@ export interface NodeProviderOptions {
 
 const basename = (token: string) => token.replace(/\\/g, '/').split('/').pop() ?? token;
 
+/** Shells whose `-c <line>` runs a command line (`bfsh` is the runtime's; `sh`/`bash` resolve to it). */
+const SHELLS = new Set(['bfsh', 'sh', 'bash']);
+/** How deep `sh -c "bash -c '…'"` is unwrapped. */
+const SHELL_DEPTH = 8;
+
+/**
+ * Every word a command runs with: its own argv, or — for `sh|bash|bfsh [-opts] -c <line>`, one argument
+ * that holds whole commands — the words of each command in the line, command substitutions included.
+ */
+function commandWords(command: string, args: readonly string[], depth = 0): string[] {
+  const script = args.indexOf('-c');
+  // Whatever precedes `-c` is the shell's own options (`-e`, `-o pipefail`, `+o pipefail`).
+  const isShellLine = SHELLS.has(basename(command)) && script >= 0;
+  if (!isShellLine || depth >= SHELL_DEPTH) return [command, ...args];
+  return shellCommandWords(args[script + 1] ?? '').flatMap(([program = '', ...rest]) => commandWords(program, rest, depth + 1));
+}
+
 export function acceptsNodeService(service: ServiceSpec): Acceptance {
   if (service.type !== 'application') return { ok: false, reason: `The node runtime runs application services; "${service.id}" is a ${service.type} service.` };
   const readiness = readinessOf(service).kind;
   if (!NODE_READINESS[readiness]) return { ok: false, reason: `"${readiness}" readiness is for databases; service "${service.id}" runs on node.` };
-  for (const token of [service.command ?? '', ...(service.args ?? [])]) {
+  for (const token of commandWords(service.command ?? '', service.args ?? [])) {
     const reason = NODE_DECLINED_COMMANDS[basename(token)];
     if (reason) return { ok: false, reason };
   }

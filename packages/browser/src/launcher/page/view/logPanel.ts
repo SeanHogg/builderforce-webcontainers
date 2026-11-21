@@ -8,13 +8,14 @@ import { el, replaceChildren } from './dom.js';
 
 const ALL = '';
 
-export function createLogPanel(labels: LauncherLabels) {
+/** `tools` sit beside the service filter in the panel's head (the page's "Copy diagnostics"). */
+export function createLogPanel(labels: LauncherLabels, tools: readonly Node[] = []) {
   const buffer = new LogBuffer();
   const select = el('select', { className: 'bf-select', attrs: { 'aria-label': labels.logs } });
   const dropped = el('p', { className: 'bf-note' });
   const output = el('pre', { className: 'bf-log', attrs: { tabindex: '0' } });
   const root = el('section', { className: 'bf-panel bf-logs', attrs: { 'aria-label': labels.logs } }, [
-    el('div', { className: 'bf-panel-head' }, [el('h2', { text: labels.logs }), select]),
+    el('div', { className: 'bf-panel-head' }, [el('h2', { text: labels.logs }), el('div', { className: 'bf-panel-tools' }, [select, ...tools])]),
     dropped,
     output,
   ]);
@@ -58,6 +59,10 @@ export function createLogPanel(labels: LauncherLabels) {
       select.value = serviceIds.includes(serviceId) ? serviceId : ALL;
       schedule();
       root.scrollIntoView({ block: 'nearest' });
+    },
+    /** Every buffered line of every service, whatever the filter shows. */
+    allLines(): { lines: readonly LogLine[]; dropped: number } {
+      return buffer.view();
     },
     append(line: LogLine): void {
       buffer.push(line);

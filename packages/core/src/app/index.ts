@@ -18,4 +18,7 @@ export { ServiceGraphPolicy } from './servicePortPolicy.js';
 export { restartDecision, DEFAULT_RESTART_LIMITS } from './restartPolicy.js';
 export type { RestartDecision, RestartLimits } from './restartPolicy.js';
 export { createProviderRegistry, acceptApplication } from './runtimeProvider.js';
+// A service's command line, read as `bfsh` reads it: what a provider checks before it accepts a service (`bfsh -c <line>`).
+export { shellCommandWords, splitCommandLine } from '../shell/commandLine.js';
+export type { CommandLine } from '../shell/commandLine.js';
 export type { Acceptance, DatabaseControl, DeclinedService, ProviderRegistry, ProviderResolution, RuntimeProvider, ServiceHandle, ServiceStartContext } from './runtimeProvider.js';

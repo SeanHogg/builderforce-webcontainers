@@ -41,6 +41,15 @@ strict CSP or an offline host, see
 [Assets fetched at runtime](../../README.md#assets-fetched-at-runtime) for every
 origin the runtime downloads from and how to self-host each one.
 
+New in 2026.11.9: a manifest `command` is a command line (`npm run dev` is
+`npm` with `run dev`; a line with `&&`, `|` or redirects runs as `bfsh -c` on a
+node service), the node provider's decline list checks every command inside a
+shell line, the local launcher page has a "Copy diagnostics" button (labels
+`copyDiagnostics`, `copyDiagnosticsDone`, `copyDiagnosticsFailed`), and
+credential redaction (`scrubString` and the diagnostics report) catches `*_TOKEN=`, `*_PASSWORD=`, JSON keys and
+`Authorization` headers of any scheme. See
+[What's new in 2026.11.9](../../README.md#whats-new-in-2026119).
+
 ### Preview origin headers
 
 The trust boundary is the application: its previews, relay frame and process

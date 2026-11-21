@@ -83,6 +83,19 @@ describe('validateManifest', () => {
     expect(codes((m) => (m.jobs = { j: { schedule: '0 3 * * *', run: { service: 'worker', command: 'x' }, invoke: { service: 'api', path: '/' } } }))).toContain('invalid-value');
   });
 
+  it('regression: a job run command is read as a command line; an unterminated quote is an issue at run.command', () => {
+    expect(issuesAfter((m) => (m.jobs = { j: { schedule: '0 3 * * *', run: { service: 'worker', command: 'python manage.py migrate' } } }))).toEqual([]);
+    expect(issuesAfter((m) => (m.jobs = { j: { schedule: '0 3 * * *', run: { service: 'worker', command: "python 'manage.py" } } }))).toContainEqual(expect.objectContaining({ code: 'invalid-value', path: 'jobs.j.run.command' }));
+  });
+
+  it('regression: validateManifest alone reads a service command line: unreadable, shell line with args, stray backslash', () => {
+    expect(issuesAfter((m) => (m.services.api.command = 'node "server.js'))).toContainEqual(expect.objectContaining({ code: 'invalid-value', path: 'services.api.command' }));
+    expect(issuesAfter((m) => (m.services.api = { runtime: 'node', command: 'npm i && npm start', args: ['--x'] }))).toContainEqual(expect.objectContaining({ code: 'shell-command-with-args', path: 'services.api.args' }));
+    expect(issuesAfter((m) => (m.services.api.command = 'node C:\\app\\x.js'))).toContainEqual(expect.objectContaining({ code: 'command-backslash', severity: 'warning', path: 'services.api.command' }));
+    // Whether a shell line can run depends on the target: that is toApplicationSpec's to say.
+    expect(issuesAfter((m) => (m.services.worker.command = 'pip install -r r.txt && rq worker'))).toEqual([]);
+  });
+
   it('reports an unknown resource type', () => {
     expect(issuesAfter((m) => (m.resources.x = { type: 'mongodb' }))).toContainEqual(expect.objectContaining({ code: 'unknown-resource-type', path: 'resources.x.type', value: 'mongodb' }));
   });

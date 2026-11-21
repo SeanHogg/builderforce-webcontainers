@@ -29,6 +29,10 @@ export function createProblemsPanel(labels: LauncherLabels) {
 
   return {
     root,
+    /** The summary (when shown) and every issue and decline, in order. */
+    snapshot(): { summary?: string; messages: readonly PlanMessage[] } {
+      return summary.hidden || !summary.textContent ? { messages: [...messages] } : { summary: summary.textContent, messages: [...messages] };
+    },
     setSummary(text: string | undefined): void {
       summary.textContent = text ?? '';
       summary.hidden = !text;

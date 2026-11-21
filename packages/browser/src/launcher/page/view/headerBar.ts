@@ -10,14 +10,22 @@ export function createHeaderBar(labels: LauncherLabels) {
   const meta = el('div', { className: 'bf-meta' });
   const status = el('p', { className: 'bf-status', attrs: { role: 'status', 'aria-live': 'polite' }, text: labels.loading });
   const root = el('header', { className: 'bf-header' }, [el('div', { className: 'bf-header-main' }, [title, meta]), status]);
+  let shown: LaunchHeader | null = null;
+  let current: { text: string; tone: LaunchStatusTone } = { text: labels.loading, tone: 'busy' };
   const setStatus = (text: string, tone: LaunchStatusTone = 'busy') => {
     status.textContent = text;
     status.dataset.tone = tone;
+    current = { text, tone };
   };
 
   return {
     root,
+    /** What the header shows: the launch's header (null until it answered) and the status line. */
+    snapshot(): { header: LaunchHeader | null; status: { text: string; tone: LaunchStatusTone } } {
+      return { header: shown, status: current };
+    },
     setHeader(header: LaunchHeader): void {
+      shown = header;
       title.textContent = header.name;
       document.title = `${header.name} · ${labels.title}`;
       const tier =

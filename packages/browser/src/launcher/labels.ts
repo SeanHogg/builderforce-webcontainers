@@ -26,6 +26,9 @@ export interface LauncherLabels {
   logsAll: string;
   logsDropped: string;
   noLogs: string;
+  copyDiagnostics: string;
+  copyDiagnosticsDone: string;
+  copyDiagnosticsFailed: string;
   preview: string;
   openInNewTab: string;
   noPreview: string;
@@ -70,6 +73,9 @@ export const DEFAULT_LAUNCHER_LABELS: Readonly<LauncherLabels> = Object.freeze({
   logsAll: 'All services',
   logsDropped: '{count} earlier lines dropped',
   noLogs: 'No output yet.',
+  copyDiagnostics: 'Copy diagnostics',
+  copyDiagnosticsDone: 'Copied',
+  copyDiagnosticsFailed: 'Copy failed',
   preview: 'Preview',
   openInNewTab: 'Open in new tab',
   noPreview: 'No service serves a page yet.',

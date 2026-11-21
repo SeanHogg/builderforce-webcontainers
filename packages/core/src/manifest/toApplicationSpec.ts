@@ -14,6 +14,7 @@ import { JOB_CAPABILITIES, resourceCapability } from './capabilities.js';
 import { parseDuration } from './duration.js';
 import { dedupeIssues, hasErrors, manifestIssue, type ManifestIssue } from './issues.js';
 import { isRecord, resolveEnvironment } from './overrides.js';
+import { isCommandLineWarning, jobCommandIssues, serviceCommand } from './serviceCommand.js';
 import { tierEnv } from './tierEnv.js';
 import type { AppManifest, ManifestReadiness, ManifestService, ResolvedEnvironment, ResourceSpec } from './types.js';
 import { validateManifest } from './validate.js';
@@ -60,7 +61,7 @@ function freePort(preferred: number, taken: Set<number>): number {
   return port;
 }
 
-function applicationService(id: string, service: ManifestService, environment: ResolvedEnvironment, databaseIds: ReadonlySet<string>): ServiceSpec {
+function applicationService(id: string, service: ManifestService, environment: ResolvedEnvironment, databaseIds: ReadonlySet<string>, issues: ManifestIssue[]): ServiceSpec {
   const usedDatabases = (service.uses ?? []).filter((use) => databaseIds.has(use));
   const dependsOn = [...new Set([...(service.dependsOn ?? []), ...usedDatabases])];
   const readiness = service.readiness ? toReadinessSpec(service.readiness) : service.port === undefined && service.restart === 'always' ? ({ kind: 'started' } as const) : undefined;
@@ -72,8 +73,8 @@ function applicationService(id: string, service: ManifestService, environment: R
   };
   if (service.role) spec.role = service.role;
   if (service.root) spec.root = service.root;
-  if (service.command) spec.command = service.command;
-  if (service.args) spec.args = [...service.args];
+  if (service.command) Object.assign(spec, serviceCommand(id, service, environment.target, issues));
+  else if (service.args) spec.args = [...service.args];
   if (service.port !== undefined) spec.port = service.port;
   if (dependsOn.length > 0) spec.dependsOn = dependsOn;
   if (readiness) spec.readiness = readiness;
@@ -100,7 +101,8 @@ function specIssue(issue: ReturnType<typeof validateSpec>[number]): ManifestIssu
 /** `envName`'s environment of `manifest` as an `ApplicationSpec`, with what was declined and every issue. */
 export function toApplicationSpec(manifest: AppManifest, envName: string, options: ToApplicationSpecOptions): ManifestSpecResult {
   const resolution = resolveEnvironment(manifest, envName);
-  const issues = [...validateManifest(manifest), ...resolution.issues];
+  // Command-line warnings are read again below from the effective commands: the base manifest's may name a command an override replaced.
+  const issues = [...validateManifest(manifest).filter((issue) => !isCommandLineWarning(issue)), ...resolution.issues];
   const resolved = resolution.manifest;
   const environment = resolution.environment;
   // A manifest too broken to read further (sections of the wrong shape) is reported, not mapped.
@@ -129,9 +131,10 @@ export function toApplicationSpec(manifest: AppManifest, envName: string, option
     }
   }
 
-  for (const [id, service] of Object.entries(services)) specServices.push(applicationService(id, service, environment, databaseIds));
+  for (const [id, service] of Object.entries(services)) specServices.push(applicationService(id, service, environment, databaseIds, issues));
 
   const jobs = isRecord(resolved.jobs) ? Object.keys(resolved.jobs) : [];
+  for (const [id, job] of Object.entries(resolved.jobs ?? {})) issues.push(...jobCommandIssues(id, job, services, environment.target));
   const jobCapability = JOB_CAPABILITIES[environment.target];
   if (!jobCapability.supported) {
     for (const id of jobs) issues.push(manifestIssue('jobs-not-run', `jobs.${id}`, { severity: 'warning', detail: jobCapability.reason }));

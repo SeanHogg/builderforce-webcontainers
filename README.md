@@ -41,6 +41,35 @@ not run yet: Nuxt 3's parser has only a threaded WebAssembly build, which needs
 cross-origin isolation, and Nuxt 4 stalls during start-up (see the
 [ROADMAP](ROADMAP.md)). The roadmap is how it closes the rest of the gap.
 
+## What's new in 2026.11.9
+
+- **A manifest `command` is a command line.** `npm install`, `npm run dev` and
+  `uvicorn main:app --host 0.0.0.0` are split into the program and its
+  arguments, ahead of any `args`. Before, the whole line was taken as one
+  program name and the service exited 127 ("command not found"). Quotes group
+  words (`"/path with space/node" server.js`). A job's `run.command` is read
+  the same way.
+- **Shell lines.** A line that needs a shell (`&&`, `|`, redirects,
+  `FOO=1 cmd`, `$VAR`) runs as `bfsh -c <line>` for a node service on the
+  browser target. Anywhere else it is a typed issue, not a mangled command.
+- **New manifest issue codes.** `shell-command-unsupported` (the line needs a
+  shell its runtime or target does not have), `shell-command-with-args` (a
+  shell line cannot also take `args`; put the whole line in `command`) and
+  `command-backslash` (a warning: an unquoted `\` the shell drops, so use
+  forward slashes in paths). An unterminated quote is an `invalid-value`.
+- **The node decline list sees inside shell lines.** `cd infra && docker compose up`,
+  `sh -c '…'`, `bash -e -c '…'` and command substitutions are unwrapped, so a
+  declined program (Docker, `wrangler dev`) is declined wherever it appears.
+- **"Copy diagnostics" on the launcher page.** One button copies a report of
+  the launch: header, status, services, problems and every buffered log line,
+  with credentials redacted. Its text comes from three new overridable labels:
+  `copyDiagnostics`, `copyDiagnosticsDone` and `copyDiagnosticsFailed`.
+- **Broader credential redaction.** The shield's `scrubCredentials`, which
+  scrubs security event evidence (`scrubString`) and the copied diagnostics
+  report, now catches any key ending in a secret word (`GITHUB_TOKEN=`,
+  `DB_PASSWORD=`, `OPENAI_API_KEY:`), quoted JSON keys
+  (`"token":"…"`), and `Authorization` headers of any scheme.
+
 ## What's new in 2026.11.8
 
 - **Diagnostics.** `runtime.diagnostics()` returns one load report: phase

@@ -66,13 +66,30 @@ export const MAX_EVIDENCE_STRING = 512;
 const SECRET_KEY = /pass(?:word|wd|phrase)?|secret|token|cookie|authori[sz]ation|credential|api[-_]?key|session|bearer|private[-_]?key|^body$|payload|content$/i;
 const encoder = new TextEncoder();
 
-/** A string with credentials scrubbed (URL user info, `Bearer`/`Basic` values, `key=value` secrets) and capped. */
-export function scrubString(value: string): string {
-  let text = value.length > MAX_EVIDENCE_STRING * 2 ? value.slice(0, MAX_EVIDENCE_STRING * 2) : value;
-  text = text
+/** `Authorization: <scheme> <value>` (any scheme, or none), header or JSON/assignment form: the value goes. */
+const AUTHORIZATION = /((?:proxy-)?authorization["']?\s*[:=]\s*["']?)(?:([A-Za-z][\w.-]*)\s+)?([^\s,;"']+)/gi;
+/**
+ * `key=value` / `key: value` / `"key":"value"` where the key is any identifier ENDING in a secret word —
+ * `token`, `GITHUB_TOKEN`, `DB_PASSWORD`, `OPENAI_API_KEY`, `sessionId` — optionally quoted.
+ */
+const SECRET_ASSIGNMENT = /(?<![\w.-])(["']?)([\w.-]*?(?:pass(?:word|wd)?|pwd|token|secret|api[-_]?key|access[-_]?key|session(?:[-_]?id)?))\1(\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s&;,"']+)/gi;
+
+/** `value` with credentials scrubbed — URL user info, `Authorization` and `Bearer`/`Basic` values, secret `key=value`s — at any length (the launcher's diagnostics report uses it on every line). */
+export function scrubCredentials(value: string): string {
+  return value
     .replace(/(\/\/)[^/@\s]*@/g, '$1[redacted]@')
-    .replace(/\b(Bearer|Basic)\s+[^\s,;]+/gi, '$1 [redacted]')
-    .replace(/\b((?:pass(?:word)?|pwd|token|secret|api[-_]?key|access[-_]?key|session(?:id)?)\s*[=:]\s*)[^\s&;,]+/gi, '$1[redacted]');
+    .replace(AUTHORIZATION, (_match, head: string, scheme: string | undefined) => `${head}${scheme ? `${scheme} ` : ''}[redacted]`)
+    .replace(/\b(Bearer|Basic)\s+[^\s,;"']+/gi, '$1 [redacted]')
+    .replace(SECRET_ASSIGNMENT, (match, quote: string, key: string, separator: string) => {
+      const value = match.slice(quote.length * 2 + key.length + separator.length);
+      const valueQuote = value[0] === '"' || value[0] === "'" ? value[0] : '';
+      return `${quote}${key}${quote}${separator}${valueQuote}[redacted]${valueQuote}`;
+    });
+}
+
+/** A string with credentials scrubbed ({@link scrubCredentials}) and capped. */
+export function scrubString(value: string): string {
+  const text = scrubCredentials(value.length > MAX_EVIDENCE_STRING * 2 ? value.slice(0, MAX_EVIDENCE_STRING * 2) : value);
   return text.length > MAX_EVIDENCE_STRING ? `${text.slice(0, MAX_EVIDENCE_STRING - 1)}…` : text;
 }
 

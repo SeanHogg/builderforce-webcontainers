@@ -23,7 +23,10 @@ interface ProfileJson {
   commandLineArgs?: string;
 }
 
-/** Split `commandLineArgs` as a shell would (quotes group, no expansion). */
+/**
+ * Split `commandLineArgs` as a shell would (quotes group, no expansion). Not core's `splitCommandLine`:
+ * launchSettings.json is Windows-authored, so a backslash here is a path separator and stays literal.
+ */
 export function splitArgs(text: string): string[] {
   return [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2] ?? match[3]!);
 }
