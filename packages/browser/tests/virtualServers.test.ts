@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { CONSOLE_MESSAGE_TYPE, COOKIE_MESSAGE_TYPE, PortCookieJars, SOCKET_MESSAGE_TYPE, connectWebSocket, type WebSocketCloseInfo } from '@seanhogg/builderforce-webcontainers-core';
+import {
+  CONSOLE_MESSAGE_TYPE,
+  COOKIE_MESSAGE_TYPE,
+  CSP_VIOLATION_MESSAGE_TYPE,
+  ERROR_MESSAGE_TYPE,
+  TIMING_MESSAGE_TYPE,
+  previewDiagnosticsScript,
+  PortCookieJars, SOCKET_MESSAGE_TYPE, connectWebSocket, type WebSocketCloseInfo } from '@seanhogg/builderforce-webcontainers-core';
 import { createPortResponder, servePortRequest } from '../src/node/index.js';
 import type { ProcessHost } from '../src/node/processHost.js';
 import type { WireReply, WireRequest } from '../src/protocol.js';
@@ -172,6 +179,11 @@ describe('cookies from virtual servers', () => {
     expect(html).toContain(SOCKET_MESSAGE_TYPE);
     expect(html).toContain(COOKIE_MESSAGE_TYPE);
     expect(html).toContain(CONSOLE_MESSAGE_TYPE); // errors and console reach the host from virtual servers too
+    // …and so do CSP violations and timings: the diagnostics script follows the error bridge, as on dev-server pages.
+    expect(html).toContain(previewDiagnosticsScript());
+    expect(html).toContain(JSON.stringify(CSP_VIOLATION_MESSAGE_TYPE));
+    expect(html).toContain(JSON.stringify(TIMING_MESSAGE_TYPE));
+    expect(html.indexOf(ERROR_MESSAGE_TYPE)).toBeLessThan(html.indexOf(JSON.stringify(CSP_VIOLATION_MESSAGE_TYPE)));
     expect(html).toContain('"theme=dark"');
     expect(html).not.toContain('s3cret');
     expect(html.endsWith('<title>p</title></head><body>hi</body></html>')).toBe(true);

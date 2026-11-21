@@ -86,9 +86,12 @@ export interface PhpStartOptions {
  */
 export interface DotnetStartOptions {
   /**
-   * Where the .NET runtime bundle (scripts/build-dotnet-runtime.mjs) is served:
-   * absolute, CORS-enabled; in relay mode, reachable from the preview origin.
-   * There is no default — the bundle is the host's artifact.
+   * Where the .NET runtime bundle is served: absolute, CORS-enabled; in relay
+   * mode, reachable from the preview origin. There is no default — the bundle
+   * is the host's artifact. Get it from npm: install
+   * `@seanhogg/builderforce-webcontainers-dotnet` at the same version as this
+   * package and serve its directory (`DOTNET_BUNDLE.npmPackage`); or build it
+   * from source with scripts/build-dotnet-runtime.mjs.
    */
   bundleUrl?: string;
 }

@@ -34,14 +34,36 @@ with `sharedPreviewOrigin: 'unprotected'` (a console warning and an
 and the instant preview need none. See the
 [root README](../../README.md#one-origin-per-application-previeworigin).
 
+Upgrading from 2026.11.4 or earlier? Previews now have a CSP that blocks
+third-party origins, and same-origin previews are refused by default: read
+[Upgrading to 2026.11.5](../../README.md#upgrading-to-2026115) first. For a
+strict CSP or an offline host, see
+[Assets fetched at runtime](../../README.md#assets-fetched-at-runtime) for every
+origin the runtime downloads from and how to self-host each one.
+
 ### Preview origin headers
 
 The trust boundary is the application: its previews, relay frame and process
 Workers share its origin. These headers keep applications apart from each other
 and from your app, and keep egress inside your policy. `<host>` is your app's
-origin; `<self>` is the preview origin's own host; `<egress>` is the application's
-`previewEgress` (it must include your package CDN — `https://esm.sh` by default —
-since previews now load scripts only from `'self'` and their egress).
+origin; `<self>` is the preview origin's own host; `<egress>` is the
+application's egress.
+
+The egress is exactly three things, in this order:
+
+1. the preview's own origin (`'self'`);
+2. the package CDN's origins: the `cdn` factory's `origins`. The default
+   (`cdn` unset) is `https://esm.sh`; `createEsmShCdnFactory({ origin })`
+   declares its own server's origin. A custom factory declares them with
+   `Object.assign(factory, { origins: ['https://cdn.example.com'] })`. A
+   custom `cdn` without `origins` adds nothing, and the runtime logs one
+   console warning per runtime: list its origin in `previewEgress`, or package imports are
+   blocked. Declared `origins` that are not https/wss origins (an `http:` URL,
+   a path) are left out, with one console warning per runtime naming them;
+3. `previewEgress`: added on top, never replacing the CDN's origins.
+
+There is no other built-in egress. Previews load scripts only from `'self'` and
+this egress.
 
 - **`relay.html`** (the relay never fetches, so a preview that scripts it gains no egress):
 
@@ -56,11 +78,27 @@ since previews now load scripts only from `'self'` and their egress).
   `frame-ancestors` must be your app's origin only. The relay refuses to run
   unframed, and the service worker takes attaches only from it as a nested frame.
 
-- **`sw.js`** — its query carries the origin's configuration (`?mode=relay&policy=<id>&egress=<sources>&report=<url>`),
+- **`sw.js`** — its query carries the origin's configuration (`?mode=relay&policy=<id>&egress=<sources>&report=<url>&csp=report-only`),
   which the worker stamps into every response it serves. Never take it on trust:
-  serve `sw.js` only when `policy` verifies (signed by you, bound to this
-  origin's key and the application) and `egress`/`report` are exactly what that
-  policy grants; without a `policy`, only with no `egress`. Otherwise answer 403.
+  preview code is same-origin with `sw.js` and can register it again with any
+  query it likes, so your gate on this URL is the only enforcement. Serve
+  `sw.js` only when `policy` verifies (signed by you, bound to this origin's key
+  and the application) and `egress`/`report` are within what that policy grants;
+  without a `policy`, only with egress within the package CDN's origins
+  (`PREVIEW_DEFAULT_EGRESS` for the default `cdn`). Check the query against an
+  allowlist of the keys you verify (`mode`, `policy`, `egress`, `report`) and
+  refuse any other key, and refuse any key named twice (`?egress=a&egress=b`):
+  a gate that reads one value while the worker reads another checks nothing (the
+  worker reads a URL with a repeated key as carrying no configuration at all, and
+  a repeated `mode` as `relay`). Refuse `csp` too, unless your deployment deliberately
+  runs report-only: `csp=report-only` makes the preview's whole CSP
+  (egress, `frame-src`, `worker-src`, `form-action`) report-only, so a gate
+  that lets it through lets a preview turn its own CSP off. Otherwise answer 403.
+
+  The runtime adds a custom `cdn`'s `origins` to this egress automatically, so
+  your gate (and the signed policy, when you use one) must grant them as well,
+  or `sw.js` is refused and the runtime fails to start with an error naming the
+  egress the gate may have refused.
 
   ```
   Content-Type: text/javascript
@@ -98,6 +136,29 @@ status — with that policy (beside any the app set, never replacing it),
 report endpoint come only from its own script URL, never from a message a
 preview could forge. Set `cspReportUrl` to have violations reported (`report-to bfwc-csp`).
 
+The host page hears violations too: `runtime.onCspViolation(listener)` gets
+`{ directive, blockedOrigin, disposition }` for each one, for example
+`{ directive: 'img-src', blockedOrigin: 'https://tile.openstreetmap.org', disposition: 'enforce' }`.
+A blocked URL is reduced to its origin, or to a keyword (`inline`, `eval`,
+`data`, `blob`); the path and query never leave the preview. Each (page,
+directive, origin) arrives once per runtime, at most `CSP_VIOLATION_LIMIT` (50)
+per page and `CSP_VIOLATION_RUNTIME_LIMIT` (500) in all; a page is its origin and
+path, so a query or hash never makes a new one. The host page enforces these
+bounds itself, whatever the preview posts. These come from the preview page,
+which runs the app's code, so treat them as diagnostics, never as a security
+signal.
+
+`previewCspMode: 'report-only'` stamps the runtime's policy as
+`Content-Security-Policy-Report-Only` instead: violations are reported (to
+`cspReportUrl` and `onCspViolation`, with `disposition: 'report'`) but nothing is
+blocked — the whole policy, not just the egress: `frame-src`, `worker-src`,
+`form-action` and every other directive stop being enforced. It reaches each
+service worker in its script URL (`csp=report-only`), like the egress, so your
+`sw.js` gate must deliberately let `csp` through (see `sw.js` above; the local
+launcher's gate never does). The other headers are unchanged, and so is the
+policy on responses the service worker does not serve. Use it only while
+migrating an app to the policy: it turns the protection off.
+
 Put the preview parent domain (`preview.example.com`) on the
 [Public Suffix List](https://publicsuffix.org/), so browsers treat each
 `<key>.preview.example.com` as its own site: no cookie set on the parent domain
@@ -123,6 +184,50 @@ the project in a Web Worker. `.vue` and `.svelte` files need no setup. See the
 
 The package re-exports everything from
 [`@seanhogg/builderforce-webcontainers-core`](../core).
+
+## Diagnostics
+
+`runtime.diagnostics()` returns one plain-data load report, so a slowdown
+report comes with numbers. It holds only what the runtime measured:
+
+```ts
+const report = runtime.diagnostics();
+// {
+//   phases: [{ name: 'serviceWorker.ready', startMs: 2, durationMs: 140 }, { name: 'compiler.load', … }, …],
+//   cdn: { requests: 38, totalMs: 4210, errors: 0 },
+//   requests: [{ origin: 'https://esm.sh', count: 38, failed: 0, totalMs: 4210 }, …],
+//   slowest: [{ origin: 'https://cdn.jsdelivr.net', label: 'compiler', durationMs: 1830, status: 200 }, …],
+//   cspViolations: [{ directive: 'img-src', blockedOrigin: 'https://tile.openstreetmap.org', disposition: 'enforce' }],
+//   cache: 'cold',
+//   unavailable: [],
+// }
+```
+
+- `phases`: `runtime.start`, `serviceWorker.ready`, `compiler.load` (the
+  esbuild-wasm download and start; absent with your own `transformer`) and
+  `preview.firstPaint` (the first preview's first contentful paint, as the
+  preview reports it). `startMs` is milliseconds after the runtime started.
+- `cdn`: requests to the package CDN's origins, from this page and from previews.
+- `requests`: per origin, busiest first; `failed` counts statuses of 400 and
+  up. `slowest`: the 10 slowest, labelled by what asked for them (`script`,
+  `fetch`, `img`, `compiler`), never by path. Previews report their own requests;
+  this page reports only its requests to the CDN and for the compiler.
+- `cspViolations`: the 50 most recent (see `onCspViolation`).
+- `cache`: `warm` when every CDN and compiler response whose cache state the
+  browser exposed came from a cache, `cold` when one was downloaded, `unknown`
+  when none exposed it (a server without `Timing-Allow-Origin` hides it).
+- `unavailable`: measurements that could not run, so a missing number is not
+  read as a zero: `resourceTiming` (this page's own requests),
+  `preview.resourceTiming` and `preview.paintTiming` (a preview page reported
+  it could not observe them: no `PerformanceObserver`, or an entry type its
+  engine lacks). Empty when everything was measured.
+
+Statuses and cache states need the browser's resource timing for that origin;
+where it is hidden, they are left out rather than guessed. Every list is
+bounded (past 64 origins the rest are counted under `*`).
+
+For an application, `app.diagnostics()` adds each service's state, restarts,
+last exit code and last log lines (see [Applications](#applications-the-app-subpath)).
 
 ## Local launcher (`./launcher/server`, `bfwc-launch`)
 
@@ -336,12 +441,35 @@ iframe.src = app.getUrl('web')!;
   (`app.logs('api')` for one), history first, then live. A reader that falls
   `logReaderBuffer` entries behind loses the overflow and gets a line saying how
   many. Streams stay open across `stop()`/`start()`; `app.dispose()` stops the
-  app and ends them (so `for await` loops finish).
+  app and ends them (so `for await` loops finish). A process's output stream
+  (`runtime.run(…).combinedOutput`, and what each provider hands the
+  application) ends after the process exits and always delivers its last line
+  first, newline or not — for every provider (Node, PHP, Python, .NET, Rust,
+  PGlite). A service's last line is in `app.logs(id)` before it is marked
+  `ready` (a one-off) or `failed`, and before `Completed.`/`Failed …`. So read a
+  setup step's output to its end: do not add a timeout after `composer
+  install` or `npm install` exits.
+- **Diagnostics.** `app.diagnostics()` returns plain data for a load or failure
+  report: `{ services: [{ id, state, restarts?, lastExitCode?, lastLines }] }`,
+  in start order. `restarts` (restarts in a row) and `lastExitCode` appear only
+  when there are any. `lastLines` holds the service's last 20 log lines,
+  output and runtime notes such as `Failed (exit): …`, oldest first.
+  Send it with `runtime.diagnostics()` (see [Diagnostics](#diagnostics)).
 - **Errors.** `start()` rejects with `ApplicationStartError` naming the services
   that failed for good; `onError` reports every failure as it happens, with
   whether it will restart. A service stopped before it was ready is not a
   failure. `restart(id)` leaves dependents running; a dependent still waiting
-  for the restarted service keeps waiting.
+  for the restarted service keeps waiting. A process that exits while its
+  readiness is still being checked fails in phase `exit`, reported once its
+  output is in the log, and the message keeps why readiness failed: the
+  provider's own `Exited with code N before opening port …`, or
+  `Exited with code N before ready: <reason>` (a plain `Exited with code N.`
+  when no reason was given). If its output cannot be read to the end, the log
+  says so and the exit is still acted on. A service
+  that fails or is declined
+  leaves nothing to show — a frontend waiting on a failed API never starts —
+  so subscribe to `app.onStateChange` (`failed`) and `app.onError` and show the
+  service's error and its `app.logs(id)` instead of an empty preview frame.
 
 Runtimes plug in as `RuntimeProvider`s (`{ id, accepts(service), start(service, ctx) }`).
 `start()` first checks that every service has a provider that accepts it (the
@@ -582,6 +710,17 @@ const app = startApplicationRuntime(
   as is; `.php` files run, others are sent by MIME type; `PATH_INFO`;
   directory indexes; a path without an extension falls back to the nearest
   `index.php` (front controllers such as Slim's `public/index.php`).
+  `php artisan serve [--host=…] [--port=…]` (Laravel starts `php -S` through
+  `proc_open`, which php-wasm does not have) is served the same way, as
+  Laravel's ServeCommand would: `public/` beside `artisan`, through Laravel's
+  own `server.php` router when `vendor/laravel/framework` is installed.
+  Address as Laravel reads it: `--host` (default `SERVER_HOST`, else
+  127.0.0.1) may carry a port (`0.0.0.0:8080`, `[::1]:8080`); `--port`
+  (default `SERVER_PORT`) wins over it; an empty port is 8000. `SERVER_*`
+  come from the process environment, else the app's `.env` beside `artisan`.
+  Laravel does not read `PORT`: pass `--port` to match the service's port.
+  Artisan's global options (`--env=local`, `-q`, `--ansi` …) may come before
+  `serve`. Other `artisan` commands run as PHP scripts.
   Interactive PHP (`php -a`, or no script) is declined with a reason.
 - **Postgres.** php-wasm's images have no `pgsql`/`pdo_pgsql` extension (and
   no libpq to build one), so `new PDO('pgsql:…')` fails with "could not find
@@ -649,16 +788,107 @@ const app = startApplicationRuntime(
   served there), or only `distProxy`'s host when one is set. `php.baseUrl`
   must be absolute and CORS-served.
 
+### Example: a Vite front end, a Laravel API and Postgres
+
+An Angular or React app on Vite in `/web`, a Laravel API in `/api` and a PGlite
+database, as one application. Setup steps are services too: one-offs with
+`exit-zero` readiness that their dependents wait for.
+
+```ts
+const php = { phpVersion: '8.3' };
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId, php, /* previewOrigin … */ });
+runtime.writeTree(files);
+const app = startApplicationRuntime(
+  {
+    projectId,
+    services: [
+      { id: 'db', type: 'database', runtime: 'pglite', port: 5432, readiness: { kind: 'query' },
+        database: { engine: 'postgres', provider: 'pglite', persistent: true } },
+      { id: 'setup', type: 'application', runtime: 'php', root: '/api', command: 'composer', args: ['install'] },
+      { id: 'migrate', type: 'application', runtime: 'php', root: '/api', command: 'php', args: ['artisan', 'migrate', '--force'],
+        dependsOn: ['setup', 'db'] },
+      { id: 'api', type: 'application', runtime: 'php', root: '/api', command: 'php', args: ['artisan', 'serve', '--port=8000'],
+        port: 8000, dependsOn: ['migrate', 'db'], readiness: { kind: 'http', path: '/up' } },
+      { id: 'web', type: 'application', runtime: 'node', role: 'frontend', root: '/web', command: 'npm', args: ['run', 'dev'],
+        port: 5173, dependsOn: ['api'] },   // `ng serve` (Angular): port 4200
+    ],
+    ingress: { routes: [{ path: '/api', serviceId: 'api' }, { path: '/', serviceId: 'web' }] },
+  },
+  { providers: [createPgliteProvider(runtime), createPhpProvider(runtime, { fs: runtime.fs, php, platform: runtime.phpPlatform }), createNodeProvider(runtime)] },
+);
+app.onError((error) => showServiceError(error));     // a failed or declined service: show it, not a blank frame
+await app.start();
+iframe.src = app.getUrl('web')!;
+```
+
+- **`db`** runs Postgres; `migrate` and `api` each depend on it directly (and
+  on no other database), so each gets
+  `DATABASE_URL=postgres://<login>@localhost:5432/postgres` (a login the
+  provider generated for that client). Laravel 10 reads `DATABASE_URL` as is;
+  Laravel 11 reads `DB_URL`, so point the `pgsql` connection's `url` at
+  `env('DB_URL', env('DATABASE_URL'))` (the login is generated per run, so it
+  cannot be copied into `env`) and set `DB_CONNECTION=pgsql` in the services'
+  `env`. PHP reaches the database through the runtime's PDO (Postgres, above).
+- **`setup`** (`composer install`) writes `vendor/`; it is `stopped` once it
+  exits 0, and its dependents start. Its last output line is in
+  `app.logs('setup')` by then. The readiness timeout (`readinessTimeoutMs`,
+  120 s) applies to a one-off too: a full Laravel install can take longer in
+  the browser, so give the step its own (`readiness: { kind: 'exit-zero',
+  timeoutMs: 600_000 }`) rather than have it killed and retried.
+- **`migrate`** runs once after both, and **`api`** after it: `artisan serve`
+  is served by the PHP runtime, ready when `/up` answers.
+- **`web`** is the dev-server handoff of `/web` (`vite`, `ng serve`): the
+  runtime's dev server compiles and serves it at `app.getUrl('web')`, and its
+  relative `fetch('/api/…')` reaches the API through the ingress — along the
+  `web → api` edge, which `dependsOn` declares (without it the request is
+  refused, answering 502 as if nothing listened).
+- If any service fails for good, `start()` rejects with `ApplicationStartError`
+  and a frontend that depends on it never starts: surface `onError` /
+  `onStateChange` (and the service's `app.logs(id)`) rather than waiting on
+  the frame. `tests/app-fullstack.test.ts` runs this shape end to end (React,
+  a Laravel-style API on Composer, PGlite).
+
 ### .NET
 
 `dotnet` commands run in a .NET process Worker — Mono's `browser-wasm`
 runtime (.NET 10) — beside the Node, Python and PHP processes, on the same
-files and ports. The runtime is **a bundle the host serves**, built by
-`node scripts/build-dotnet-runtime.mjs` (needs the .NET SDK that
-`dotnet-host/global.json` pins, and git; about 73 MiB uncompressed;
-`pnpm -C packages/browser build:dotnet`) and passed as
-`dotnet.bundleUrl`; this package never contains it, and there is no default —
-without `bundleUrl`, `dotnet` commands fail with a message saying so.
+files and ports. The runtime is **a bundle the host serves**. It holds Mono,
+the host program, ASP.NET Core, Roslyn, the patched Npgsql and the reference
+packs, about 73 MiB uncompressed. It is not part of this package. Pass the URL
+you serve it from as `dotnet.bundleUrl`. There is no default: without
+`bundleUrl`, `dotnet` commands fail with a message saying so.
+
+**Get the bundle from npm.** Since 2026.11.6, each release publishes the bundle
+as [`@seanhogg/builderforce-webcontainers-dotnet`](https://www.npmjs.com/package/@seanhogg/builderforce-webcontainers-dotnet)
+at the same version as this package. Each release's bundle is built from that
+release's tag. The package is a directory to serve, not a library:
+`manifest.json`, `_framework/` and `refs/`. Install the version that matches
+this package, copy the package into your static assets, and point `bundleUrl`
+at it:
+
+```bash
+npm install --save-exact @seanhogg/builderforce-webcontainers-dotnet@<this package's version>
+# e.g. as part of your build:
+cp -r node_modules/@seanhogg/builderforce-webcontainers-dotnet public/bfwc-dotnet
+```
+
+```ts
+dotnet: { bundleUrl: new URL('/bfwc-dotnet/', location.href).href } // absolute, ending in the bundle's directory
+```
+
+Serve `.wasm` files as `application/wasm` and `.js` files as `text/javascript`.
+The bundle never changes within a version (npm never accepts a version twice),
+so you can cache it for a long time under a versioned path, such as
+`/dotnet/<version>/`. The local launcher (`bfwc-launch`) needs no setup. It
+serves the installed package (or `dotnetBundleDir`) at `/dotnet/` on the
+preview origin. The runtime's tests serve a local copy. A public npm CDN is not
+tested as a `bundleUrl`, so mirror the package instead.
+
+**Or build it from source** with `node scripts/build-dotnet-runtime.mjs`
+(`pnpm -C packages/browser build:dotnet`). The build needs the .NET SDK that
+`dotnet-host/global.json` pins, and git. Its output, `dotnet-host/out`, is the
+same directory the npm package ships.
+
 `runtime.run('dotnet', ['run'])`, a shell's `dotnet …`, Node's
 `spawn('dotnet')` and a file-based program whose shebang names dotnet
 (`./app.cs`) all work. A `dotnet` service uses `createDotnetProvider(runtime)`:
@@ -671,7 +901,7 @@ const runtime = await startPreviewRuntime({
   serviceWorkerUrl: '/__bfwc/sw.js',
   unprotectedSameOrigin: true, // trusted code only; see relay mode
   id: projectId,
-  dotnet: { bundleUrl: 'https://assets.example.com/bfwc-dotnet/' }, // the built bundle's directory
+  dotnet: { bundleUrl: 'https://assets.example.com/bfwc-dotnet/<version>/' }, // a served copy of @seanhogg/builderforce-webcontainers-dotnet, same version
 });
 const app = startApplicationRuntime(
   {
@@ -752,7 +982,11 @@ The .NET process Worker script itself ships in this package
   `<scope>/dotnet-worker.js` beside `process-worker.js`. `dotnet.bundleUrl`
   must be absolute and CORS-served to the preview origin, whose CSP must let
   the Worker fetch and import from the bundle's host and compile WebAssembly
-  (`'wasm-unsafe-eval'`).
+  (`'wasm-unsafe-eval'`). The process Worker CSP's `connect-src` does not
+  include `'self'`, so a bundle on the preview origin itself needs its path
+  added as a source: `previewHeaders(profile).workerScript(['https://<preview host>/dotnet/'])`
+  for `dotnet-worker.js`. The local launcher does this, and it answers CORS
+  only to its own preview origins.
 
 ### Rust
 

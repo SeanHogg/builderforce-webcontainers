@@ -171,10 +171,16 @@ export function toRuntimeProcess(child: ChildHandle, terminal: boolean): Runtime
     start(controller) {
       const push = (text: string | null) => text !== null && open && controller.enqueue(terminal ? toTerminal(text) : text);
       // One decoder per stream, so a character split across writes on one is not garbled by the other.
-      child.onStdout(textChunks(push));
-      child.onStderr(textChunks(push));
+      const stdout = textChunks(push);
+      const stderr = textChunks(push);
+      child.onStdout(stdout);
+      child.onStderr(stderr);
+      // Every chunk a process wrote reaches its listeners before its exit settles (the process host delivers
+      // them in order), so the stream ends after the last one — with whatever the decoders still held.
       void child.exit.then(() => {
         if (!open) return;
+        stdout(null);
+        stderr(null);
         open = false;
         controller.close();
       });

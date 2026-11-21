@@ -17,8 +17,14 @@ export interface ServiceRun {
   handle?: ServiceHandle;
   readyAt?: number;
   exitCode?: number;
+  /** Why readiness failed, when the process exited before it was ready: kept for the exit's message. */
+  readinessReason?: string;
   /** A one-off (`exit-zero`) service exited 0. */
   completed?: boolean;
+  /** Resolves once the process's output (to its last line) is in the log. */
+  drained?: Promise<void>;
+  /** The bounded wait for `drained` after the exit (one per run, so its timeout note is written once). */
+  outputDone?: Promise<void>;
   /** A stop gave up waiting for the provider to start it: whoever gets the handle later abandons it. */
   abandoned?: boolean;
 }

@@ -1,35 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { PortCookieJars } from '@seanhogg/builderforce-webcontainers-core';
 import { attachPreview } from '../src/previewAttach.js';
-import { ATTACH_NONCE, type AttachProof, type WireResponse } from '../src/protocol.js';
-import type { PreviewTransport } from '../src/transport.js';
+import { ATTACH_NONCE } from '../src/protocol.js';
 import { host } from './helpers.js';
+import { recordingTransport as recordingAt, workerEnd } from './previewHarness.js';
 
-/** A transport that keeps what each attach handed the worker. */
-function recordingTransport() {
-  const attaches: Array<{ id: string; port: MessagePort; proof: AttachProof; extra: unknown[] }> = [];
-  let reattach: ((id: string) => void) | undefined;
-  const transport: PreviewTransport = {
-    origin: 'https://k.preview.test',
-    scope: '/__bfwc/',
-    attach: (id, port, proof, ...extra: unknown[]) => void attaches.push({ id, port, proof, extra }),
-    onReattach(listener) {
-      reattach = listener;
-      return () => (reattach = undefined);
-    },
-    send: vi.fn(),
-    dispose: vi.fn(),
-  };
-  return { transport, attaches, reattach: (id: string) => reattach?.(id) };
-}
-
-/** Send one wire request over the worker's end of an attach and wait for the answer. */
-function ask(port: MessagePort, path: string): Promise<WireResponse> {
-  return new Promise((resolve) => {
-    port.onmessage = (event) => resolve(event.data as WireResponse);
-    port.postMessage({ type: 'request', reqId: 1, path, search: '', method: 'GET', headers: {}, body: null });
-  });
-}
+const recordingTransport = () => recordingAt('https://k.preview.test');
 
 describe('attaching a preview', () => {
   it("mints a fresh nonce per attach, chained to the last one the worker acknowledged, and hands the worker no egress", async () => {
@@ -96,9 +72,10 @@ describe('attaching a preview', () => {
       onRefused: (port) => refused.push(port),
     });
     const worker = attaches[0]!.port;
-    expect((await ask(worker, '/__port/4000/')).status).toBe(403);
-    expect((await ask(worker, '/index.html')).status).toBe(403); // no dev server here
-    expect((await ask(worker, '/__port/3000/')).status).toBe(502); // allowed: nothing listens
+    const { ask } = workerEnd(worker);
+    expect((await ask('/__port/4000/')).status).toBe(403);
+    expect((await ask('/index.html')).status).toBe(403); // no dev server here
+    expect((await ask('/__port/3000/')).status).toBe(502); // allowed: nothing listens
     expect(refused).toEqual([4000, undefined]);
     worker.close();
     stop();

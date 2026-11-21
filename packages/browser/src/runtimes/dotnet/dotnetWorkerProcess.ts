@@ -26,6 +26,7 @@ import { parseDotnetCommand } from './dotnetCommand.js';
 import { createDotnetBridge, type Dial } from './dotnetInterop.js';
 import { DotnetBundleError, readManifest, type DotnetLoadOptions, type LoadedDotnet } from './dotnetLoader.js';
 import { prepareInvocation, runWithRuntime } from './dotnetProgram.js';
+import { DOTNET_BUNDLE_SOURCE } from './dotnetBundle.js';
 
 export interface DotnetWorkerProcessDeps {
   post(message: WorkerToHost): void;
@@ -37,7 +38,7 @@ export interface DotnetWorkerProcessDeps {
   fetch?: typeof fetch;
 }
 
-const NO_BUNDLE = 'The .NET runtime bundle is not configured: the host must pass `dotnet.bundleUrl` (build it with scripts/build-dotnet-runtime.mjs).';
+const NO_BUNDLE = `The .NET runtime bundle is not configured: the host must pass \`dotnet.bundleUrl\` (to get the bundle, ${DOTNET_BUNDLE_SOURCE}).`;
 
 /** What a real `dotnet` prints when a server's port is taken (Kestrel's unhandled IOException). */
 const addressInUse = (port: number) => `Unhandled exception. System.IO.IOException: Failed to bind to address http://localhost:${port}: address already in use.\n`;

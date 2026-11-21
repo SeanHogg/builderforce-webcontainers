@@ -1,4 +1,5 @@
 import {
+  ESM_SH_ORIGIN,
   angularCompilerFor,
   createSvelteCompiler,
   createVueCompiler,
@@ -30,7 +31,7 @@ export interface CdnComponentCompilerOptions {
 export const defaultVueCompilerUrl = (range: string) =>
   `https://cdn.jsdelivr.net/npm/@vue/compiler-sfc@${range}/dist/compiler-sfc.esm-browser.js`;
 
-export const defaultSvelteCompilerUrl = (range: string) => `https://esm.sh/svelte@${range}/compiler`;
+export const defaultSvelteCompilerUrl = (range: string) => `${ESM_SH_ORIGIN}/svelte@${range}/compiler`;
 
 export function createCdnComponentCompilers(options: CdnComponentCompilerOptions = {}): ComponentCompilers {
   const load = memoizedLoader<ComponentCompiler>(options.importModule ?? nativeImport);

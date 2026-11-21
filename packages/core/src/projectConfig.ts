@@ -171,20 +171,61 @@ function readJsx(options: Record<string, unknown>): ProjectConfig['jsx'] {
   return { runtime, importSource };
 }
 
-/** `KEY=value` lines; quotes stripped, `#` comments and blank lines ignored. */
+/** A `.env` assignment's head: optional `export `, the key, `=` (spaces around it allowed). */
+const DOTENV_ASSIGNMENT = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][\w.-]*)[ \t]*=[ \t]*/;
+/** Escapes a double-quoted `.env` value reads (`\n`, `\r`, `\t`, `\"`, `\\`, `\$`); any other backslash is kept as written. */
+const DOTENV_ESCAPES: Readonly<Record<string, string>> = { n: '\n', r: '\r', t: '\t', '"': '"', '\\': '\\', $: '$' };
+
+/** The index of the quote closing a value opened at `from - 1`: a single-quoted value has no escapes, a double-quoted one skips `\x`. */
+function closingQuote(text: string, from: number, quote: string): number {
+  if (quote === "'") return text.indexOf("'", from);
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === '\\') i++;
+    else if (text[i] === '"') return i;
+  }
+  return -1;
+}
+
+/**
+ * A `.env` file's `KEY=value` assignments, read as dotenv and phpdotenv read them:
+ * - blank lines, `#` comment lines and lines that are not an assignment are skipped; `export ` is dropped;
+ * - a quoted value runs to its closing quote (it may span lines, and holds the other
+ *   quote and `#` as text); anything after the closing quote is ignored. A single-quoted
+ *   value is literal; a double-quoted one reads `\n`, `\r`, `\t`, `\"`, `\\` and `\$`;
+ * - an unquoted value ends at a `#` that starts it or follows whitespace (an inline
+ *   comment: `a#b` keeps its `#`), and is trimmed. A value whose quote never closes is unquoted;
+ * - no `${…}` expansion; a later assignment of a key wins.
+ */
 export function parseDotenv(text: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq).replace(/^export\s+/, '').trim();
-    let value = line.slice(eq + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
+  const source = text.replace(/\r\n?/g, '\n');
+  const endOfLine = (from: number) => {
+    const end = source.indexOf('\n', from);
+    return end < 0 ? source.length : end;
+  };
+  let at = 0;
+  while (at < source.length) {
+    const lineEnd = endOfLine(at);
+    const head = DOTENV_ASSIGNMENT.exec(source.slice(at, lineEnd));
+    if (!head) {
+      at = lineEnd + 1;
+      continue;
     }
-    out[key] = value;
+    const key = head[1]!;
+    const start = at + head[0].length;
+    const quote = source[start];
+    if (quote === '"' || quote === "'") {
+      const close = closingQuote(source, start + 1, quote);
+      if (close >= 0) {
+        const body = source.slice(start + 1, close);
+        out[key] = quote === "'" ? body : body.replace(/\\(.)/gs, (escape, char: string) => DOTENV_ESCAPES[char] ?? escape);
+        at = endOfLine(close) + 1;
+        continue;
+      }
+    }
+    const raw = source.slice(start, lineEnd);
+    out[key] = raw.startsWith('#') ? '' : raw.replace(/[ \t]+#.*$/, '').trim();
+    at = lineEnd + 1;
   }
   return out;
 }

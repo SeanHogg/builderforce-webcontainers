@@ -1,4 +1,5 @@
 import {
+  ESM_SH_ORIGIN,
   createLessCompiler,
   createSassCompiler,
   type LessLike,
@@ -22,8 +23,8 @@ export interface CdnStyleCompilerOptions {
   importModule?: ImportModule;
 }
 
-export const defaultSassUrl = (range: string) => `https://esm.sh/sass@${range}`;
-export const defaultLessUrl = (range: string) => `https://esm.sh/less@${range}`;
+export const defaultSassUrl = (range: string) => `${ESM_SH_ORIGIN}/sass@${range}`;
+export const defaultLessUrl = (range: string) => `${ESM_SH_ORIGIN}/less@${range}`;
 
 /** A CommonJS build arrives as the default export; an ES build as the namespace. */
 const moduleApi = <T>(module: unknown, probe: string): T => {

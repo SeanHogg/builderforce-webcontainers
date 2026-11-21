@@ -13,11 +13,22 @@ export interface PackageCdn {
  * dev server and false for a production build, so a factory can pick development
  * or production package builds (React's readable errors vs its small bundle).
  * It may be async: the esm.sh one loads package metadata first.
+ *
+ * `origins` are the origins its URLs point at (`['https://esm.sh']`): the browser
+ * runtime adds them to every preview's CSP egress, so the preview may load the
+ * modules. A factory without them gets none added (the runtime warns once): list
+ * its origin in `previewEgress` instead, or set `origins` on the function
+ * (`Object.assign(factory, { origins: ['https://cdn.example.com'] })`).
  */
-export type PackageCdnFactory = (
+export type PackageCdnFactory = ((
   dependencies: Record<string, string>,
   options: { dev: boolean },
-) => PackageCdn | Promise<PackageCdn>;
+) => PackageCdn | Promise<PackageCdn>) & {
+  readonly origins?: readonly string[];
+};
+
+/** esm.sh's public origin: the default CDN, its manifests and its types. */
+export const ESM_SH_ORIGIN = 'https://esm.sh';
 
 /** The package.json fields that say which other packages a package imports. */
 export interface PackageDependencyFields {
@@ -26,9 +37,20 @@ export interface PackageDependencyFields {
   optionalDependencies?: Record<string, string>;
 }
 
+/**
+ * An esm.sh-compatible CDN at `origin` (default {@link ESM_SH_ORIGIN}), pinned to the
+ * project's ranges, with each declared package's manifest loaded from it. Its
+ * `origins` name that server, so previews may load from it.
+ */
+export function createEsmShCdnFactory(options: { origin?: string } = {}): PackageCdnFactory {
+  const base = (options.origin ?? ESM_SH_ORIGIN).replace(/\/+$/, '');
+  const factory = async (dependencies: Record<string, string>, { dev }: { dev: boolean }) =>
+    createEsmShCdn({ origin: base, dependencies, dev, manifests: await loadPackageManifests(dependencies, { origin: base }) });
+  return Object.assign(factory, { origins: [new URL(base).origin] as readonly string[] });
+}
+
 /** esm.sh, pinned to the project's ranges, with each declared package's manifest loaded. */
-export const esmShCdnFactory: PackageCdnFactory = async (dependencies, { dev }) =>
-  createEsmShCdn({ dependencies, dev, manifests: await loadPackageManifests(dependencies) });
+export const esmShCdnFactory: PackageCdnFactory = createEsmShCdnFactory();
 
 export interface EsmShOptions {
   /** Defaults to https://esm.sh. Any esm.sh-compatible server works. */
@@ -55,7 +77,7 @@ function importsPackage(manifest: PackageDependencyFields, name: string): boolea
 }
 
 export function createEsmShCdn(options: EsmShOptions = {}): PackageCdn {
-  const origin = (options.origin ?? 'https://esm.sh').replace(/\/+$/, '');
+  const origin = (options.origin ?? ESM_SH_ORIGIN).replace(/\/+$/, '');
   const dependencies = options.dependencies ?? {};
   const manifests = options.manifests ?? {};
   const dev = options.dev ?? true;
@@ -108,7 +130,7 @@ export async function loadPackageManifests(
   dependencies: Record<string, string>,
   options: ManifestLoadOptions = {},
 ): Promise<Record<string, PackageDependencyFields>> {
-  const origin = (options.origin ?? 'https://esm.sh').replace(/\/+$/, '');
+  const origin = (options.origin ?? ESM_SH_ORIGIN).replace(/\/+$/, '');
   const fetcher = options.fetch ?? (typeof fetch === 'function' ? (url: string) => fetch(url) : undefined);
   if (!fetcher) return {};
   const entries = await Promise.all(

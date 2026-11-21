@@ -1,5 +1,5 @@
 /**
- * Loading the .NET runtime bundle (scripts/build-dotnet-runtime.mjs) into a
+ * Loading the .NET runtime bundle (the npm package @seanhogg/builderforce-webcontainers-dotnet, or built with scripts/build-dotnet-runtime.mjs) into a
  * .NET process Worker: its manifest, then Mono's `dotnet.js` from the bundle
  * by URL (never bundled into this package, like Pyodide and php-wasm), started
  * with the process's environment, given the Worker's functions (module
@@ -23,7 +23,7 @@
  * so the package's public types never depend on it.
  */
 import type { WrappableEmscriptenFs } from '../emscripten/wrappedFsWrites.js';
-import { DOTNET_BUNDLE } from './dotnetBundle.js';
+import { DOTNET_BUNDLE, DOTNET_BUNDLE_SOURCE } from './dotnetBundle.js';
 
 /** One reference assembly inside a group's pack. */
 export interface PackedFile {
@@ -164,7 +164,7 @@ async function readManifestText(bundleUrl: string, fetchFn: typeof fetch): Promi
   } catch {
     throw new DotnetBundleError(`The .NET runtime bundle's manifest (${url}) is not JSON.`);
   }
-  if (manifest?.format !== DOTNET_BUNDLE.format) throw new DotnetBundleError(`The .NET runtime bundle at ${bundleUrl} is format ${String(manifest?.format)}; this runtime reads format ${DOTNET_BUNDLE.format}. Rebuild it with scripts/build-dotnet-runtime.mjs.`);
+  if (manifest?.format !== DOTNET_BUNDLE.format) throw new DotnetBundleError(`The .NET runtime bundle at ${bundleUrl} is format ${String(manifest?.format)}; this runtime reads format ${DOTNET_BUNDLE.format}. To get one this runtime reads, ${DOTNET_BUNDLE_SOURCE}.`);
   return { manifest, text };
 }
 
@@ -197,7 +197,7 @@ async function bundleFetch(manifestText: string, fetchFn: typeof fetch): Promise
 /** The bytes at `path` in the bundle, checked against the manifest's hash. */
 async function verifiedBytes(get: (url: string) => Promise<Response>, base: string, manifest: DotnetBundleManifest, path: string): Promise<Uint8Array> {
   const expected = manifest.files?.[path];
-  if (!expected) throw new DotnetBundleError(`The .NET runtime bundle's manifest has no hash for ${path}: rebuild it with scripts/build-dotnet-runtime.mjs.`);
+  if (!expected) throw new DotnetBundleError(`The .NET runtime bundle's manifest has no hash for ${path}: to get a complete one, ${DOTNET_BUNDLE_SOURCE}.`);
   const response = await get(new URL(path, base).href);
   if (!response.ok) throw new DotnetBundleError(`${path} of the .NET runtime bundle could not be loaded (HTTP ${response.status}).`);
   const bytes = new Uint8Array(await response.arrayBuffer());

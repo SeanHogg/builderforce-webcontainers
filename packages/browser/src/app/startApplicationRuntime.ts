@@ -18,6 +18,7 @@ import {
   type StateChange,
 } from '@seanhogg/builderforce-webcontainers-core/app';
 import { hashAlgorithm } from '@seanhogg/builderforce-webcontainers-core';
+import { applicationDiagnostics } from './appDiagnostics.js';
 import { messageOf } from './asyncHelpers.js';
 import { ServiceFailure } from './awaitReadiness.js';
 import { createListeners } from './listeners.js';
@@ -149,10 +150,14 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
       disposed = true;
       await stopAll();
       options.runtime.forgetApplication?.(applicationId);
+      // Live readers get every service's last lines before their streams end (each wait bounded by the stop timeout).
+      // (Each stop already waits for its running process's output; this covers whatever exited outside a stop.)
+      await Promise.all([...services.values()].map((supervised) => supervised.outputDrained()));
       logs.close();
     },
     getService: (serviceId) => services.get(serviceId)?.snapshot(),
     listServices: () => graph.startOrder.map((id) => service(id).snapshot()),
+    diagnostics: () => applicationDiagnostics(graph.startOrder.map((id) => service(id).snapshot()), logs),
     getUrl: (serviceId) => services.get(serviceId)?.url(),
     logs: (serviceId) => logs.stream(serviceId),
     onStateChange: (listener) => stateChanges.on(listener),

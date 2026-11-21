@@ -62,12 +62,18 @@ const scope = new URL(worker.registration.scope);
  * What every response this worker serves is stamped with, fixed at start from
  * the worker's OWN script URL (`relayConfig`: host-side configuration the
  * embedder's server vouches for) — never from a message, which a preview can forge.
+ * The URL is only as trustworthy as that server's gate: preview code is same-origin
+ * with this script and can register it again with any query, so the gate must refuse
+ * any key it does not check and every `csp` unless the deployment deliberately runs
+ * report-only (README › Preview origin headers › sw.js). The launcher's and the
+ * Builderforce API's gates are allowlists that refuse `csp` outright.
  */
 const config = relayConfigOf(worker.location.href);
 const stamp: PreviewStamp = {
   policy: previewDocumentPolicy(config.egress, { host: scope.host, report: config.report !== undefined }),
   reportUrl: config.report,
   host: scope.hostname,
+  ...(config.cspMode === 'report-only' ? { reportOnly: true } : {}),
 };
 
 const router = createSwRouter({

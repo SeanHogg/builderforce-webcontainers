@@ -67,6 +67,36 @@ describe('project config', () => {
   it('parses dotenv quoting and export prefixes', () => {
     expect(parseDotenv("export A='1'\nB = two\n\n#C=3")).toEqual({ A: '1', B: 'two' });
   });
+
+  it('regression: reads inline comments, inner quotes, escapes and multi-line values as dotenv does', () => {
+    const text = [
+      'A=1 # inline',
+      'B=a#b',
+      'C=#only a comment',
+      `D="it's \\"quoted\\" # not a comment" # comment`,
+      `E='say "hi" \\n'`,
+      'F="line1\\nline2\\t$\\$HOME"',
+      'G="first',
+      'second"',
+      'H="unterminated # c',
+      'I=',
+      'not an assignment',
+      'J = spaced   ',
+      'A=2',
+    ].join('\r\n');
+    expect(parseDotenv(text)).toEqual({
+      A: '2',
+      B: 'a#b',
+      C: '',
+      D: 'it\'s "quoted" # not a comment',
+      E: 'say "hi" \\n',
+      F: 'line1\nline2\t$$HOME',
+      G: 'first\nsecond',
+      H: '"unterminated',
+      I: '',
+      J: 'spaced',
+    });
+  });
 });
 
 describe('createEsmShCdn', () => {

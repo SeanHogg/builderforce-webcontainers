@@ -18,6 +18,9 @@ import {
   readLaunchProfile,
   type DotnetBundleManifest,
 } from '../src/runtimes/dotnet/index.js';
+import { DOTNET_BUNDLE, DOTNET_BUNDLE_SOURCE } from '../src/runtimes/dotnet/dotnetBundle.js';
+import { readManifest } from '../src/runtimes/dotnet/dotnetLoader.js';
+import { DOTNET_BUNDLE_PACKAGE } from '../src/launcher/server/dotnetBundle.js';
 
 const WEB = `<Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
@@ -187,5 +190,15 @@ describe('dotnet provider', () => {
     expect(acceptsDotnetService(service(['watch']), fs)).toMatchObject({ ok: false, reason: expect.stringContaining('dotnet watch') });
     expect(acceptsDotnetService({ ...service([]), command: 'node' })).toMatchObject({ ok: false });
     expect(acceptsDotnetService({ id: 'db', type: 'database', runtime: 'dotnet', port: 5432 } as never)).toMatchObject({ ok: false });
+  });
+});
+
+describe('where the .NET bundle comes from', () => {
+  it('is spelled once (the launcher reads DOTNET_BUNDLE.npmPackage), and a bundle error names the npm package first', async () => {
+    expect(DOTNET_BUNDLE_PACKAGE).toBe(DOTNET_BUNDLE.npmPackage);
+    expect(DOTNET_BUNDLE_SOURCE).toContain('install @seanhogg/builderforce-webcontainers-dotnet at the same version');
+    expect(DOTNET_BUNDLE_SOURCE).toContain('scripts/build-dotnet-runtime.mjs');
+    const oldFormat: typeof fetch = async () => new Response(JSON.stringify({ format: 1 }));
+    await expect(readManifest('https://bundle.test/dotnet/', oldFormat)).rejects.toThrow(`To get one this runtime reads, ${DOTNET_BUNDLE_SOURCE}.`);
   });
 });

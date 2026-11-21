@@ -32,7 +32,9 @@ import type { PythonHostOptions } from './runtimes/python/pythonProcessKind.js';
 import type { TrainingServices } from './runtimes/python/trainingChannel.js';
 import type { PhpHostOptions, PhpPlatformRecord } from './runtimes/php/phpProcessKind.js';
 import type { DotnetHostOptions } from './runtimes/dotnet/dotnetProcessKind.js';
-import type { PreviewConsoleMessage, PreviewError } from './previewMessages.js';
+import type { PreviewConsoleMessage, PreviewCspViolation, PreviewError } from './previewMessages.js';
+import type { PreviewCspMode } from './relayConfig.js';
+import type { RuntimeDiagnostics } from './diagnostics.js';
 import type { PreviewOriginOption } from './previewOrigin.js';
 import type { SecurityEventSink } from './security/securityEvent.js';
 import type { ShieldTelemetry } from './security/shieldTelemetry.js';
@@ -105,7 +107,7 @@ export type PreviewRuntimeOptions = (SameOriginOptions | RelayOptions) & CommonR
 export interface CommonRuntimeOptions {
   /** Compiler. Defaults to esbuild-wasm. */
   transformer?: Transformer;
-  /** Package CDN factory, for previews (`dev: true`) and builds (`dev: false`). Defaults to esm.sh. */
+  /** Package CDN factory, for previews (`dev: true`) and builds (`dev: false`). Defaults to esm.sh. Its `origins` join every preview's egress (see `previewEgress`). */
   cdn?: PackageCdnFactory;
   /** `.vue` / `.svelte` compilers. Default: the official ones, fetched from a CDN on first use. */
   components?: ComponentCompilers;
@@ -143,8 +145,12 @@ export interface CommonRuntimeOptions {
   php?: PhpHostOptions;
   /**
    * .NET processes (`dotnet run`, `dotnet build`, `./app.cs`): where the runtime
-   * bundle (scripts/build-dotnet-runtime.mjs) is served. No default — without
-   * `bundleUrl`, `dotnet` commands decline with the reason.
+   * bundle is served (`bundleUrl`). Normally you serve the bundle each release
+   * publishes as the npm package `@seanhogg/builderforce-webcontainers-dotnet`
+   * (`DOTNET_BUNDLE.npmPackage`), at this package's exact version; building it
+   * from source with scripts/build-dotnet-runtime.mjs is the alternative. The
+   * runtime fetches nothing by itself: without `bundleUrl`, `dotnet` commands
+   * decline with the reason.
    */
   dotnet?: DotnetHostOptions;
   /**
@@ -161,15 +167,30 @@ export interface CommonRuntimeOptions {
    */
   cspReportUrl?: string;
   /**
-   * The external sources preview responses may reach (`https://api.example.com`,
-   * `https://*.example.com`, `wss://…`; no paths): the service worker stamps them
-   * into the preview CSP of every response it serves (on top of its own origin),
-   * added to any CSP the app sets. Host-side only: each origin's service worker
-   * takes them from its own script URL, never from an attach. The default package
-   * CDN (`https://esm.sh`, when `cdn` is unset) is always added. A function
-   * answers per application (undefined: the workspace's previews). Default: none.
+   * External sources preview responses may reach (`https://api.example.com`,
+   * `https://*.example.com`, `wss://…`; no paths). The preview CSP's egress is
+   * exactly: the preview's own origin, plus the package CDN's origins (`cdn`'s
+   * `origins`; `cdn` unset: `https://esm.sh`), plus this list. It never replaces
+   * the CDN's origins; a custom `cdn` without `origins` contributes none (the
+   * runtime warns once) — declare them on the factory or list them here. The
+   * service worker stamps the result into every response it serves, beside any
+   * CSP the app sets. Host-side only: each origin's service worker takes it from
+   * its own script URL, never from an attach. A function answers per application
+   * (undefined: the workspace's previews). Default: none.
    */
   previewEgress?: readonly string[] | ((applicationId: string | undefined) => readonly string[]);
+  /**
+   * `'report-only'` stamps the runtime's preview CSP as
+   * `Content-Security-Policy-Report-Only`: violations are reported
+   * (`cspReportUrl`, `onCspViolation`) but nothing is blocked. For migrating an
+   * app to the policy only — it turns the WHOLE runtime policy report-only, not
+   * just egress: `frame-src`, `worker-src`, `form-action` and every other
+   * directive stop being enforced too. Travels to each origin's service worker in
+   * its script URL (`csp=report-only`), like `previewEgress`, so the embedder's
+   * `sw.js` gate must deliberately allow `csp` (README › Preview origin headers);
+   * the launcher's and the Builderforce API's gates refuse it. Default `'enforce'`.
+   */
+  previewCspMode?: PreviewCspMode;
 }
 
 export interface RuntimeBuildOptions {
@@ -220,6 +241,21 @@ export interface PreviewRuntime {
   onError(listener: (error: PreviewError) => void): () => void;
   /** The preview's `console.log/info/warn/error/debug` output (first 1,000 messages per page load). */
   onPreviewConsole(listener: (message: PreviewConsoleMessage) => void): () => void;
+  /**
+   * What the preview CSP blocked (or, report-only, would have): the directive and
+   * the blocked origin, never a path. Each (page, directive, origin) once per
+   * runtime, at most `CSP_VIOLATION_LIMIT` per page and
+   * `CSP_VIOLATION_RUNTIME_LIMIT` in all — enforced here as well as in the page.
+   * Reported by the preview page, which runs the app's code: diagnostics only,
+   * never a security signal.
+   */
+  onCspViolation(listener: (violation: PreviewCspViolation) => void): () => void;
+  /**
+   * A snapshot of how this runtime loaded: phase timings, package-CDN requests,
+   * requests per origin and the slowest, recent CSP violations and whether the
+   * cache was cold or warm. Plain data; only what was measured (README › Diagnostics).
+   */
+  diagnostics(): RuntimeDiagnostics;
   /** Replace the scripts run in preview pages; open previews reload to pick them up. */
   setPreviewScripts(scripts: string[]): void;
   /**

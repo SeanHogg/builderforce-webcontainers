@@ -24,6 +24,7 @@ import {
 import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 import type { WorkerLike } from './node/processHost.js';
 import type { WorkerKind } from './node/protocol.js';
+import { serviceWorkerRegistrationError } from './relayConfig.js';
 import { spawnOverRelay, type UndeliverableListener } from './relayWorker.js';
 import { broadcastUpdate, waitForActive } from './worker.js';
 
@@ -67,7 +68,9 @@ export async function sameOriginTransport(serviceWorkerUrl: string, scopeOption?
 
   const scriptUrl = new URL(serviceWorkerUrl, location.href);
   const scope = new URL(scopeOption ?? './', scriptUrl).pathname;
-  const registration = await container.register(scriptUrl.href, { scope });
+  const registration = await container.register(scriptUrl.href, { scope }).catch((error: unknown) => {
+    throw serviceWorkerRegistrationError(scriptUrl.href, error); // names the egress the server's gate may have refused
+  });
   await waitForActive(registration);
 
   const listeners = new Set<(id: string) => void>();

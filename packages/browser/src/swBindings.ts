@@ -65,10 +65,30 @@ export interface AttachClient {
  */
 export type AttachMode = 'relay' | 'same-origin';
 
-/** The `mode` a worker script URL carries (`sw.js?mode=relay`). */
+/**
+ * Whether a query names any key more than once (`?egress=a&egress=b`). The host
+ * writes each key once, so a repeat is a forged or mangled URL: `URLSearchParams.get`
+ * reads the first value while a server gate may read the last, so the two could
+ * check different values. Worker URLs with a repeat are read as malformed.
+ */
+export function repeatsAKey(params: URLSearchParams): boolean {
+  const seen = new Set<string>();
+  for (const key of params.keys()) {
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
+}
+
+/**
+ * The `mode` a worker script URL carries (`sw.js?mode=relay`). A URL that names
+ * `mode` more than once is malformed and gets the stricter attach rule, `relay`
+ * (only the relay page may attach).
+ */
 export function attachModeOf(scriptUrl: string): AttachMode {
   try {
-    return new URL(scriptUrl).searchParams.get('mode') === 'relay' ? 'relay' : 'same-origin';
+    const modes = new URL(scriptUrl).searchParams.getAll('mode');
+    return modes.length > 1 || modes[0] === 'relay' ? 'relay' : 'same-origin';
   } catch {
     return 'same-origin';
   }

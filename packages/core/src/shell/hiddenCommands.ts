@@ -5,6 +5,9 @@
  * `bfwc-badge off|on|status` toggles the preview's "Built with Builderforce.ai"
  * badge through {@link ATTRIBUTION_OFF_MARKER}, which the browser host checks on
  * every page it serves. Paths are absolute, so it works from any directory.
+ * It is an internal maintainer toggle, not a supported API: hosts turn the badge
+ * off with the `attribution: false` option (README › Attribution), which wins
+ * over the marker.
  */
 import { ATTRIBUTION_OFF_MARKER } from '../attribution.js';
 import { dirname } from '../paths.js';

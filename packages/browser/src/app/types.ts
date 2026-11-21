@@ -158,12 +158,35 @@ export interface ApplicationRuntime {
   onStateChange(listener: (change: StateChange) => void): () => void;
   onError(listener: (error: ServiceError) => void): () => void;
   /**
+   * Every service, in start order, with its state, its restarts in a row and last
+   * exit code (when there are any) and its last log lines (at most 20, output and
+   * runtime notes) — plain data for a load or failure report.
+   */
+  diagnostics(): ApplicationDiagnostics;
+  /**
    * A database service's data: `export()` a snapshot, `import(blob)` one in its
    * place, `reset()` to empty. Each call reaches the database running at that
    * moment and rejects when it is not running. Throws for an id that is not a
    * database service.
    */
   database(serviceId: string): DatabaseControl;
+}
+
+/** One service in `app.diagnostics()`. */
+export interface ServiceDiagnostics {
+  id: string;
+  state: ServiceState;
+  /** Restarts in a row (see `ServiceSnapshot.restarts`); absent when none. */
+  restarts?: number;
+  /** The last process's exit code; absent until one has exited. */
+  lastExitCode?: number;
+  /** The service's last log lines (its output and the runtime's notes about it), oldest first. */
+  lastLines: string[];
+}
+
+/** `app.diagnostics()`: every service, in start order. */
+export interface ApplicationDiagnostics {
+  services: ServiceDiagnostics[];
 }
 
 /** `start()` or `restart()` could not bring every service up. */

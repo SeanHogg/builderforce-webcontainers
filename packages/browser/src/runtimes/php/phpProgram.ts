@@ -97,7 +97,8 @@ export async function runPhpInvocation(loaded: LoadedPhp, invocation: PhpInvocat
       context.io.stderr(`Directory ${invocation.server.docroot} does not exist.\n`);
       return { kind: 'exited', code: 1 };
     }
-    const router = invocation.server.router ? resolveFrom(context.cwd, invocation.server.router) : undefined;
+    const optional = invocation.server.routerIfPresent ? resolveFrom(context.cwd, invocation.server.routerIfPresent) : undefined;
+    const router = invocation.server.router ? resolveFrom(context.cwd, invocation.server.router) : optional && isFile(module.FS, optional) ? optional : undefined;
     if (router && !isFile(module.FS, router)) {
       context.io.stderr(`Could not open input file: ${invocation.server.router}\n`);
       return { kind: 'exited', code: 1 };

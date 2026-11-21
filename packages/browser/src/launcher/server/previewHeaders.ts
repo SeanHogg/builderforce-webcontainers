@@ -8,20 +8,25 @@
  *   (and the runtime drops a report URL that is not https anyway);
  * - no signed egress policies: every process Worker gets the most restrictive policy
  *   (the default connect sources only), and `sw.js` is served only with no `policy`,
- *   no `report` and egress within the runtime's own package CDN.
+ *   no `report`, no `csp`, no repeated key and egress within the runtime's own package CDN.
  *
  * `frame-ancestors` on every preview response is the host page's origin only.
  * Pure: strings in, header records out.
  */
 import { PREVIEW_DEFAULT_EGRESS, previewHeaders, type HeaderSet } from '../../previewHeaders.js';
+import { repeatsAKey } from '../../swBindings.js';
 
 export { PREVIEW_WORKER_SCRIPTS, type HeaderSet, type PreviewScript } from '../../previewHeaders.js';
 
 /** The launcher's profile: no embedding headers, no reporting, Worker scripts re-checked on every load (a later launch on the same port may serve another package version). */
 const LAUNCHER = previewHeaders({ scriptType: 'text/javascript; charset=utf-8', workerScriptCache: 'no-cache' });
 
-/** The CDNs the host page itself loads from: esbuild-wasm, the component/style compilers. */
-const PAGE_CDN_SOURCES: readonly string[] = ['https://cdn.jsdelivr.net', 'https://esm.sh'];
+/**
+ * The CDNs the host page itself loads from: esbuild-wasm (jsdelivr), the component/style
+ * compilers (esm.sh, the default package CDN — spelled once, in `PREVIEW_DEFAULT_EGRESS`;
+ * this Node module does not load core for its `ESM_SH_ORIGIN`).
+ */
+const PAGE_CDN_SOURCES: readonly string[] = ['https://cdn.jsdelivr.net', ...PREVIEW_DEFAULT_EGRESS];
 
 const NOSNIFF = { 'X-Content-Type-Options': 'nosniff' } as const;
 const directive = (name: string, ...sources: readonly string[]) => [name, ...sources].join(' ');
@@ -42,15 +47,23 @@ export const workerScriptHeaders = (ownPaths: readonly string[] = []): HeaderSet
 /** Every other response a preview origin answers (404s, a refusal, the .NET bundle), on `host` (`name:port`). */
 export const previewDocumentHeaders = (host: string, frameAncestors: readonly string[]): HeaderSet => LAUNCHER.document(host, frameAncestors);
 
+/** The only query keys a local `sw.js` URL may carry: no `policy` (none is signed locally), no `report`, never `csp`. */
+const SERVICE_WORKER_KEYS: ReadonlySet<string> = new Set(['mode', 'egress']);
+
 /**
  * Whether `sw.js` may be served for this URL: `mode=relay` (any other mode takes
- * attaches from any page on the origin), no `policy` (none is ever signed locally),
- * no `report`, and egress within {@link PREVIEW_DEFAULT_EGRESS}.
+ * attaches from any page on the origin), egress within {@link PREVIEW_DEFAULT_EGRESS},
+ * and no other key. An allowlist: preview code is same-origin with `sw.js` and can
+ * re-register it with any query, and the launcher never runs report-only, so a
+ * `csp=report-only` (which would turn the preview's whole CSP report-only), a
+ * `policy`, a `report` or any key this gate does not know is refused. So is any key
+ * named twice: the gate and the worker must read the same single value.
  */
 export function serviceWorkerAllowed(url: URL): boolean {
   const params = url.searchParams;
+  if (repeatsAKey(params)) return false;
+  for (const key of params.keys()) if (!SERVICE_WORKER_KEYS.has(key)) return false;
   if (params.get('mode') !== 'relay') return false;
-  if (params.has('policy') || params.has('report')) return false;
   const egress = (params.get('egress') ?? '').split(' ').filter(Boolean).map((source) => source.toLowerCase());
   return egress.every((source) => PREVIEW_DEFAULT_EGRESS.includes(source));
 }

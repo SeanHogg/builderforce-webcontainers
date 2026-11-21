@@ -18,11 +18,13 @@ previews, built to be forked.
 
 | | BuilderForce WebContainers | StackBlitz WebContainers |
 |---|---|---|
-| Licence | MIT. Fork it, ship it, sell it. A small badge is on by default and can be switched off. | Proprietary. Free tier non-commercial, attribution required. |
+| Licence | MIT. Fork it, ship it, sell it. A small badge is on by default; `attribution: false` switches it off ([Attribution](#attribution)). | Proprietary. Free tier non-commercial, attribution required. |
 | Session cap | None | 25,000 API sessions/month on the free tier |
 | Cross-origin isolation (COOP/COEP) | **Not required**: embeds and third-party scripts keep working | Required |
 | Compiler / package source | Pluggable ports: swap esbuild for SWC, esm.sh for your own mirror | Fixed |
 | Errors | Uncaught errors in the preview are posted to the host page | — |
+| Load diagnostics | `runtime.diagnostics()`: phase timings, package CDN and per-origin requests, slowest origins, cold/warm cache, and what could not be measured ([Diagnostics](packages/browser/README.md#diagnostics)) | — |
+| Blocked-request reports | `runtime.onCspViolation(listener)`: the directive and origin the preview's CSP blocked, no paths ([Preview origin headers](packages/browser/README.md#preview-origin-headers)) | — |
 | Production build, type-check | In the browser: `runtime.build()`, `createChecker()` | Via `npm run build` / `tsc` in the container |
 | Node.js programs and servers, `npm install`, shell | Yes: one Web Worker per process, still no COOP/COEP (limits in [ROADMAP](ROADMAP.md)) | Yes |
 
@@ -38,6 +40,36 @@ twins (`esbuild` → `esbuild-wasm`, `rollup` → `@rollup/wasm-node`, napi-rs
 not run yet: Nuxt 3's parser has only a threaded WebAssembly build, which needs
 cross-origin isolation, and Nuxt 4 stalls during start-up (see the
 [ROADMAP](ROADMAP.md)). The roadmap is how it closes the rest of the gap.
+
+## What's new in 2026.11.8
+
+- **Diagnostics.** `runtime.diagnostics()` returns one load report: phase
+  timings (runtime start, service worker ready, compiler load, preview first
+  paint), package CDN request count, total time and errors, requests per
+  origin, the slowest requests (origin only, never a URL), recent CSP
+  violations, a cold or warm cache, and `unavailable` for what could not be
+  measured. See [Diagnostics](packages/browser/README.md#diagnostics).
+- **CSP violations on the host page.** `runtime.onCspViolation(listener)`
+  reports which origin the preview's policy blocked and under which directive.
+  Paths are never forwarded; reports are deduplicated and capped. See
+  [Preview origin headers](packages/browser/README.md#preview-origin-headers).
+- **Report-only previews for migrations.** `previewCspMode: 'report-only'`
+  reports violations without blocking. It turns the protection off, so your
+  `sw.js` gate must allow it deliberately (Builderforce never does).
+- **A custom package CDN joins the preview CSP.** A `cdn` factory declares
+  `origins` and the runtime adds them to the preview egress;
+  `createEsmShCdnFactory({ origin })` does this for an esm.sh mirror. A custom
+  CDN with no `origins` logs one warning instead of producing a blank page.
+  See [Since 2026.11.8](#since-2026118).
+- **Laravel's `php artisan serve` runs.** A Vite frontend, a Laravel API and
+  Postgres start end to end as one application, and a setup step's output
+  (`composer install`, `npm install`) ends with its last line before a service
+  changes state. See
+  [Example: a Vite front end, a Laravel API and Postgres](packages/browser/README.md#example-a-vite-front-end-a-laravel-api-and-postgres).
+- **Hosting.** The .NET runtime bundle installs from npm as
+  `@seanhogg/builderforce-webcontainers-dotnet` ([.NET](packages/browser/README.md#net)),
+  and [Assets fetched at runtime](#assets-fetched-at-runtime) lists every
+  origin the runtime downloads from, for strict-CSP and offline hosts.
 
 ## Quick start
 
@@ -67,6 +99,103 @@ is all. `unprotectedSameOrigin: true` is required for this mode: the Security
 Shield refuses to boot a preview on your page's own origin otherwise
 (`PreviewShieldError`, reason `ingress.same_origin_refused`). For anything but
 code your own user wrote, use [relay mode](#isolating-the-preview-relay-mode).
+
+### Upgrading to 2026.11.5
+
+2026.11.5 added the Security Shield. If you upgrade from 2026.11.4 or earlier
+without changing your code, three things can break:
+
+1. **Same-origin previews are refused.** `startPreviewRuntime({ serviceWorkerUrl })`
+   throws `PreviewShieldError` (`ingress.same_origin_refused`). You have two
+   choices:
+   - Opt in by name with `unprotectedSameOrigin: true`. Do this only for code
+     your own user wrote.
+   - Serve the preview from its own origin with `relayUrl`
+     ([relay mode](#isolating-the-preview-relay-mode)). The relay must be https
+     and must not be on your page's origin.
+2. **Previews get a default CSP, and it blocks third-party origins.** The
+   service worker stamps a Content-Security-Policy on every response it serves.
+   This applies in both modes. The policy allows the preview's own origin and
+   these external sources:
+   - the package CDN: `https://esm.sh` when `cdn` is unset (with a custom `cdn`
+     in 2026.11.5, list your CDN's origin yourself);
+   - whatever you list in `previewEgress`.
+
+   Everything else a previewed app loads or fetches is blocked: map tiles, web
+   fonts, public APIs, analytics. The app may render blank or half-styled. To
+   allow a source, list it in `previewEgress` as an https or wss origin. A `*.`
+   wildcard is allowed. Paths are not. The runtime keeps at most 64 sources and
+   silently drops anything else (an `http:` origin, a path, a keyword). The
+   runtime adds the policy beside any CSP the app sets, so it can only tighten
+   the app's own. `previewEgress` can also be a function that answers per
+   application (`undefined` means the workspace's previews).
+3. **Applications need their own origin.** In relay mode,
+   `startApplicationRuntime` refuses an application (`ingress.app_origin_required`)
+   unless you set `previewOrigin`
+   ([one origin per application](#one-origin-per-application-previeworigin)) or
+   opt out with `sharedPreviewOrigin: 'unprotected'`. In same-origin mode,
+   `unprotectedSameOrigin: true` already covers this.
+
+To see what the policy blocks, set `cspReportUrl`. Browsers then send
+violation reports to that endpoint (`report-to bfwc-csp`, with
+`Reporting-Endpoints`). It must be an absolute https URL with no credentials,
+quotes, commas, semicolons or spaces, or it is ignored. Reports go to your
+server, not to the host page.
+
+Before (2026.11.4):
+
+```ts
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+```
+
+After (2026.11.5). Same origin, for trusted code only:
+
+```ts
+const runtime = await startPreviewRuntime({
+  serviceWorkerUrl: '/__bfwc/sw.js',
+  unprotectedSameOrigin: true, // previews can read this page's cookies and storage
+  id: projectId,
+  // What the previewed apps may reach besides esm.sh: origins only, no paths.
+  previewEgress: ['https://tile.openstreetmap.org', 'https://fonts.googleapis.com', 'https://fonts.gstatic.com', 'https://api.example.com'],
+  cspReportUrl: 'https://api.example.com/csp-reports',
+});
+```
+
+Or isolated, for AI-written or third-party code:
+
+```ts
+const runtime = await startPreviewRuntime({
+  relayUrl: 'https://preview.example.com/__bfwc/relay.html',
+  id: projectId,
+  previewEgress: ['https://tile.openstreetmap.org', 'https://api.example.com'],
+  cspReportUrl: 'https://api.example.com/csp-reports',
+});
+```
+
+In relay mode, the preview origin serves its files with the headers in
+[Preview origin headers](packages/browser/README.md#preview-origin-headers).
+
+#### Since 2026.11.8
+
+- A custom `cdn` factory may declare `origins`. The runtime adds them to the
+  preview CSP automatically. esm.sh's default factory declares
+  `https://esm.sh`. A custom CDN without `origins` logs one console warning,
+  and you list its origin in `previewEgress` as before.
+- `runtime.onCspViolation(listener)` forwards in-page CSP violations to the
+  host page. Each one carries the directive and the blocked origin.
+- `previewCspMode: 'report-only'` reports violations without blocking anything.
+  Use it while you migrate.
+- `runtime.diagnostics()` returns one load report, CSP violations included.
+- **Check your `sw.js` gate.** 2026.11.8 is the first runtime that honours
+  `csp=report-only` in the `sw.js` URL, and preview code can register `sw.js`
+  again with any query. So every embedder's gate must be an allowlist of the
+  query keys it checks. It must refuse `csp`, unless you deliberately run
+  report-only, and refuse any key named twice.
+- A custom CDN's `origins` now join each relay origin's egress too, so your
+  `sw.js` gate (and any signed policy) must grant them. If it does not, `sw.js`
+  is refused and the runtime fails to start, naming the egress. See the `sw.js`
+  entry in
+  [Preview origin headers](packages/browser/README.md#preview-origin-headers).
 
 ### Vue and Svelte
 
@@ -415,6 +544,50 @@ another application. While one application's handoff is live, another
 application's is refused and reported (`ingress.handoff_conflict`): the first
 keeps the shared preview until it ends.
 
+## Assets fetched at runtime
+
+The runtime downloads some of what it runs on first use instead of shipping it.
+This matters when your page has a strict CSP or no network access. The table
+lists every origin the runtime itself fetches from by default. It does not
+include what a previewed app or a user's program fetches on its own. Versions
+are pinned in the source; the constant is named where there is one.
+
+Where the fetch happens decides which policy has to allow it:
+
+- **Preview page:** the preview CSP, so the origin must be in `previewEgress`
+  (see [Upgrading to 2026.11.5](#upgrading-to-2026115)). The default esm.sh is
+  added for you.
+- **Host page / host-origin Worker:** your own page's CSP.
+- **Process Worker:** in relay mode, the Worker runs on the preview origin under
+  the process Worker script CSP. That CSP is `workerScriptCsp`, whose
+  `DEFAULT_CONNECT_SOURCES` already lists every default origin below except the
+  .NET bundle; see [Preview origin headers](packages/browser/README.md#preview-origin-headers).
+  In same-origin mode, the Worker runs on your page's origin under your page's
+  CSP.
+
+| What | Default origin | Fetched by | When | Self-host / override |
+|---|---|---|---|---|
+| npm packages as ES modules, including the React Fast Refresh runtime and `@angular/compiler`, plus each declared package's `package.json` | `https://esm.sh` | The preview page loads the modules. The host page fetches the manifests. | On the first import of each package. Built sites (`runtime.build()`) keep loading packages from it too. | `cdn` (a `PackageCdnFactory`; `cdn: createEsmShCdnFactory({ origin })` for an esm.sh-compatible mirror, whose origin then joins the preview egress, so your `sw.js` gate must grant it) |
+| esbuild's WebAssembly binary | `https://cdn.jsdelivr.net/npm/esbuild-wasm@<installed version>/esbuild.wasm` | Host page | `startPreviewRuntime` (the default compiler) | `transformer: await createEsbuildWasmTransformer({ wasmURL })`. The first initialisation wins, and `build()`'s bundler shares it. |
+| Vue SFC compiler | `https://cdn.jsdelivr.net/npm/@vue/compiler-sfc@<range>/…` | Host page | The first `.vue` file | `components: createCdnComponentCompilers({ vueCompilerUrl })` |
+| Svelte compiler | `https://esm.sh/svelte@<range>/compiler` | Host page | The first `.svelte` file | `components: createCdnComponentCompilers({ svelteCompilerUrl })` |
+| Sass and Less | `https://esm.sh/sass@<range>`, `https://esm.sh/less@<range>` | Host page | The first `.scss`/`.sass`/`.less` file or `<style lang>` block | `styles: createCdnStyleCompilers({ sassUrl, lessUrl })` |
+| Package stylesheets for Sass/Less `@use`/`@import` | `https://cdn.jsdelivr.net/npm/<name>@<range>/…` | Host page | Only when the package is not in the project's `node_modules` | `styleImports.packageFileUrl` on the core `DevServer`/`buildProject`. `startPreviewRuntime` does not expose it. |
+| Type-checking (`createChecker`): the TypeScript compiler, its `lib.*.d.ts` files, tsconfig `extends` packages, and dependency types (esm.sh's `X-TypeScript-Types`) | `https://cdn.jsdelivr.net/npm` (`typescript@TYPESCRIPT_VERSION`), `https://esm.sh` | Checker Worker (host origin) | The first check | `createChecker({ typescriptUrl, sources: { libBaseUrl, npmBaseUrl, typesOrigin } })` |
+| npm registry: metadata and tarballs | `https://registry.npmjs.org` | Node process Worker | `npm`/`pnpm`/`yarn install` | `node.registry`; `.npmrc` scoped registries |
+| PGlite (Postgres) | `https://cdn.jsdelivr.net/npm/@electric-sql/pglite@PGLITE_VERSION/dist/index.js` and its WebAssembly beside it | Database Worker (host origin) | When the first `pglite` database service starts | `createPgliteProvider(runtime, { pgliteUrl })` |
+| Pyodide and its packages | `https://cdn.jsdelivr.net/pyodide/vPYODIDE_VERSION/full/` | Python process Worker | The first `python` process | `python.pyodideIndexURL` |
+| PyPI (micropip) | `https://pypi.org`, `https://files.pythonhosted.org` | Python process Worker | `pip install` and requirements that Pyodide does not carry | `pip install -i`/`--index-url`/`--extra-index-url`, or `PIP_INDEX_URL`/`PIP_EXTRA_INDEX_URL` in the process environment |
+| php-wasm | `https://cdn.jsdelivr.net/npm/` (`@php-wasm/universal`, `@php-wasm/web-8-x` at `PHP_WASM_VERSION`) | PHP process Worker | The first `php` process | `php.baseUrl` (a jsDelivr-style npm layout; `phpWasmModuleUrls` lists the files to mirror) |
+| Composer metadata | `https://packagist.org/packages/<name>.json` | PHP process Worker | `composer install`/`require`/`update` | `php.composer.repositoryUrl` (a `{name}` template; a `p2` mirror works) |
+| Composer package files | The dist URL in the metadata (GitHub zipballs for most packages). Browsers can't fetch those, so the fallback is `https://cdn.jsdelivr.net/gh/` with `https://data.jsdelivr.com/v1/packages/gh/` for listings. | PHP process Worker | `composer install`/`require`/`update` | `php.composer.distProxy` (a CORS proxy prefix) |
+| .NET runtime bundle | None | .NET process Worker | The first `dotnet` process | `dotnet.bundleUrl`: serve `@seanhogg/builderforce-webcontainers-dotnet` ([.NET](packages/browser/README.md#net)) |
+
+The Rust runtime runs prebuilt modules and fetches nothing. `dotnet restore`
+only checks references against the bundled packages and fetches nothing from
+NuGet. The NuGet hosts in `DEFAULT_CONNECT_SOURCES` are allow-listed, but this
+release never contacts them.
+
 ## How it works
 
 ```
@@ -441,10 +614,18 @@ Every preview shows a small **"Built with Builderforce.ai"** badge in its
 bottom-right corner. It sits in a shadow root, so it never collides with the app's
 styles, and it follows the system light/dark theme.
 
-It is on by default and **not** a licence condition: the project is MIT, and you
-can turn it off with `startPreviewRuntime({ ..., attribution: false })`. If this
-runtime saves you money, please leave it on. That link is how the project is
-funded.
+It is on by default and **not** a licence condition: the project is MIT. The
+supported way to turn it off is the host option
+`startPreviewRuntime({ ..., attribution: false })`. If this runtime saves you
+money, please leave it on. That link is how the project is funded.
+
+The shell also has a `bfwc-badge off|on|status` command. It is an internal
+maintainer toggle, not an API, and `help`, `type`, `which` and tab completion
+don't show it. It works through a marker file, `/.bfwc/attribution-off`, in the
+runtime's file system. The host checks for the file on each page it serves, so
+a change applies on the next reload. Any process in the project can create or
+delete that file. `attribution: false` always wins over the marker. Don't build
+on the command.
 
 ## Develop
 

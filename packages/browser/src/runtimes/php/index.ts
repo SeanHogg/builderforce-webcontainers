@@ -7,8 +7,8 @@
  */
 export { PHP_WASM_VERSION, PHP_WASM_RELEASES, DEFAULT_PHP_VERSION, SUPPORTED_PHP_VERSIONS, DEFAULT_PHP_WASM_BASE_URL, checkPhpVersion, loadPhpRuntime, phpWasmModuleUrls } from './phpLoader.js';
 export type { LoadedPhp, PhpLike, PhpLoadOptions, PhpModuleLike, PhpRunRequest, PhpStreamedResponse } from './phpLoader.js';
-export { PHP_COMMAND_PATTERN, isPhpCommand, mapInvocationPaths as mapPhpInvocationPaths, parsePhpCommand } from './phpCommand.js';
-export type { ComposerCommand, ComposerRequest, PhpCommandParse, PhpInvocation, PhpServerSpec } from './phpCommand.js';
+export { PHP_COMMAND_PATTERN, isPhpCommand, mapInvocationPaths as mapPhpInvocationPaths, parsePhpCommand, phpSurroundings } from './phpCommand.js';
+export type { ComposerCommand, ComposerRequest, PhpCommandParse, PhpCommandSurroundings, PhpInvocation, PhpServerSpec } from './phpCommand.js';
 export { PHP_KIND, createPhpProcessKind } from './phpProcessKind.js';
 export type { PhpHostOptions, PhpPlatformRecord, PhpProcessKind } from './phpProcessKind.js';
 export type { ComposerSourceOptions, PhpStartOptions } from './phpStartOptions.js';

@@ -9,12 +9,17 @@ import { ringBuffer } from '../shared/ringBuffer.js';
 import type { ServiceLogEntry } from './types.js';
 
 export interface ServiceLogs {
-  /** Read a process's output into the log, line by line, until it ends. */
-  pipe(serviceId: string, output: ReadableStream<string>): void;
+  /**
+   * Read a process's output into the log, line by line, until it ends.
+   * Resolves once the last line (an unterminated one too) is in the log.
+   */
+  pipe(serviceId: string, output: ReadableStream<string>): Promise<void>;
   /** A line the runtime writes about a service (it failed, it restarts). */
   note(serviceId: string, text: string): void;
   /** History, then live lines; every service's when `serviceId` is omitted. Closed by `close()`. */
   stream(serviceId?: string): ReadableStream<ServiceLogEntry>;
+  /** The last `limit` lines kept for `serviceId` (its output and the runtime's notes), oldest first. */
+  recent(serviceId: string, limit: number): string[];
   /** End every reader's stream; later readers get the history, then end. */
   close(): void;
 }
@@ -25,8 +30,11 @@ interface Reader {
   dropped: number;
 }
 
+/** Log lines kept for late readers, when `logHistory` is not set. */
+const DEFAULT_LOG_HISTORY = 5000;
+
 export function createServiceLogs(options: { history?: number; readerBuffer?: number } = {}): ServiceLogs {
-  const history = ringBuffer<ServiceLogEntry>(Math.max(1, options.history ?? 5000));
+  const history = ringBuffer<ServiceLogEntry>(Math.max(1, options.history ?? DEFAULT_LOG_HISTORY));
   const readerBuffer = Math.max(1, options.readerBuffer ?? 1000);
   const readers = new Set<Reader>();
   let closed = false;
@@ -52,10 +60,12 @@ export function createServiceLogs(options: { history?: number; readerBuffer?: nu
 
   return {
     pipe(serviceId, output) {
-      void (async () => {
-        const reader = output.getReader();
+      return (async () => {
+        let reader: ReadableStreamDefaultReader<string> | undefined;
         let partial = '';
         try {
+          // Inside the try: a stream that cannot be read (already locked) is reported like one that errors.
+          reader = output.getReader();
           for (;;) {
             const { value, done } = await reader.read();
             if (done) break;
@@ -67,11 +77,21 @@ export function createServiceLogs(options: { history?: number; readerBuffer?: nu
           line(serviceId, 'runtime', `Output stopped: ${messageOf(error)}`);
         } finally {
           if (partial) line(serviceId, 'output', partial);
-          reader.releaseLock();
+          reader?.releaseLock();
         }
       })();
     },
     note: (serviceId, text) => line(serviceId, 'runtime', text),
+    recent(serviceId, limit) {
+      if (limit <= 0) return [];
+      const lines: string[] = [];
+      for (const entry of history) {
+        if (entry.serviceId !== serviceId) continue;
+        lines.push(entry.text);
+        if (lines.length > limit) lines.shift();
+      }
+      return lines;
+    },
     stream(serviceId) {
       let reader: Reader | undefined;
       return new ReadableStream<ServiceLogEntry>(

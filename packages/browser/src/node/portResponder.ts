@@ -13,6 +13,7 @@ import {
   scriptTag,
   parsePortPath,
   previewCookieScript,
+  previewDiagnosticsScript,
   previewFetchScript,
   previewSocketScript,
   readBody,
@@ -80,9 +81,9 @@ export async function openPortResponse(host: ProcessHost, request: WireRequest, 
   return { status: response.status, headers: out, body };
 }
 
-/** The same bridge a dev-server page gets (errors, console, sockets), plus cookies and the host's scripts. */
+/** The same bridge a dev-server page gets (errors, console, diagnostics, sockets), plus cookies and the host's scripts. */
 function bridgeFor(jar: CookieJar | undefined, path: string, scripts: readonly string[], nonce?: string): string {
-  return [errorBridgeScript(nonce), previewSocketScript(nonce), previewFetchScript(), jar ? previewCookieScript(jar.documentCookie(path), nonce) : '', ...scripts.map(scriptTag)].join('');
+  return [errorBridgeScript(nonce), previewDiagnosticsScript(nonce), previewSocketScript(nonce), previewFetchScript(), jar ? previewCookieScript(jar.documentCookie(path), nonce) : '', ...scripts.map(scriptTag)].join('');
 }
 
 /** Insert `script` into a streamed document, after `<head>` (see `bridgeInsertionPoint`), passing the rest through as it arrives. */

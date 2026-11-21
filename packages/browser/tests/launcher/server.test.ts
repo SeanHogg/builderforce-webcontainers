@@ -255,14 +255,15 @@ describe('createLocalLauncher: runtime files and their headers', () => {
     }
   });
 
-  it('sw.js only in relay mode, with no policy or report and egress within the package CDN', async () => {
+  it('sw.js only in relay mode, with no policy, report, csp or unknown key and egress within the package CDN', async () => {
     const { port } = await launch({ 'builderforce.json': NODE_MANIFEST });
     const host = `${KEY}.localhost:${port}`;
     const ok = await get(port, host, '/__bfwc/sw.js?mode=relay&egress=https%3A%2F%2Fesm.sh', { 'Service-Worker': 'script' });
     expect(ok.status).toBe(200);
     expect(ok.headers['content-security-policy']).toBe("default-src 'none'; connect-src 'self'");
     expect(ok.headers['cache-control']).toBe('no-cache');
-    for (const query of ['', '?mode=same-origin', '?mode=relay&policy=abc', '?mode=relay&report=https%3A%2F%2Fx.example%2Fr', '?mode=relay&egress=https%3A%2F%2Fevil.example']) {
+    // `csp` (preview code re-registering sw.js to make its own CSP report-only), any unknown key and any repeated key are refused too.
+    for (const query of ['', '?mode=same-origin', '?mode=relay&policy=abc', '?mode=relay&report=https%3A%2F%2Fx.example%2Fr', '?mode=relay&egress=https%3A%2F%2Fevil.example', '?mode=relay&csp=report-only', '?mode=relay&egress=https%3A%2F%2Fesm.sh&csp=report-only', '?mode=relay&csp=enforce', '?mode=relay&future=1', '?mode=relay&mode=relay', '?mode=same-origin&mode=relay', '?mode=relay&egress=https%3A%2F%2Fesm.sh&egress=https%3A%2F%2Fevil.example', '?mode=relay&egress=https%3A%2F%2Fesm.sh&egress=https%3A%2F%2Fesm.sh']) {
       const refused = await get(port, host, `/__bfwc/sw.js${query}`);
       expect(refused.status, query).toBe(403);
       expect(refused.headers['content-security-policy']).toContain(`frame-ancestors https://localhost:${port}`);

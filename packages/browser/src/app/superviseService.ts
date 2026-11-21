@@ -63,6 +63,8 @@ export interface SupervisedService extends ReadinessSource {
   /** The running process's database operations, when it is a database. */
   database(): DatabaseControl | undefined;
   snapshot(): ServiceSnapshot;
+  /** Resolves once the latest process's output is in the log (bounded by the stop timeout after its exit); at once if it has not exited. */
+  outputDrained(): Promise<void>;
 }
 
 interface Outcome {
@@ -71,6 +73,17 @@ interface Outcome {
   exitCode?: number;
   /** Exited 0 while running: stopped, not failed. */
   clean?: boolean;
+}
+
+/**
+ * An exit's message: `Exited with code N.`, keeping why readiness failed when the process exited before it
+ * was ready — the provider's own reason when it already names this exit (`Exited with code N before opening
+ * port 3000.`), else `Exited with code N before ready: <reason>`.
+ */
+function exitMessage(code: number, readinessReason: string | undefined): string {
+  if (readinessReason === undefined) return `Exited with code ${code}.`;
+  if (new RegExp(`^Exited with code ${code}\\b`).test(readinessReason)) return readinessReason;
+  return `Exited with code ${code} before ready: ${readinessReason}`;
 }
 
 export function superviseService(options: SuperviseOptions): SupervisedService {
@@ -87,6 +100,8 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
   const serviceError = (phase: ServiceErrorPhase, message: string, willRestart = false, exitCode?: number): ServiceError => ({ serviceId: spec.id, phase, message, exitCode, willRestart });
 
   let active: ServiceRun | undefined;
+  /** The latest run, active or not: its output is what `outputDrained()` waits for. */
+  let lastRun: ServiceRun | undefined;
   /** Ready for dependents: running, or a one-off that finished. */
   let satisfied = false;
   /** Between a `restart()`'s stop and its start. */
@@ -104,6 +119,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
   function launch(): void {
     const run: ServiceRun = { controller: new AbortController() };
     active = run;
+    lastRun = run;
     satisfied = false;
     void execute(run);
   }
@@ -137,12 +153,23 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
       else void handle.output.cancel().catch(() => undefined);
       return;
     }
-    logs.pipe(spec.id, handle.output);
+    run.drained = logs.pipe(spec.id, handle.output);
     lastExit = handle.wait();
-    void handle.wait().then((code) => exited(run, code));
+    // An exit is acted on once the process's output is in the log: its last line comes before "Completed." or
+    // "Failed …", and before its state changes. The exit code is recorded at once (the ONE place it is): a
+    // readiness failure that raced the exit sees it and leaves the outcome to `exited`, which runs after the drain.
+    const settled = handle.wait().then(async (code) => {
+      run.exitCode = code;
+      exitCode = code;
+      await outputOf(run, code);
+      return code;
+    });
+    void settled.then((code) => exited(run, code));
 
     try {
-      await within(handle.ready(), {
+      // A one-off's readiness is its exit: ready once its output is in the log too (`exited` takes it from there).
+      const isReady = readiness.kind === 'exit-zero' ? handle.ready().then(() => settled.then(() => undefined)) : handle.ready();
+      await within(isReady, {
         ms: timeoutMs,
         onTimeout: () => {
           throw new Error(`Not ready after ${timeoutMs}ms (${readiness.kind} readiness).`);
@@ -151,15 +178,36 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
       });
     } catch (error) {
       if (active !== run) return;
-      const code = run.exitCode ?? (await exitWithin(handle, 0));
-      if (active !== run) return;
-      if (readiness.kind === 'exit-zero' && code === 0) {
-        run.completed = true; // finished: its exit is its readiness, whatever ready() said
-        return becomeReady(run);
+      const reason = messageOf(error);
+      // A process that exited is `exited`'s to judge, once its output is drained (a one-off that exited 0 is
+      // ready); it keeps why readiness failed for the message.
+      if (run.exitCode !== undefined || (await exitWithin(handle, 0)) !== undefined) {
+        run.readinessReason = reason;
+        return;
       }
-      return end(run, { phase: code === undefined ? 'readiness' : 'exit', message: messageOf(error), exitCode: code });
+      if (active !== run) return;
+      return end(run, { phase: 'readiness', message: reason });
     }
     if (active === run) becomeReady(run);
+  }
+
+  /**
+   * The run's output, to its last line, in the log — waited for at most `stopTimeoutMs` after the exit. Output
+   * ends after the exit (every provider's guarantee); the bound only keeps a provider that broke it from holding
+   * the service's state, and the log says so. One wait per run.
+   */
+  function outputOf(run: ServiceRun, code: number | undefined): Promise<void> {
+    const drained = run.drained;
+    if (!drained) return Promise.resolve();
+    const ms = options.stopTimeoutMs;
+    // A pipe that rejects still lets the exit be acted on (`exited` runs): the failure is noted in the log, never swallowed.
+    const reported = (error: unknown) => {
+      logs.note(spec.id, `Output could not be read to its end: ${messageOf(error)}`);
+      return true;
+    };
+    return (run.outputDone ??= within(drained.then(() => true, reported), { ms, onTimeout: () => false }).then((ended) => {
+      if (!ended) logs.note(spec.id, `Output did not end within ${ms}ms of the exit (code ${code}); later lines may follow.`);
+    }));
   }
 
   function becomeReady(run: ServiceRun): void {
@@ -171,9 +219,8 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
     if (run.completed) complete(run);
   }
 
+  /** The process exited with `code` (already recorded) and its output is in the log. */
   function exited(run: ServiceRun, code: number): void {
-    run.exitCode = code;
-    exitCode = code;
     if (active !== run) return;
     if (readiness.kind === 'exit-zero' && code === 0) {
       // A one-off finished: that IS its readiness, whatever the provider's ready() does.
@@ -182,7 +229,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
       else if (lifecycle.state === 'starting') becomeReady(run);
       return;
     }
-    end(run, { phase: 'exit', message: `Exited with code ${code}.`, exitCode: code, clean: lifecycle.state === 'running' && code === 0 });
+    end(run, { phase: 'exit', message: exitMessage(code, run.readinessReason), exitCode: code, clean: lifecycle.state === 'running' && code === 0 });
   }
 
   /** A one-off service finished: stopped, and its readiness stays met for its dependents. */
@@ -233,6 +280,11 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
       lifecycle.transition('stopping');
       const stopped = run ? await stopRun(run, options.stopTimeoutMs) : undefined;
       if (stopped) lastExit = stopped.wait();
+      // Its last lines are in the log before it is `stopped` (a process that never exited has no end to wait for).
+      if (stopped && run) {
+        const code = run.exitCode ?? (await exitWithin(stopped, 0));
+        if (code !== undefined) await outputOf(run, code);
+      }
       endAttributed(options.processes, options.security);
       lifecycle.transition('stopped');
     } else if (lifecycle.state === 'failed') lifecycle.transition('stopped');
@@ -274,6 +326,7 @@ export function superviseService(options: SuperviseOptions): SupervisedService {
     readiness: () => (satisfied ? 'ready' : ACTIVE_STATES.has(lifecycle.state) || scheduler.pending || restarting ? 'pending' : 'down'),
     failure: () => downReason,
     onChange: (listener) => changes.on(listener),
+    outputDrained: () => (lastRun?.exitCode === undefined ? Promise.resolve() : outputOf(lastRun, lastRun.exitCode)),
     url: () => active?.handle?.url(),
     database: () => active?.handle?.database,
     snapshot: () => ({

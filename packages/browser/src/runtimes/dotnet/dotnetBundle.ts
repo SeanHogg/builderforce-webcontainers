@@ -41,3 +41,6 @@ export const DOTNET_BUNDLE = {
     npgsql: { name: 'Npgsql', version: '9.0.3', repository: 'https://github.com/npgsql/npgsql.git', tag: 'v9.0.3', commit: '97dc1739c6cf5890acf450f20f04e64c14c7ffd5' },
   } as Readonly<Record<string, BundledPackage>>,
 } as const;
+
+/** Where a host gets the bundle, as messages tell it: the npm package first, building from source as the alternative. */
+export const DOTNET_BUNDLE_SOURCE = `install ${DOTNET_BUNDLE.npmPackage} at the same version as @seanhogg/builderforce-webcontainers and serve its directory (or build it from source with scripts/build-dotnet-runtime.mjs)`;

@@ -29,7 +29,10 @@ import { headerKeys, withoutHeader } from './shared/headers.js';
 const EGRESS_SOURCE = /^(?:https|wss):\/\/(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/i;
 
 /** At most this many egress sources per preview; the rest are dropped (never widened to a wildcard). */
-const MAX_EGRESS = 64;
+export const MAX_EGRESS = 64;
+
+/** Whether `entry` is an egress source the host may declare (see {@link egressSources}). */
+export const isEgressSource = (entry: unknown): entry is string => typeof entry === 'string' && EGRESS_SOURCE.test(entry);
 
 /** A host (`name[:port]`) the policy may name for the preview's own WebSockets. */
 const HOST = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d{1,5})?$/i;
@@ -42,7 +45,7 @@ export function egressSources(egress: unknown): string[] {
   if (!Array.isArray(egress)) return [];
   const sources = new Set<string>();
   for (const entry of egress) {
-    if (typeof entry === 'string' && EGRESS_SOURCE.test(entry)) sources.add(entry.toLowerCase());
+    if (isEgressSource(entry)) sources.add(entry.toLowerCase());
     if (sources.size >= MAX_EGRESS) break;
   }
   return [...sources];
@@ -97,6 +100,12 @@ export interface PreviewStamp {
   reportUrl?: string;
   /** The preview origin's hostname: a cookie `Domain=` other than it is removed. */
   host?: string;
+  /**
+   * Stamp `policy` as `Content-Security-Policy-Report-Only` (the host's
+   * `previewCspMode: 'report-only'`, migrations only): violations are reported,
+   * nothing is blocked. The app's own policies are left as they are either way.
+   */
+  reportOnly?: boolean;
 }
 
 /** `setCookie` with every `Domain=` attribute that is not exactly `host` removed (no host: every one). */
@@ -116,13 +125,15 @@ function joined(headers: Record<string, string>, name: string): string {
 
 /** `headers` stamped (see the file comment). Duplicate spellings of a header are folded into one lowercase key. */
 export function stampPreviewResponse(headers: Record<string, string>, stamp: PreviewStamp): Record<string, string> {
-  const existingCsp = joined(headers, 'content-security-policy');
+  // Ours goes into the enforced header, or (report-only mode) the report-only one; the app's stay where it put them.
+  const cspHeader = stamp.reportOnly ? 'content-security-policy-report-only' : 'content-security-policy';
+  const existingCsp = joined(headers, cspHeader);
   const existingEndpoints = joined(headers, 'reporting-endpoints');
   const cookies = joined(headers, 'set-cookie');
   let out = headers;
-  for (const name of ['content-security-policy', 'x-content-type-options', 'origin-agent-cluster', 'reporting-endpoints', 'set-cookie']) out = withoutHeader(out, name);
-  // A comma separates policies in one header value: each is enforced on its own.
-  out['content-security-policy'] = existingCsp ? `${existingCsp}, ${stamp.policy}` : stamp.policy;
+  for (const name of [cspHeader, 'x-content-type-options', 'origin-agent-cluster', 'reporting-endpoints', 'set-cookie']) out = withoutHeader(out, name);
+  // A comma separates policies in one header value: each is enforced (or reported) on its own.
+  out[cspHeader] = existingCsp ? `${existingCsp}, ${stamp.policy}` : stamp.policy;
   out['x-content-type-options'] = 'nosniff';
   out['origin-agent-cluster'] = '?1';
   if (stamp.reportUrl) {

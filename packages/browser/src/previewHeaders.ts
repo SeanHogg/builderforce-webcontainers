@@ -64,6 +64,8 @@ export const DEFAULT_CONNECT_SOURCES: readonly string[] = [
  * The egress every preview origin's documents get: the package CDN previews load modules
  * from (`https://esm.sh`, the runtime's default `cdn`, which it adds to every origin's
  * egress itself). Anything an application declares comes on top, only through a policy.
+ * The runtime's source of truth is core's `esmShCdnFactory.origins`; this module stays
+ * free of core (it is served standalone as `/preview-headers`), so a test pins the two equal.
  */
 export const PREVIEW_DEFAULT_EGRESS: readonly string[] = ['https://esm.sh'];
 

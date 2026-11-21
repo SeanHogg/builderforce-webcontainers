@@ -20,7 +20,7 @@ import { join, type VirtualFileSystem } from '@seanhogg/builderforce-webcontaine
 import { createNodeProvider, type NodeProviderOptions } from '../../app/nodeProvider.js';
 import type { NodeServiceHost } from '../../app/nodeReadiness.js';
 import { platformShortfall, type Platform } from './composer/platform.js';
-import { isPhpCommand, parsePhpCommand } from './phpCommand.js';
+import { isPhpCommand, parsePhpCommand, phpSurroundings } from './phpCommand.js';
 import { PHP_WASM_RELEASES, checkPhpVersion } from './phpLoader.js';
 import type { PhpHostOptions, PhpPlatformRecord } from './phpProcessKind.js';
 
@@ -50,7 +50,8 @@ export function acceptsPhpService(service: ServiceSpec, fs?: VirtualFileSystem, 
   if (readinessOf(service).kind === 'query') return { ok: false, reason: `"query" readiness is for databases; service "${service.id}" runs on php.` };
   const command = service.command;
   if (!command || !isPhpCommand(command)) return { ok: false, reason: `Service "${service.id}": "${command ?? ''}" is not a PHP command (php, composer).` };
-  const parsed = parsePhpCommand(command, service.args ?? []);
+  // As the PHP Worker will parse it (same surroundings: env, cwd, the project's files).
+  const parsed = parsePhpCommand(command, service.args ?? [], phpSurroundings(service.env, service.root ?? '/', fs));
   if (!parsed.ok) return { ok: false, reason: `Service "${service.id}": ${parsed.reason}` };
   const text = fs?.readText(join(service.root ?? '/', 'composer.json'));
   if (text !== undefined) {

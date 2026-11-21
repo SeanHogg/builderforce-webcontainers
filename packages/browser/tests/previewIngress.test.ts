@@ -3,9 +3,9 @@ import { PortCookieJars, textResponse, type SecurityContext } from '@seanhogg/bu
 import type { ApplicationSpec } from '@seanhogg/builderforce-webcontainers-core/app';
 import { attachPreview } from '../src/previewAttach.js';
 import { createPreviewIngress } from '../src/previewIngress.js';
-import type { RequestOrigin, WireIngress, WireResponse } from '../src/protocol.js';
-import type { PreviewTransport } from '../src/transport.js';
+import type { RequestOrigin } from '../src/protocol.js';
 import { host } from './helpers.js';
+import { recordingTransport, streamed, workerEnd } from './previewHarness.js';
 import { startApplicationRuntime, type ApplicationHost } from '../src/app.js';
 import { fakeProvider, stubRuntime } from './app-fakeProvider.js';
 
@@ -157,42 +157,6 @@ describe('startApplicationRuntime and ingress', () => {
   });
 });
 
-/** A transport keeping each attach's worker end. */
-function recordingTransport() {
-  const ports: MessagePort[] = [];
-  let reattach: ((id: string) => void) | undefined;
-  const transport: PreviewTransport = {
-    origin: 'https://app.preview.test',
-    scope: '/__bfwc/',
-    attach: (_id, port) => void ports.push(port),
-    onReattach(listener) {
-      reattach = listener;
-      return () => (reattach = undefined);
-    },
-    send: vi.fn(),
-    dispose: vi.fn(),
-  };
-  return { transport, ports, reattach: (id: string) => reattach?.(id) };
-}
-
-/** The worker end: every message the host posts, and a request/answer helper. */
-function workerEnd(port: MessagePort) {
-  const tables: WireIngress[] = [];
-  let answer: ((response: WireResponse) => void) | undefined;
-  port.onmessage = (event) => {
-    const data = event.data as { type: string };
-    if (data.type === 'ingress') tables.push(data as WireIngress);
-    else if (data.type === 'response') answer?.(data as WireResponse);
-  };
-  let reqId = 0;
-  const ask = (path: string, from?: RequestOrigin) =>
-    new Promise<WireResponse>((resolve) => {
-      answer = resolve;
-      port.postMessage({ type: 'request', reqId: ++reqId, path, search: '', method: 'GET', headers: {}, body: null, ...(from ? { from } : {}) });
-    });
-  return { tables, ask };
-}
-
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 /**
@@ -220,26 +184,6 @@ function ingressHost(webDependsOnApi = true, origin: 'shared' | 'own' = 'shared'
     processes.dispose();
   };
   return { ingress, ports, reattach, mayServePort, state, dispose };
-}
-
-const bodyText = (response: WireResponse) => (typeof response.body === 'string' ? response.body : '');
-
-/** A streamed answer's body, gathered from its chunks. */
-function streamed(port: MessagePort, response: WireResponse): Promise<string> {
-  if (!response.streaming) return Promise.resolve(bodyText(response));
-  return new Promise((resolve) => {
-    let text = '';
-    const decoder = new TextDecoder();
-    const previous = port.onmessage;
-    port.onmessage = (event) => {
-      const data = event.data as { type: string; data?: ArrayBuffer };
-      if (data.type === 'chunk') text += decoder.decode(data.data);
-      else if (data.type === 'end') {
-        port.onmessage = previous;
-        resolve(text);
-      }
-    };
-  });
 }
 
 describe('attaching a preview with ingress', () => {

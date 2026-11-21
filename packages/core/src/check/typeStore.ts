@@ -1,5 +1,5 @@
 import type * as TS from 'typescript';
-import { isRegistryRange } from '../packageCdn.js';
+import { ESM_SH_ORIGIN, isRegistryRange } from '../packageCdn.js';
 import { splitPackageSpecifier } from '../resolve.js';
 
 /**
@@ -29,7 +29,7 @@ export interface TypeSources {
   npmBaseUrl: string;
 }
 
-export const DEFAULT_TYPES_ORIGIN = 'https://esm.sh';
+export const DEFAULT_TYPES_ORIGIN = ESM_SH_ORIGIN;
 export const DEFAULT_NPM_BASE_URL = 'https://cdn.jsdelivr.net/npm';
 
 export function libBaseUrlFor(typescriptVersion: string): string {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CONSOLE_MESSAGE_TYPE, ERROR_MESSAGE_TYPE } from '@seanhogg/builderforce-webcontainers-core';
-import { listenToPreview, type PreviewConsoleMessage, type PreviewError } from '../src/previewMessages.js';
+import { CONSOLE_MESSAGE_TYPE, CSP_VIOLATION_LIMIT, CSP_VIOLATION_MESSAGE_TYPE, ERROR_MESSAGE_TYPE, PREVIEW_TIMING_FEATURES, TIMING_MESSAGE_TYPE } from '@seanhogg/builderforce-webcontainers-core';
+import { CSP_VIOLATION_RUNTIME_LIMIT, listenToPreview, type PreviewConsoleMessage, type PreviewCspViolation, type PreviewError, type PreviewTiming } from '../src/previewMessages.js';
 
 function fakeWindow() {
   let handler: ((event: MessageEvent) => void) | undefined;
@@ -95,6 +95,57 @@ describe('listenToPreview', () => {
       nonce: 'n0nce',
     });
     expect(errors).toEqual([{ source: 'console', code: 'NG0202', message: line, stack: `RuntimeError: ${line}\n    at bootstrap (main.js:3:9)`, href }]);
+    messages.dispose();
+  });
+});
+
+describe('CSP violations, bounded host-side (the page that posts them runs the app)', () => {
+  const violation = (href: string, blockedOrigin: string, directive = 'img-src') => ({ type: CSP_VIOLATION_MESSAGE_TYPE, directive, blockedOrigin, disposition: 'enforce', href });
+
+  it('passes each (page, directive, origin) once — a query or hash is the same page — and at most the per-page limit', () => {
+    const win = fakeWindow();
+    const messages = listenToPreview(win, 'https://preview.test', '/__bfwc/p1/');
+    const seen: PreviewCspViolation[] = [];
+    messages.onCspViolation((v) => seen.push(v));
+    const page = 'https://preview.test/__bfwc/p1/index.html';
+    win.post('https://preview.test', violation(page, 'https://a.example'));
+    win.post('https://preview.test', violation(`${page}?reload=1#x`, 'https://a.example')); // the same page re-posting
+    win.post('https://preview.test', violation(page, 'https://a.example', 'connect-src')); // another directive
+    win.post('https://preview.test', violation('https://preview.test/__bfwc/p1/other.html', 'https://a.example')); // another page
+    expect(seen).toHaveLength(3);
+    // A flood of distinct origins from one page: the host stops at the page's limit, whatever the page posts.
+    for (let i = 0; i < CSP_VIOLATION_LIMIT * 4; i++) win.post('https://preview.test', violation(`${page}?n=${i}`, `https://h${i}.example`));
+    expect(seen).toHaveLength(CSP_VIOLATION_LIMIT + 1); // the page's first two, its flood to the limit, the other page's one
+    messages.dispose();
+  });
+
+  it('a timing entry saying a measurement was unavailable passes only with a known feature name', () => {
+    const win = fakeWindow();
+    const messages = listenToPreview(win, 'https://preview.test', '/__bfwc/p1/');
+    const seen: PreviewTiming[] = [];
+    messages.onTiming((t) => seen.push(t));
+    win.post('https://preview.test', {
+      type: TIMING_MESSAGE_TYPE,
+      href: 'https://preview.test/__bfwc/p1/',
+      entries: [
+        { kind: 'unavailable', feature: PREVIEW_TIMING_FEATURES.paint },
+        { kind: 'unavailable', feature: 'anything-the-app-likes' },
+        { kind: 'unavailable' },
+      ],
+    });
+    expect(seen).toEqual([{ kind: 'unavailable', feature: 'paintTiming' }]);
+    messages.dispose();
+  });
+
+  it('stops at the runtime-wide limit however many pages a preview invents', () => {
+    const win = fakeWindow();
+    const messages = listenToPreview(win, 'https://preview.test', '/__bfwc/p1/');
+    let delivered = 0;
+    messages.onCspViolation(() => delivered++);
+    for (let p = 0; p < 50; p++) {
+      for (let i = 0; i < CSP_VIOLATION_LIMIT; i++) win.post('https://preview.test', violation(`https://preview.test/__bfwc/p1/page${p}.html`, `https://h${i}.example`));
+    }
+    expect(delivered).toBe(CSP_VIOLATION_RUNTIME_LIMIT);
     messages.dispose();
   });
 });

@@ -5,6 +5,7 @@
  *   • CRA's `%PUBLIC_URL%` placeholder is filled;
  *   • a page with no module script (CRA) gets its entry injected;
  *   • the error bridge is prepended, so runtime errors and console output reach the host;
+ *   • the diagnostics script follows it, so CSP blocks, request timings and first paint reach the host;
  *   • the WebSocket bridge follows, so `new WebSocket('ws://localhost:3000')` reaches a virtual server;
  *   • the host's preview scripts run next, before the app;
  *   • the hot-update listener is prepended, so an edit swaps styles, re-renders
@@ -13,6 +14,7 @@
  */
 import { attributionEnabled, injectAttribution, type AttributionSetting } from './attribution.js';
 import { previewFetchScript, previewSocketScript, scriptLiteral } from './previewBridge.js';
+import { previewDiagnosticsScript } from './previewDiagnostics.js';
 import { hotUpdateScript } from './hot/client.js';
 import { refreshPreambleScript } from './hot/reactRefresh.js';
 
@@ -132,6 +134,7 @@ export function transformHtml(html: string, options: HtmlOptions): string {
 
   const bridge = [
     errorBridgeScript(options.nonce, { forwardConsoleErrors: options.forwardConsoleErrors }),
+    previewDiagnosticsScript(options.nonce),
     previewSocketScript(options.nonce),
     previewFetchScript(),
     hotUpdateScript(base),

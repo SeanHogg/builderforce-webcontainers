@@ -27,6 +27,13 @@ ships on its own.
 - 2026.10.10: `node:wasi` (WASI preview1 over the process's file system and stdio — `WASI` with `getImportObject`, `start`, `initialize`, preopens, files, `proc_exit`); installs prefer a napi-rs package's single-threaded `-wasm32-wasip1` binding, falling back to `-wasm32-wasi` only when none is published at that version (also when the package lists `-wasm32-wasi` itself), so current oxc-parser releases load without shared memory.
 - 2026.10.12: `process.hrtime`/`uptime`/`cpuUsage`, `console.time`, `os.uptime`, `perf_hooks` and WASI clocks read the host clock captured at load, so a program that replaces `globalThis.performance` with one built on `process.hrtime` (esbuild-wasm ≤ 0.21's Go loader, i.e. Vite 5 builds) no longer recurses until the stack overflows.
 - 2026.11.0: **Angular 17–20** (standalone components, JIT) runs unmodified `ng new` projects in the instant preview and `build()`. Angular is a component-compiler registry entry chosen from the project's `@angular/core` range. Before esbuild, a source transform inlines `templateUrl`/`styleUrl(s)` (CSS, Sass, Less), adds `ctorParameters` so constructor DI works without decorator metadata (`@Inject`/`@Optional`/… honoured, `T | null` → `T`), and adds the JIT metadata for signal `input`/`model`/`output` and signal queries. Angular sources compile with legacy decorators and `useDefineForClassFields: false`, and async/await is lowered for zone.js apps. `angular.json` `browser`/`main`, `index`, `styles` (including package stylesheets), `assets` and `polyfills` map to the entry, page and static folders, while AOT/SSR options are ignored. `zone.js` (when used), global styles and `@angular/compiler` load before the entry, and `@angular/*`, `rxjs`, `tslib` and `zone.js` are pinned to one set of ranges on the CDN. In Angular apps, `console.error`'d errors and `NG0xxx` messages reach `onError` with `source` and `code`; every preview error now carries `source`. `/check` flags template arrow functions, `@angular/ssr` imports, CLI-only builders and SSR/i18n options. A tsconfig `target` is honoured but never lowered below the defaults. Production builds re-root `url()`s in inlined component styles. Analog projects are declined (they need the Vite pipeline). Tested against real Angular 20 in jsdom: render, click, DI, signal inputs/outputs, zoneless, and bootstrap errors.
+- 2026.11.5: **Security Shield** (Builderforce PRD 31 §W10). **Breaking for embedders**: see the README's [Upgrading to 2026.11.5](README.md#upgrading-to-2026115). This release adds:
+  - **A preview CSP by default.** The service worker stamps every response it serves, in both modes, with a Content-Security-Policy whose only external sources are the default package CDN (`https://esm.sh`, when `cdn` is unset) and `previewEgress`. Map tiles, web fonts, public APIs and any other third-party origin are blocked until listed there. The policy is added beside the app's own, never replacing it, with `X-Content-Type-Options: nosniff`, `Origin-Agent-Cluster: ?1`, and `Set-Cookie` `Domain=` narrowed to the preview's exact host. `cspReportUrl` reports violations (`report-to bfwc-csp`).
+  - **Same-origin previews refused by default.** `startPreviewRuntime` throws `PreviewShieldError` (`ingress.same_origin_refused`) unless `unprotectedSameOrigin: true` is set by name, or the preview runs on its own origin (`relayUrl`). A relay on the page's own origin, or one that is not https, is refused too.
+  - **One origin per application.** `previewOrigin` (`previewOriginTemplate`, `previewOriginKey`) gives each application its own relay, process Workers, service worker and storage. An application started without one is refused (`ingress.app_origin_required`) unless `sharedPreviewOrigin: 'unprotected'` opts out. `workerPolicy` puts a signed `?policy=<id>` on process Worker script URLs, and a custom `node.createWorker` is handed `{ origin, policy }`.
+  - **Attach integrity.** Each attach carries a fresh nonce chained to the previous one (`ingress.attach_rejected`). The service worker takes its egress and report endpoint only from its own script URL, never from a message.
+  - **Security events.** The `./security` subpath (`SecurityEvent`), `security.sink`, and `runtime.security()` (`events()`, `health()`). Request bodies over 32 MiB on loopback HTTP and `runtime.request` are answered 413 (`ingress.body_too_large`).
+  - **PHP and Python.** Unmodified PDO pgsql apps reach the browser database, and Python training services run their entry points. Each application keeps its own `pip install` record.
 - 2026.11.7: **App manifest + local launcher** (Builderforce PRD 31 §W11). This release adds:
   - **The manifest module.** Core `./manifest` reads and checks `builderforce.json` v1:
     - services, resources, jobs, ingress and environments, each with a `production`/`non-production` tier and a debug flag;
@@ -41,6 +48,14 @@ ships on its own.
     - the host page reads the project through a token-gated, contained file API and live sync;
     - each application gets its own `https://<key>.localhost` origin.
   - **Shared preview headers.** `./preview-headers` is now the single owner of the preview-origin headers and CSP.
+- 2026.11.8: **Integrator feedback** (items 19–27, reported after the 2026.11.5 upgrade). See the README's "What's new in 2026.11.8" and "Since 2026.11.8". **Embedders must update their `sw.js` gate:** this is the first runtime that honours `csp=report-only` from the service-worker URL, so the gate must be an allowlist of query keys that refuses `csp` and duplicate keys (the launcher and the Builderforce API now do). This release adds:
+  - **CDN origins in the preview CSP.** A `cdn` factory declares `origins` (`createEsmShCdnFactory({ origin })` for esm.sh mirrors); they are validated and added to the egress, and a CDN without usable origins warns once per runtime instead of producing a blank page. Egress is exactly own origin + CDN origins + `previewEgress`.
+  - **CSP violations in the host page.** `runtime.onCspViolation` reports directive and blocked origin only (never a path), deduped and capped in the page and again in the host. `previewCspMode: 'report-only'` for migrations.
+  - **`runtime.diagnostics()`** and **`app.diagnostics()`**: phase timings, CDN and per-origin request totals, the slowest requests, recent violations, cold/warm cache, what could not be measured, and per-service state with the last log lines. Registration failures of `sw.js` name the configuration the gate may have refused.
+  - **Laravel's `php artisan serve`** runs (it spawned `php -S` through `proc_open`, which php-wasm lacks — the cause of a blank Angular + Laravel preview). Laravel's semantics: global options, `host:port`, `SERVER_HOST`/`SERVER_PORT` from the environment or `.env`, `public/` docroot, Laravel's `server.php` router when installed.
+  - **Output ends before state changes.** A process's output (`combinedOutput`, `app.logs(id)`) always delivers its last line before the service becomes ready, stopped or failed, on stop, restart and dispose too; a provider that never closes its stream is bounded by `stopTimeoutMs` with a logged note. Trailing bytes of an incomplete UTF-8 sequence are no longer dropped.
+  - **A tested full-stack example.** Vite + React front end, a Laravel-style API (`composer install` → `artisan migrate` → `artisan serve`) and PGlite through `startApplicationRuntime`, with `/api` ingress; walkthrough in the README.
+  - **Docs.** The 2026.11.5 entry and upgrade guide, `attribution: false` as the one supported badge switch, the .NET bundle from npm (`@seanhogg/builderforce-webcontainers-dotnet`), and an "Assets fetched at runtime" table. Service failures surface through `app.onStateChange` / `app.onError` / `ApplicationStartError`, not a blank frame.
 
 ## Shipped in 2026.10.3
 
@@ -154,75 +169,8 @@ Known limits of what shipped, roughly in the order they are worth closing:
 
 Reported by the Universal Code VS Code extension, which runs generated apps in a
 webview through `/preview`, after its upgrade to 2026.11.5. Each item below was
-checked against the source. Items that are already shipped are listed at the end.
+checked against the source. Items 19–27 shipped in 2026.11.8 (see "Shipped").
 
-19. **A custom `cdn` silently drops esm.sh from the preview CSP.** In
-   `packages/browser/src/host.ts:71-74`, `previewEgress()` adds
-   `DEFAULT_CDN_ORIGIN` only when `cdn` is unset, and it never adds the custom
-   CDN's own origin. `PackageCdnFactory` does not expose an origin to add. The
-   result is a blank preview, and the host page gets no message. Fix: give
-   `PackageCdnFactory` an `origin` (or `origins`) and always add it to the
-   egress. If a custom CDN declares no origin, log one console warning that
-   names the gap.
-20. **What `previewEgress` adds to is undocumented.** The runtime's only built-in
-   egress is the default CDN, and it is dropped when `cdn` is set (item 19).
-   An integrator who sets both `cdn` and an array therefore loses esm.sh and reads
-   that as "the array replaced the defaults". Fix: state the exact composition in
-   the `previewEgress` doc comment and in the README's preview-origin section:
-   own origin, plus the CDN origin(s), plus the declared list. Then decide
-   whether an explicit `extraEgress` and `includeDefaults` pair is still needed
-   once item 19 lands.
-21. **No in-page signal of what the CSP blocked.** `cspReportUrl` sends
-   violation reports to a server endpoint, but the host page gets nothing.
-   Integrators write their own `securitypolicyviolation` collectors. For example,
-   OpenStreetMap tiles were blocked with no signal at all. Fix: forward each
-   preview `securitypolicyviolation` (directive and blocked origin, no URL path)
-   through the preview bridge as `onCspViolation`. Also add a report-only
-   option, `previewCspMode: 'report-only'`, for migrations.
-22. **The CSP default shipped without a changelog entry or a migration note.** The
-   default preview policy now blocks ordinary third-party resources such as map
-   tiles, web fonts and public APIs. Nothing under "Shipped" says so, and there is no
-   upgrade guide. Fix: add a 2026.11.5 entry under "Shipped" and a README
-   "Upgrading to 2026.11.5" note. The note covers the CSP default, `previewEgress`,
-   `cspReportUrl`, and same-origin previews needing `unprotectedSameOrigin: true`
-   (`previewOrigin.ts:124-139`), with a before/after snippet.
-23. **There are two ways to turn off the badge, and the docs don't say which to use.**
-   `attribution: false` is the host option. The `bfwc-badge off` shell command
-   (`core/src/shell/hiddenCommands.ts`, marker `/.bfwc/attribution-off`) is
-   described in source as maintainer-only. Fix: the README names
-   `attribution: false` as the supported switch and says `bfwc-badge` is an
-   internal toggle.
-24. **No tested example of a multi-service, multi-runtime app.** The `./app`
-   README shows Node with Node. Integrators are building a Vite front end (Angular
-   or React) with a PHP (Laravel), .NET or Node API on PGlite Postgres. Their
-   `angular-laravel` starter shows a blank frame after `composer install`, and the
-   cause has not been found. Fix: add an end-to-end fixture and test for an
-   Angular or React app on Vite, with a Laravel API and a PGlite database through
-   `startApplicationRuntime`, plus a README walkthrough. Then reproduce the
-   blank frame against that fixture.
-25. **It is not documented whether a setup step's output stream closes when it exits.**
-   Integrators currently stop waiting 1 s after a `composer install` or
-   `npm install` exits, in case the stream stays open. Fix: add a test that every
-   provider's `combinedOutput` and `app.logs(id)` close, or deliver their last
-   line, when the process exits. Then state the guarantee in the README, or fix
-   the providers that break it.
-26. **Hosts can't easily find the .NET bundle or the assets fetched at runtime.**
-   The bundle has been published as `@seanhogg/builderforce-webcontainers-dotnet`
-   since 2026.11.6. The README's .NET section still says that this package never
-   contains it and that it must be built with `scripts/build-dotnet-runtime.mjs`.
-   Fix: point the README at the npm package and give a `bundleUrl` example that
-   serves it. Also add an "Assets fetched at runtime" table, covering esm.sh,
-   PGlite from jsDelivr, php-wasm, Composer and NuGet, Pyodide, and the
-   compilers. The table gives each asset's origin and how to self-host it, for
-   hosts with a strict CSP or no network.
-27. **No single diagnostics call.** Integrators build their own load reports
-   from several sources: phase timings, requests by origin, the slowest
-   requests, CSP blocks and service logs. Fix: add
-   `runtime.diagnostics()`. It returns phase timings (runtime start, compiler
-   download and compile, first paint), CDN request count and total time,
-   per-origin request results, CSP violations (item 21), and, for apps, service
-   states with their last log lines. It must report whether the cache was cold or
-   warm, so slowdown reports come with numbers.
 28. **The manifest belongs in `.builderforce/`, not the project root**
    (Builderforce PRD 49 §6). `./manifest` and `bfwc-launch` read
    `.builderforce/builderforce.json`. A root `builderforce.json` or
@@ -251,11 +199,6 @@ checked against the source. Items that are already shipped are listed at the end
    Not applicable here: the reported unauthenticated `/__dotnet/*` route is in the
    integrator's own wrapper. This launcher serves only the public .NET bundle under
    `/dotnet/`, contained to the bundle directory.
-
-Already shipped. Each is answered in the README; no work is needed:
-- Service failure events: `app.onStateChange` (`failed` state), `app.onError`
-  with restart intent, and `ApplicationStartError`. Integrators should surface
-  these instead of treating a blank frame as the failure signal.
 
 ## Principles
 

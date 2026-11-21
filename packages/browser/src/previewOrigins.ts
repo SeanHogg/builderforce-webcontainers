@@ -30,7 +30,7 @@
  */
 import { WORKSPACE_CONTEXT, isApplicationId, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import { previewOriginKey, validatePreviewOrigin, PreviewShieldError, type PreviewOriginOption } from './previewOrigin.js';
-import { relayConfigUrl } from './relayConfig.js';
+import { relayConfigUrl, type PreviewCspMode } from './relayConfig.js';
 import { WORKER_POLICY_ID, type UndeliverableListener } from './relayWorker.js';
 import { applicationContext } from './security/securityEvent.js';
 import type { ShieldReporter } from './security/shieldTelemetry.js';
@@ -61,6 +61,8 @@ export interface PreviewOriginsOptions {
   previewEgress?: readonly string[] | ((applicationId: string | undefined) => readonly string[]);
   /** Where CSP violations are reported (baked into each application relay's URL). */
   cspReportUrl?: string;
+  /** `report-only` stamps each application's preview CSP report-only (baked into its relay URL, like the report endpoint). */
+  cspMode?: PreviewCspMode;
   /**
    * The egress policy id each application's process Workers start under (an
    * opaque signed id the embedder minted; see `relayWorkerUrl`). Workspace
@@ -170,7 +172,7 @@ export function createPreviewOrigins(options: PreviewOriginsOptions) {
     const origin = originOf(applicationId);
     const app = apps.get(applicationId)!;
     if (!app.relay) {
-      const url = relayConfigUrl(new URL(relayPath, origin), { egress: egressOf(applicationId), policy: policyOf(applicationId), report: options.cspReportUrl });
+      const url = relayConfigUrl(new URL(relayPath, origin), { egress: egressOf(applicationId), policy: policyOf(applicationId), report: options.cspReportUrl, cspMode: options.cspMode });
       const transport = options.open(url);
       app.relay = { transport, detach: options.onOpened?.(transport, applicationId) ?? (() => undefined) };
     }

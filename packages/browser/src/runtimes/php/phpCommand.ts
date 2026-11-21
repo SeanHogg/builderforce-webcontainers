@@ -3,8 +3,10 @@
  * (a script, `-r` code, `-v`, `-m` …: php-wasm runs PHP's real CLI on the
  * arguments), the built-in web server (`php -S host:port [-t docroot]
  * [router.php]`) served request-driven, or Composer (`composer install`,
- * `php composer.phar install`). Pure: no php-wasm, no file system.
+ * `php composer.phar install`). Pure: no php-wasm, no file system (a `.env`
+ * is read through the caller's `readText`).
  */
+import { normalizePath, parseDotenv } from '@seanhogg/builderforce-webcontainers-core';
 
 export interface PhpServerSpec {
   host: string;
@@ -13,6 +15,12 @@ export interface PhpServerSpec {
   docroot?: string;
   /** The router script, run for every request (it may `return false` to have the file served as is). */
   router?: string;
+  /**
+   * A router used only when the file exists (else the built-in routing):
+   * Laravel's own `server.php` for `php artisan serve`, which a Laravel-style
+   * app without the framework installed does not have.
+   */
+  routerIfPresent?: string;
   /** `-d name=value` settings, applied to every request. */
   ini: Record<string, string>;
 }
@@ -61,8 +69,29 @@ const ok = (invocation: PhpInvocation): PhpCommandParse => ({ ok: true, invocati
 /** CLI options that take the next argument as their value (`-d x=y`, `-c php.ini`, `-z ext`). */
 const VALUED = new Set(['-d', '-c', '-z', '-t', '-S', '-f', '-r', '-B', '-R', '-F', '-E', '--rf', '--rc', '--re', '--rz', '--ri']);
 
-/** Parse `command args…`. `-S` is the built-in server only among PHP's own options (before the script): `php app.php -S x` passes it to the script. */
-export function parsePhpCommand(command: string, args: readonly string[]): PhpCommandParse {
+/**
+ * Where a command line runs, for what it reads beyond its arguments (`php artisan serve`: `SERVER_HOST` and
+ * `SERVER_PORT` from the environment, else from the app's `.env`, as Laravel's `Env` does). The provider's
+ * acceptance and the PHP Worker's execution both parse with one, so they read the same.
+ */
+export interface PhpCommandSurroundings {
+  /** The process's environment. */
+  env?: Readonly<Record<string, string>>;
+  /** The working directory (absolute), against which relative paths are read. */
+  cwd?: string;
+  /** A project file's text by absolute path, or undefined. */
+  readText?(path: string): string | undefined;
+}
+
+/** The surroundings of a command run in `cwd` with `env` over `files` (the project) — the ONE way both the provider and the Worker build them. */
+export function phpSurroundings(env: Readonly<Record<string, string>> | undefined, cwd: string, files: { readText(path: string): string | undefined } | undefined): PhpCommandSurroundings {
+  return { env, cwd, readText: (path) => files?.readText(path) };
+}
+
+/**
+ * Parse `command args…`. `-S` is the built-in server only among PHP's own options (before the script): `php app.php -S x` passes it to the script.
+ */
+export function parsePhpCommand(command: string, args: readonly string[], surroundings: PhpCommandSurroundings = {}): PhpCommandParse {
   const name = basename(command);
   if (COMPOSERS.test(name)) return parseComposer(args);
   if (!INTERPRETERS.test(name)) return fail(`"${command}" is not a PHP command.`);
@@ -78,6 +107,11 @@ export function parsePhpCommand(command: string, args: readonly string[]): PhpCo
     if (arg.startsWith('-')) continue;
     // The first operand is the script: `php composer.phar install` is Composer.
     if (COMPOSERS.test(basename(arg))) return parseComposer(args.slice(i + 1));
+    // `php artisan serve` starts `php -S` through proc_open, which php-wasm has not: it is served here instead.
+    if (basename(arg) === 'artisan') {
+      const at = artisanCommandAt(args, i + 1);
+      if (args[at] === 'serve') return parseArtisanServe(arg, [...args.slice(i + 1, at), ...args.slice(at + 1)], surroundings);
+    }
     break;
   }
   if (!args.length) return fail('Interactive PHP (no script or -r code) needs a terminal, which the PHP runtime does not provide.');
@@ -120,6 +154,67 @@ function parseServer(args: readonly string[]): PhpCommandParse {
   return ok({ kind: 'serve', server: server as PhpServerSpec });
 }
 
+/** Laravel's router for `php artisan serve`, relative to the app's base directory (where `artisan` is). */
+export const LARAVEL_SERVER_ROUTER = 'vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php';
+
+/** Artisan's global options that take the next argument as their value when given without `=`. */
+const ARTISAN_VALUED = new Set(['--env']);
+
+/** Where artisan's command name is in `args`, from `from` on: past its global options (`--env=local`, `--env local`, `-q`, `-v`, `--ansi`, `-n` …). */
+function artisanCommandAt(args: readonly string[], from: number): number {
+  let at = from;
+  while (at < args.length && args[at]!.startsWith('-')) {
+    if (ARTISAN_VALUED.has(args[at]!) && args[at + 1] !== undefined && !args[at + 1]!.startsWith('-')) at++;
+    at++;
+  }
+  return at;
+}
+
+/** Laravel's `getHostAndPort()`: `[::1]:8080` or `host:8080` → host and port; a bare host has none. */
+function hostAndPort(value: string): { host: string; port?: string } {
+  const bracketed = /^(\[[^\]]*\])(?::(\d*))?$/.exec(value);
+  if (bracketed) return bracketed[2] ? { host: bracketed[1]!, port: bracketed[2] } : { host: bracketed[1]! };
+  const [host, port] = value.split(':');
+  return port ? { host: host!, port } : { host: host! };
+}
+
+/**
+ * `php artisan serve [--host=…] [--port=…]` as Laravel's ServeCommand runs it:
+ * the built-in server on `public/` (beside `artisan`) with Laravel's
+ * `server.php` router. `--host` defaults to `SERVER_HOST`, else 127.0.0.1, and
+ * may carry a port (`0.0.0.0:8080`, `[::1]:8080`); `--port` defaults to
+ * `SERVER_PORT`. The port is `--port` (or `SERVER_PORT`) when given, else the
+ * host's, and an empty one is 8000 (`$port ?: 8000`). `SERVER_*` come from the
+ * environment, else the app's `.env` (the environment wins, as phpdotenv's
+ * immutable loading does). Other options (`--tries`, `--no-reload`, `--env`)
+ * change nothing here.
+ */
+function parseArtisanServe(artisan: string, args: readonly string[], surroundings: PhpCommandSurroundings): PhpCommandParse {
+  const normalized = artisan.replace(/\\/g, '/');
+  const slash = normalized.lastIndexOf('/');
+  const base = slash < 0 ? '' : normalized.slice(0, slash + 1) || '/';
+  const dotenvPath = base.startsWith('/') ? `${base}.env` : `${(surroundings.cwd ?? '/').replace(/\/+$/, '')}/${base}.env`;
+  const dotenvText = surroundings.readText?.(normalizePath(dotenvPath));
+  const env = { ...(dotenvText === undefined ? {} : parseDotenv(dotenvText)), ...surroundings.env };
+  let hostOption = env.SERVER_HOST ?? '127.0.0.1';
+  let portOption = env.SERVER_PORT;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    const eq = arg.indexOf('=');
+    const [flag, inline] = arg.startsWith('--') && eq !== -1 ? [arg.slice(0, eq), arg.slice(eq + 1)] : [arg, undefined];
+    if (flag !== '--host' && flag !== '--port') continue;
+    const value = inline ?? (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-') ? args[++i] : undefined);
+    if (value === undefined) continue;
+    if (flag === '--host') hostOption = value;
+    else portOption = value;
+  }
+  const { host, port: hostPort } = hostAndPort(hostOption);
+  const portText = (portOption ?? hostPort) || undefined;
+  const port = portText === undefined ? 8000 : Number(portText);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return fail(`Invalid port "${portText}" for artisan serve.`);
+  return ok({ kind: 'serve', server: { host: host || '127.0.0.1', port, docroot: `${base}public`, routerIfPresent: `${base}${LARAVEL_SERVER_ROUTER}`, ini: {} } });
+}
+
 /** Composer options with a value, skipped (`--working-dir` is read). */
 const COMPOSER_VALUED = new Set(['--prefer-install', '--apcu-autoloader-prefix', '--audit-format', '--ignore-platform-req']);
 const COMPOSER_COMMANDS: Record<string, ComposerCommand> = { install: 'install', i: 'install', update: 'update', u: 'update', upgrade: 'update', require: 'require', r: 'require', 'dump-autoload': 'dump-autoload', dumpautoload: 'dump-autoload' };
@@ -156,7 +251,15 @@ export function mapInvocationPaths(invocation: PhpInvocation, map: (path: string
   const mapped = (path: string | undefined) => (path?.startsWith('/') ? map(path) : path);
   switch (invocation.kind) {
     case 'serve':
-      return { ...invocation, server: { ...invocation.server, docroot: mapped(invocation.server.docroot), router: mapped(invocation.server.router) } };
+      return {
+        ...invocation,
+        server: {
+          ...invocation.server,
+          docroot: mapped(invocation.server.docroot),
+          router: mapped(invocation.server.router),
+          ...(invocation.server.routerIfPresent === undefined ? {} : { routerIfPresent: mapped(invocation.server.routerIfPresent) }),
+        },
+      };
     case 'composer':
       return { ...invocation, workingDir: mapped(invocation.workingDir) };
     default: {

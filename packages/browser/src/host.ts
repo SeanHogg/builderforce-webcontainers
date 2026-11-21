@@ -36,15 +36,14 @@ import { createEsbuildWasmBundler, createEsbuildWasmTransformer } from './esbuil
 import { createCdnComponentCompilers } from './componentCompilers.js';
 import { createCdnStyleCompilers } from './styleCompilers.js';
 import { watchForPreviewUpdates } from './previewUpdates.js';
+import { cdnOriginsOf, createPreviewEgress } from './previewEgress.js';
+import { createDiagnostics, observeHostRequests } from './diagnostics.js';
 import type { PreviewRuntime, PreviewRuntimeOptions, SameOriginOptions } from './runtimeOptions.js';
 
 export { toWire } from './previewAttach.js';
 export type { CommonRuntimeOptions, PreviewRuntime, PreviewRuntimeOptions, RelayOptions, RuntimeBuildOptions, SameOriginOptions } from './runtimeOptions.js';
 
 const DEFAULT_ROOT = '/home/project';
-
-/** The default package CDN (`cdn` unset): previews load packages from it, so it is always in their egress. */
-const DEFAULT_CDN_ORIGIN = 'https://esm.sh';
 
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 16) ?? Math.random().toString(36).slice(2, 18);
@@ -67,16 +66,24 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const telemetry = createShieldTelemetry({ sink: options.security?.sink });
   // W10 control 10: refused before anything boots when the preview would share this page's origin.
   checkPreviewOrigins(options, location.origin, telemetry);
-  /** The egress a preview origin's responses may reach (host-side; never from an attach): the embedder's, plus the default package CDN previews load from. */
-  const previewEgress = (applicationId?: string): readonly string[] => {
-    const declared = typeof options.previewEgress === 'function' ? options.previewEgress(applicationId) : (options.previewEgress ?? []);
-    return options.cdn ? declared : [DEFAULT_CDN_ORIGIN, ...declared];
-  };
-  // The shared origin's worker takes its egress and report endpoint from its own URL (`relayConfig`).
-  const sharedConfig = { egress: previewEgress(undefined), report: options.cspReportUrl };
-  const transport = options.relayUrl
-    ? await relayTransport(relayConfigUrl(options.relayUrl, sharedConfig, location.href))
-    : await sameOriginTransport(relayConfigUrl((options as SameOriginOptions).serviceWorkerUrl, sharedConfig, location.href), options.scope);
+  const cdnOrigins = cdnOriginsOf(options.cdn);
+  const diagnostics = createDiagnostics({ cdnOrigins });
+  // Observed from the start, so the boot's CDN/compiler requests are seen before the browser's resource-timing buffer fills.
+  const stopHostRequests = observeHostRequests(diagnostics, cdnOrigins);
+  const startDone = diagnostics.begin('runtime.start');
+  /** The egress a preview origin's responses may reach (host-side; never from an attach): the package CDN's origins plus the embedder's. */
+  const previewEgress = createPreviewEgress(options);
+  // The shared origin's worker takes its egress, report endpoint and CSP mode from its own URL (`relayConfig`).
+  const sharedConfig = { egress: previewEgress(undefined), report: options.cspReportUrl, cspMode: options.previewCspMode };
+  const transport = await diagnostics.time(
+    'serviceWorker.ready',
+    options.relayUrl
+      ? relayTransport(relayConfigUrl(options.relayUrl, sharedConfig, location.href))
+      : sameOriginTransport(relayConfigUrl((options as SameOriginOptions).serviceWorkerUrl, sharedConfig, location.href), options.scope),
+  ).catch((error: unknown) => {
+    stopHostRequests();
+    throw error;
+  });
 
   const base = previewBase(transport.scope, id);
   // Every bridge this runtime injects carries it; preview messages without it are refused.
@@ -91,9 +98,10 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   let previewScripts: string[] = [...(options.previewScripts ?? [])];
   let server: DevServer;
   try {
-    const transformer = options.transformer ?? (await createEsbuildWasmTransformer());
+    const transformer = options.transformer ?? (await diagnostics.time('compiler.load', createEsbuildWasmTransformer()));
     server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, styles, attribution: attributionFromMarker(files, options.attribution), previewScripts, previewNonce: nonce, hot: options.hot });
   } catch (error) {
+    stopHostRequests();
     transport.dispose();
     throw error;
   }
@@ -109,6 +117,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     sharedPreviewOrigin: options.sharedPreviewOrigin ?? (options.unprotectedSameOrigin ? 'unprotected' : undefined),
     previewEgress,
     cspReportUrl: options.cspReportUrl,
+    cspMode: options.previewCspMode,
     runtimeId: id,
     workerPolicy: options.workerPolicy,
     createWorker: options.node?.createWorker,
@@ -197,8 +206,12 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const stopWatching = options.liveReload === false ? undefined : watchForPreviewUpdates(fs, server, sendAll);
 
   const previewMessages = listenToPreview(window, origins.accepts, base, nonce);
+  // Diagnostics: what previews report (this page's own requests are observed from the start, above).
+  previewMessages.onCspViolation((violation) => diagnostics.cspViolation(violation));
+  previewMessages.onTiming((timing) => diagnostics.previewTiming(timing));
   // WebSockets and document.cookie for virtual servers, which a service worker cannot carry.
   const bridge = listenToPreviewBridge(window, origins.accepts, base, { upgrade: (port, request) => processes.upgrade(port, request), cookies, nonce, admitPort, telemetry });
+  startDone();
 
   return {
     id,
@@ -221,6 +234,8 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     },
     onError: (listener) => previewMessages.onError(listener),
     onPreviewConsole: (listener) => previewMessages.onConsole(listener),
+    onCspViolation: (listener) => previewMessages.onCspViolation(listener),
+    diagnostics: () => diagnostics.snapshot(),
     setPreviewScripts(scripts) {
       previewScripts = [...scripts];
       server.setPreviewScripts(previewScripts);
@@ -254,6 +269,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
       origins.dispose();
       databaseWorkers.terminateAll();
       previewMessages.dispose();
+      stopHostRequests();
       stopWatching?.();
       transport.dispose();
       server.dispose();

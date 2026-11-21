@@ -20,7 +20,7 @@ import type { VirtualFileSystem } from '@seanhogg/builderforce-webcontainers-cor
 import type { HostToWorker, StartMessage, WorkerToHost } from '../../node/protocol.js';
 import { createWorkerDialer } from '../../node/workerConnections.js';
 import { createInterpreterProcess, type InterpreterContext, type InterpreterOutcome } from '../interpreterProcess.js';
-import { mapInvocationPaths, parsePhpCommand, type PhpInvocation } from './phpCommand.js';
+import { mapInvocationPaths, parsePhpCommand, phpSurroundings, type PhpInvocation } from './phpCommand.js';
 import { trackWrappedFsWrites } from '../emscripten/wrappedFsWrites.js';
 import { applyOpsToPhp, copyIntoPhp, toPhpPath } from './phpFs.js';
 import { checkPhpVersion, type LoadedPhp, type PhpLoadOptions } from './phpLoader.js';
@@ -75,8 +75,9 @@ export function createPhpWorkerProcess(deps: PhpWorkerProcessDeps): { receive(me
 
     return {
       addressInUse: (port) => addressInUse(host, port),
-      plan(message) {
-        const parsed = parsePhpCommand(message.command, message.args);
+      plan(message, staging) {
+        // As the `php` provider parsed it when it accepted the service (same surroundings: env, cwd, the project's files).
+        const parsed = parsePhpCommand(message.command, message.args, phpSurroundings(message.env, message.cwd, staging));
         if (!parsed.ok) return { ok: false, message: `${message.command}: ${parsed.reason}\n`, code: 1 };
         try {
           checkPhpVersion(message.php?.phpVersion);

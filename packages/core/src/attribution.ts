@@ -10,7 +10,11 @@
  * system light/dark preference and sits in the bottom-right corner, small enough
  * not to cover app UI on a phone-width screen.
  *
- * Maintainers: the browser host also hides it while {@link ATTRIBUTION_OFF_MARKER} exists (shell/hiddenCommands.ts).
+ * `attribution: false` is the ONE supported switch (README › Attribution). Maintainers
+ * also have an internal toggle: while `attribution` is not `false`, the browser host
+ * hides the badge while {@link ATTRIBUTION_OFF_MARKER} exists, which the hidden
+ * `bfwc-badge` shell command writes (shell/hiddenCommands.ts). It is not an API:
+ * any process in the project can write the marker, and `attribution: false` wins over it.
  */
 
 export const ATTRIBUTION_URL = 'https://builderforce.ai/?utm_source=webcontainers&utm_medium=badge&utm_campaign=preview';

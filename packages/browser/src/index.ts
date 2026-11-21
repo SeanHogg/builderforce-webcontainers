@@ -10,11 +10,13 @@ export type {
 export { PreviewShieldError, previewOriginTemplate, previewOriginKey } from './previewOrigin.js';
 export type { PreviewOriginOption, PreviewOriginContext } from './previewOrigin.js';
 export type { SecurityEvent, SecurityEventSink, SecurityHealth, ShieldTelemetry } from './security/index.js';
-export { listenToPreview } from './previewMessages.js';
+export { listenToPreview, CSP_VIOLATION_RUNTIME_LIMIT } from './previewMessages.js';
 export type { PreviewOriginMatch } from './previewMessages.js';
 export { createSnapshotStore } from './snapshotStore.js';
 export type { SnapshotStore, SnapshotStoreOptions } from './snapshotStore.js';
-export type { PreviewError, PreviewErrorSource, PreviewConsoleMessage, ConsoleLevel, PreviewMessages } from './previewMessages.js';
+export type { PreviewError, PreviewErrorSource, PreviewConsoleMessage, ConsoleLevel, PreviewMessages, PreviewCspViolation, PreviewTiming, PreviewTimingFeature } from './previewMessages.js';
+export type { PreviewCspMode } from './relayConfig.js';
+export type { RuntimeDiagnostics, DiagnosticsPhase, OriginRequests, SlowRequest, CacheState } from './diagnostics.js';
 export { listenToPreviewBridge } from './previewBridge.js';
 export type { PreviewBridge, PreviewBridgeOptions, BridgePort } from './previewBridge.js';
 export type { PreviewTransport } from './transport.js';

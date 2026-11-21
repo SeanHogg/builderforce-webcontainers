@@ -4,7 +4,7 @@
  * the `php` provider's accept/decline. No php-wasm.
  */
 import { describe, expect, it } from 'vitest';
-import { VirtualFileSystem, WORKSPACE_CONTEXT } from '@seanhogg/builderforce-webcontainers-core';
+import { VirtualFileSystem, WORKSPACE_CONTEXT, parseDotenv } from '@seanhogg/builderforce-webcontainers-core';
 import { NODE_ONLY } from '../src/node/processKinds.js';
 import {
   PHP_KIND,
@@ -17,6 +17,7 @@ import {
   mapPhpInvocationPaths,
   parseConstraint,
   parsePhpCommand,
+  phpSurroundings,
   parseVersion,
   phpLiteral,
   phpWasmModuleUrls,
@@ -51,6 +52,59 @@ describe('PHP command lines', () => {
     expect(parsePhpCommand('php', ['app.php', '-S', 'localhost:8000'])).toEqual({ ok: true, invocation: { kind: 'cli', argv: ['app.php', '-S', 'localhost:8000'] } });
     expect(parsePhpCommand('php', ['-d', 'x=1', '-S', 'localhost:8000'])).toMatchObject({ ok: true, invocation: { kind: 'serve', server: { port: 8000, ini: { x: '1' } } } });
     expect(parsePhpCommand('php', ['-S', 'localhost:8000', 'a.php', 'b.php'])).toMatchObject({ ok: false, reason: expect.stringContaining('one router') });
+  });
+
+  it('reads php artisan serve as the built-in server on public/ with Laravel’s router (php-wasm has no proc_open to start one)', () => {
+    const router = 'vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php';
+    expect(parsePhpCommand('php', ['artisan', 'serve'])).toEqual({ ok: true, invocation: { kind: 'serve', server: { host: '127.0.0.1', port: 8000, docroot: 'public', routerIfPresent: router, ini: {} } } });
+    expect(parsePhpCommand('php', ['artisan', 'serve', '--host=0.0.0.0', '--port', '8080', '--no-reload'])).toMatchObject({ ok: true, invocation: { server: { host: '0.0.0.0', port: 8080 } } });
+    // Laravel's defaults come from SERVER_HOST / SERVER_PORT; --port wins.
+    expect(parsePhpCommand('php', ['artisan', 'serve'], { env: { SERVER_HOST: '0.0.0.0', SERVER_PORT: '9000' } })).toMatchObject({ invocation: { server: { host: '0.0.0.0', port: 9000 } } });
+    expect(parsePhpCommand('php', ['artisan', 'serve', '--port=8001'], { env: { SERVER_PORT: '9000' } })).toMatchObject({ invocation: { server: { port: 8001 } } });
+    // A shebang-routed ./artisan (an absolute path) serves its own directory's public/.
+    expect(parsePhpCommand('php', ['/api/artisan', 'serve'])).toMatchObject({ invocation: { server: { docroot: '/api/public', routerIfPresent: `/api/${router}` } } });
+    expect(parsePhpCommand('php', ['/artisan', 'serve'])).toMatchObject({ invocation: { server: { docroot: '/public' } } });
+    expect(parsePhpCommand('php', ['artisan', 'serve', '--port=http'])).toMatchObject({ ok: false, reason: expect.stringContaining('Invalid port') });
+    // Other artisan commands run as PHP scripts.
+    expect(parsePhpCommand('php', ['artisan', 'migrate'])).toEqual({ ok: true, invocation: { kind: 'cli', argv: ['artisan', 'migrate'] } });
+    const serve = parsePhpCommand('php', ['/api/artisan', 'serve']);
+    if (!serve.ok) throw new Error(serve.reason);
+    expect(mapPhpInvocationPaths(serve.invocation, (path) => `/project${path}`)).toMatchObject({ server: { docroot: '/project/api/public', routerIfPresent: `/project/api/${router}` } });
+  });
+
+  it('artisan serve: global options before the command, host:port in --host, an empty --port, SERVER_* from .env', () => {
+    const served = (args: string[], surroundings?: Parameters<typeof parsePhpCommand>[2]) => {
+      const parsed = parsePhpCommand('php', args, surroundings);
+      if (!parsed.ok || parsed.invocation.kind !== 'serve') throw new Error(`not served: ${JSON.stringify(parsed)}`);
+      return { host: parsed.invocation.server.host, port: parsed.invocation.server.port };
+    };
+    // Artisan's global options come before the command name (`--env local` takes its value).
+    expect(served(['artisan', '--env=local', '-q', '-v', '--ansi', '--no-interaction', 'serve', '--port=8002'])).toEqual({ host: '127.0.0.1', port: 8002 });
+    expect(served(['artisan', '--env', 'local', 'serve'])).toEqual({ host: '127.0.0.1', port: 8000 });
+    expect(parsePhpCommand('php', ['artisan', '-q', 'migrate'])).toEqual({ ok: true, invocation: { kind: 'cli', argv: ['artisan', '-q', 'migrate'] } });
+    // Laravel's getHostAndPort: --host may carry the port; --port (or SERVER_PORT) wins over it.
+    expect(served(['artisan', 'serve', '--host=0.0.0.0:8080'])).toEqual({ host: '0.0.0.0', port: 8080 });
+    expect(served(['artisan', 'serve', '--host=[::1]:8081'])).toEqual({ host: '[::1]', port: 8081 });
+    expect(served(['artisan', 'serve', '--host=0.0.0.0:8080', '--port=8003'])).toEqual({ host: '0.0.0.0', port: 8003 });
+    expect(served(['artisan', 'serve', '--host=0.0.0.0:8080'], { env: { SERVER_PORT: '9001' } })).toEqual({ host: '0.0.0.0', port: 9001 });
+    // `$port ?: 8000`: an empty --port is 8000.
+    expect(served(['artisan', 'serve', '--port='], { env: { SERVER_PORT: '9001' } })).toEqual({ host: '127.0.0.1', port: 8000 });
+    // SERVER_HOST / SERVER_PORT from the app's .env beside artisan; the process environment wins.
+    const files: Record<string, string> = { '/api/.env': 'APP_NAME="Demo App"\n# comment\nexport SERVER_HOST=0.0.0.0\nSERVER_PORT=8100 # inline\n' };
+    const readText = (path: string) => files[path];
+    expect(served(['artisan', 'serve'], { cwd: '/api', readText })).toEqual({ host: '0.0.0.0', port: 8100 });
+    expect(served(['/api/artisan', 'serve'], { cwd: '/', readText })).toEqual({ host: '0.0.0.0', port: 8100 });
+    expect(served(['artisan', 'serve'], { cwd: '/api', readText, env: { SERVER_PORT: '8200' } })).toEqual({ host: '0.0.0.0', port: 8200 });
+    expect(parseDotenv('A=1\nB="two words"\nC=\'x # y\'\nD=z # c\n')).toEqual({ A: '1', B: 'two words', C: 'x # y', D: 'z' });
+  });
+
+  it('the provider accepts with what the Worker will parse: the .env beside artisan included', () => {
+    const fs = new VirtualFileSystem();
+    fs.writeTree({ 'api/artisan': '<?php', 'api/.env': 'SERVER_PORT=nope\n' });
+    const service = { id: 'api', type: 'application' as const, runtime: 'php', root: '/api', command: 'php', args: ['artisan', 'serve'], port: 8000 };
+    expect(acceptsPhpService(service, fs)).toMatchObject({ ok: false, reason: expect.stringContaining('Invalid port "nope"') });
+    expect(parsePhpCommand('php', ['artisan', 'serve'], phpSurroundings(undefined, '/api', fs))).toMatchObject({ ok: false, reason: expect.stringContaining('Invalid port "nope"') });
+    expect(acceptsPhpService({ ...service, env: { SERVER_PORT: '8000' } }, fs)).toEqual({ ok: true });
   });
 
   it('reads Composer, including php composer.phar', () => {

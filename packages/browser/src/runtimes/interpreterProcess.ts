@@ -77,7 +77,8 @@ export interface InterpreterContext {
 export type InterpreterPlan = { ok: false; message: string; code: number } | { ok: true; port?: number; run(staging: VirtualFileSystem): Promise<InterpreterOutcome> };
 
 export interface InterpreterRuntime {
-  plan(message: StartMessage): InterpreterPlan;
+  /** `staging`: the project as mounted so far (read-only here), for what a command line reads beyond its arguments. */
+  plan(message: StartMessage, staging: VirtualFileSystem): InterpreterPlan;
   /** The language's message when `port` is taken (stderr, with its newline). */
   addressInUse(port: number): string;
   /** Standard input arrived (`null`: end of file). Default: ignored. */
@@ -158,7 +159,7 @@ export function createInterpreterProcess(post: (message: WorkerToHost) => void, 
     if (snapshot.pack) mountSnapshot(staging!, snapshot);
     else applyIncoming(snapshot.ops);
     for (const port of message.ports) served.taken.add(port);
-    const plan = runtime.plan(message);
+    const plan = runtime.plan(message, staging!);
     if (!plan.ok) {
       context.io.stderr(plan.message);
       return exit(plan.code);

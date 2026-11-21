@@ -17,7 +17,7 @@
  */
 import { REATTACH, RELAY_ATTACH, RELAY_READY, RELAY_REATTACH, RELAY_SPAWN, RELAY_UPDATE, attachMessageOf } from './protocol.js';
 import { bridgeWorker, relayWorkerUrl } from './relayWorker.js';
-import { relayServiceWorkerUrl } from './relayConfig.js';
+import { relayServiceWorkerUrl, serviceWorkerRegistrationError } from './relayConfig.js';
 import type { PreviewUpdate } from '@seanhogg/builderforce-webcontainers-core';
 import { broadcastUpdate, waitForActive } from './worker.js';
 
@@ -28,7 +28,10 @@ async function start(): Promise<void> {
   const container = navigator.serviceWorker;
   if (!container) throw new Error('Service workers are unavailable on the preview origin.');
   // `mode=relay` tells the worker to accept ATTACH only from this exact relay page (not any same-origin page).
-  const registration = await container.register(relayServiceWorkerUrl(location.href), { scope: './' });
+  const scriptUrl = relayServiceWorkerUrl(location.href);
+  const registration = await container.register(scriptUrl, { scope: './' }).catch((error: unknown) => {
+    throw serviceWorkerRegistrationError(scriptUrl, error); // names the egress the embedder's gate may have refused
+  });
   await waitForActive(registration);
 
   container.addEventListener('message', (event) => {
