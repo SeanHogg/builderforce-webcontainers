@@ -57,6 +57,7 @@ export const APP_MANIFEST_SCHEMA_V1 = {
         resource('mail'),
         resource('graph', { engine: { enum: ['neo4j', 'memgraph', 'age'] } }, ['engine']),
         resource('connection', { connection: { type: 'string', minLength: 1 } }, ['connection']),
+        resource('ai', { models: stringList }),
         resource('external', { module: { type: 'string', minLength: 1 }, outputs: stringList }, ['module']),
       ],
     },

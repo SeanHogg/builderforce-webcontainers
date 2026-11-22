@@ -76,6 +76,8 @@ export interface ServiceSpec {
   restartPolicy?: RestartPolicy;
   /** Required for `database` services. */
   database?: DatabaseSpec;
+  /** Host-delivered resources this service uses. Not `dependsOn` — nothing to wait for. Browser-runtime seam only. */
+  resourceUses?: readonly { id: string; type: 'ai' | 'connection'; models?: readonly string[] }[];
 }
 
 /** One ingress route: requests whose path starts with `path` go to `serviceId`'s port. */

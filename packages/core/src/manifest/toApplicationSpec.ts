@@ -42,6 +42,9 @@ export interface ManifestSpecResult {
 /** The port a generated database service listens on by default. */
 const DATABASE_PORTS: Readonly<Partial<Record<ResourceSpec['type'], number>>> = { postgres: 5432 };
 
+/** Resources the HOST delivers (vault, AI gateway) — never a process, never a "provisioned by its deployment" decline. */
+const HOST_DELIVERED: ReadonlySet<ResourceSpec['type']> = new Set(['connection', 'ai']);
+
 /** `ApplicationSpec` readiness for a manifest readiness. */
 export function toReadinessSpec(readiness: ManifestReadiness): ReadinessSpec | undefined {
   const timeoutMs = readiness.timeout === undefined ? undefined : parseDuration(readiness.timeout);
@@ -61,9 +64,17 @@ function freePort(preferred: number, taken: Set<number>): number {
   return port;
 }
 
-function applicationService(id: string, service: ManifestService, environment: ResolvedEnvironment, databaseIds: ReadonlySet<string>, issues: ManifestIssue[]): ServiceSpec {
+function applicationService(id: string, service: ManifestService, environment: ResolvedEnvironment, databaseIds: ReadonlySet<string>, resources: Record<string, ResourceSpec>, issues: ManifestIssue[]): ServiceSpec {
   const usedDatabases = (service.uses ?? []).filter((use) => databaseIds.has(use));
   const dependsOn = [...new Set([...(service.dependsOn ?? []), ...usedDatabases])];
+  // Host-delivered uses (`ai`, `connection`) ride on `resourceUses` — the browser seam `serviceEnv` and the port policy read.
+  const resourceUses = (service.uses ?? []).flatMap((use) => {
+    const resource = resources[use];
+    if (!resource || !HOST_DELIVERED.has(resource.type)) return [];
+    const entry: { id: string; type: 'ai' | 'connection'; models?: readonly string[] } = { id: use, type: resource.type as 'ai' | 'connection' };
+    if (resource.type === 'ai' && resource.models) entry.models = [...resource.models];
+    return [entry];
+  });
   const readiness = service.readiness ? toReadinessSpec(service.readiness) : service.port === undefined && service.restart === 'always' ? ({ kind: 'started' } as const) : undefined;
   const spec: ServiceSpec = {
     id,
@@ -79,6 +90,7 @@ function applicationService(id: string, service: ManifestService, environment: R
   if (dependsOn.length > 0) spec.dependsOn = dependsOn;
   if (readiness) spec.readiness = readiness;
   if (service.restart) spec.restartPolicy = service.restart;
+  if (resourceUses.length > 0) spec.resourceUses = resourceUses;
   return spec;
 }
 
@@ -125,13 +137,13 @@ export function toApplicationSpec(manifest: AppManifest, envName: string, option
     if (resource.type === 'postgres' && defaultPort !== undefined && capability.provider) {
       specServices.push(databaseService(id, resource, capability.provider, freePort(defaultPort, takenPorts)));
       databaseIds.add(id);
-    } else if (resource.type !== 'connection') {
-      // Connections reach services through the host's vault; anything else hosted is the deployment's to provision.
+    } else if (!HOST_DELIVERED.has(resource.type)) {
+      // Host-delivered resources (vault connections, the AI gateway) reach services through the host; anything else hosted is the deployment's to provision.
       declined.push({ id, reason: `"${resource.type}" resources on ${environment.target} are provisioned by its deployment, not run by the application runtime.` });
     }
   }
 
-  for (const [id, service] of Object.entries(services)) specServices.push(applicationService(id, service, environment, databaseIds, issues));
+  for (const [id, service] of Object.entries(services)) specServices.push(applicationService(id, service, environment, databaseIds, resources, issues));
 
   const jobs = isRecord(resolved.jobs) ? Object.keys(resolved.jobs) : [];
   for (const [id, job] of Object.entries(resolved.jobs ?? {})) issues.push(...jobCommandIssues(id, job, services, environment.target));

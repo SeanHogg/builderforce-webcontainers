@@ -110,6 +110,10 @@ function validateResources(resources: Record<string, unknown>, issues: Issues): 
       case 'connection':
         if (!isNonEmptyString(entry.connection)) issues.push(manifestIssue('missing-field', path, { value: 'connection' }));
         break;
+      case 'ai':
+        // Absent: the platform router picks. Present: a list of strings (`invalid-value` otherwise).
+        stringArray(entry.models, `${path}.models`, issues);
+        break;
       case 'external':
         if (!isNonEmptyString(entry.module)) issues.push(manifestIssue('missing-field', path, { value: 'module' }));
         stringArray(entry.outputs, `${path}.outputs`, issues);

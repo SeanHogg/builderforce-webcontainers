@@ -1,5 +1,5 @@
 /** Stops and restarts racing starts, readiness waits and backoffs, and the end of the runtime. */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApplicationStartError, startApplicationRuntime, type ApplicationSpec, type ServiceError, type ServiceSpec } from '../src/app.js';
 import { stopProcess } from '../src/app/stopService.js';
 import { fakeProvider, gate, settle, stubRuntime, until } from './app-fakeProvider.js';
@@ -159,34 +159,64 @@ describe('stopping and restarting while things are in flight', () => {
 });
 
 describe('the checkpoint stop deadline', () => {
-  /** A process that exits only on SIGKILL (137), or at `exitAfterMs`. */
+  // Deterministic time: the deadline arithmetic (Date.now) and every timer the stop
+  // schedules are faked, so the assertions below are exact on every platform — the
+  // old wall-clock bounds (>=390/<500, <290) flaked on Windows under scheduler jitter.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** A process that exits only on SIGKILL (137), or at `exitAfterMs`. Records when each signal was sent. */
   function stubborn(checkpoint: () => Promise<void>, exitAfterMs?: number) {
     const signals: string[] = [];
+    const signalTimes: number[] = [];
     let exit!: (code: number) => void;
     const exited = new Promise<number>((resolve) => (exit = resolve));
     if (exitAfterMs !== undefined) setTimeout(() => exit(0), exitAfterMs);
-    return { signals, handle: { kill: (signal = 'SIGTERM') => (signals.push(signal), signal === 'SIGKILL' && exit(137)), wait: () => exited, checkpoint } };
+    return {
+      signals,
+      signalTimes,
+      handle: {
+        kill: (signal = 'SIGTERM') => (signals.push(signal), signalTimes.push(Date.now()), signal === 'SIGKILL' && exit(137)),
+        wait: () => exited,
+        checkpoint,
+      },
+    };
   }
 
   it('the checkpoint request and the exit it asks for share ONE timeoutMs, then SIGTERM, then SIGKILL', async () => {
-    const { signals, handle } = stubborn(() => new Promise<void>((resolve) => setTimeout(resolve, 120)));
+    const { signals, signalTimes, handle } = stubborn(() => new Promise<void>((resolve) => setTimeout(resolve, 120)));
     const started = Date.now();
-    expect(await stopProcess(handle, 200)).toBe(137);
-    const elapsed = Date.now() - started;
+    const stopped = stopProcess(handle, 200);
+    await vi.advanceTimersByTimeAsync(120); // the checkpoint saves at 120; 80ms remain on the SHARED deadline
+    expect(signals).toEqual([]); // no SIGTERM yet: the exit wait shares the checkpoint's deadline
+    await vi.advanceTimersByTimeAsync(80); // the shared deadline (200) passes with no exit → SIGTERM
+    expect(signals).toEqual(['SIGTERM']);
+    await vi.advanceTimersByTimeAsync(200); // the SIGTERM grace (200) passes → SIGKILL, which exits 137
+    expect(await stopped).toBe(137);
     expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
-    // 200 (checkpoint + its exit) + 200 (SIGTERM): SIGKILL near 400ms — not 120 + 200 + 200 with separate deadlines.
-    expect(elapsed).toBeGreaterThanOrEqual(390);
-    expect(elapsed).toBeLessThan(500);
+    // ONE shared deadline: SIGTERM at exactly 200, SIGKILL at exactly 400 —
+    // not 120 + 200 + 200 with separate deadlines.
+    expect(signalTimes).toEqual([started + 200, started + 400]);
+    expect(Date.now() - started).toBe(400);
   });
 
   it('a checkpoint request that never settles does not hold the stop past the deadline; an exit within it is the result', async () => {
     const { signals, handle } = stubborn(() => new Promise<void>(() => undefined), 50);
-    expect(await stopProcess(handle, 200)).toBe(0);
+    const stopped = stopProcess(handle, 200);
+    // Drain every scheduled timer: the exit at 50 lands inside the shared deadline, and the
+    // hung checkpoint is cut at 200 — the exit already waiting is the result, no signals.
+    await vi.runAllTimersAsync();
+    expect(await stopped).toBe(0);
     expect(signals).toEqual([]);
+
     const hung = stubborn(() => new Promise<void>(() => undefined));
     const started = Date.now();
-    expect(await stopProcess(hung.handle, 100)).toBe(137);
-    expect(Date.now() - started).toBeLessThan(290);
+    const bounded = stopProcess(hung.handle, 100);
+    await vi.runAllTimersAsync(); // 100 (shared checkpoint deadline) → SIGTERM, 100 (grace) → SIGKILL
+    expect(await bounded).toBe(137);
     expect(hung.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    // The stop is bounded by its deadlines exactly — SIGTERM at 1×timeoutMs, SIGKILL at
+    // 2×timeoutMs — read from the fake clock, so there is no wall-clock slack to flake on.
+    expect(hung.signalTimes).toEqual([started + 100, started + 200]);
   });
 });

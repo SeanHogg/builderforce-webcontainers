@@ -64,6 +64,13 @@ export interface ServiceEnvOptions {
    * `user` / `password`.
    */
   databaseCredentials?(database: ServiceSpec, client: ServiceSpec): DatabaseCredential | undefined;
+  /**
+   * The OpenAI-compatible base URL (ending `/v1`, no trailing slash) the host's
+   * gateway serves `resourceId` on for `client` — a localhost page-gateway port.
+   * The host attaches the session; a key NEVER enters the process env. Only the
+   * browser runtime fills this; a frontend gets nothing.
+   */
+  aiEndpoint?(resourceId: string, client: ServiceSpec): { baseUrl: string } | undefined;
 }
 
 /** The database name a database service owns: the spec's `name`, else the provider's default, else the service id. */
@@ -138,6 +145,21 @@ export function serviceEnv(spec: ApplicationSpec, serviceId: string, options: Se
     }
     // The conventional name, when it is unambiguous.
     if (urls.length === 1) env.DATABASE_URL = urls[0]!;
+  }
+
+  // Host-delivered AI: base URLs only, same credential policy as databases. Never a key, never Authorization material.
+  if (options.aiEndpoint && CREDENTIAL_POLICY[roleOf(service)].databaseCredentials) {
+    const bases: string[] = [];
+    for (const use of service.resourceUses ?? []) {
+      if (use.type !== 'ai') continue;
+      const endpoint = options.aiEndpoint(use.id, service);
+      if (!endpoint) continue;
+      const baseUrl = endpoint.baseUrl.replace(/\/+$/, '');
+      env[`${envName(use.id)}_AI_BASE_URL`] = baseUrl;
+      bases.push(baseUrl);
+    }
+    // The conventional name, when it is unambiguous.
+    if (bases.length === 1) env.AI_BASE_URL = bases[0]!;
   }
   return { ...env, ...service.env };
 }

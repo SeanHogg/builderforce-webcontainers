@@ -74,6 +74,17 @@ export interface ConnectionResource {
   connection: string;
 }
 
+/**
+ * The platform's AI gateway, host-delivered: a service that `uses` it gets
+ * `AI_BASE_URL` (an OpenAI-compatible base ending `/v1`) and never a key — the
+ * host attaches the signed-in session and forwards to the API gateway host.
+ */
+export interface AiResource {
+  type: 'ai';
+  /** Allowlist. Absent: the platform router picks. A request whose model is outside the list is rejected at the host relay, not forwarded. */
+  models?: string[];
+}
+
 /** An OpenTofu / Terraform / Bicep / CloudFormation module only a customer-cloud target applies. */
 export interface ExternalResource {
   type: 'external';
@@ -90,6 +101,7 @@ export type ResourceSpec =
   | MailResource
   | GraphResource
   | ConnectionResource
+  | AiResource
   | ExternalResource;
 
 export type ResourceType = ResourceSpec['type'];
