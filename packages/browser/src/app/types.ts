@@ -13,6 +13,8 @@ import type {
   ServiceType,
   StateChange,
 } from '@seanhogg/builderforce-webcontainers-core/app';
+import type { HttpHandler, SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
+import type { HostRelay } from './hostRelay.js';
 
 /** One line of a service's output, or a line the runtime wrote about it (`source: 'runtime'`). */
 export interface ServiceLogEntry {
@@ -86,6 +88,13 @@ export interface ApplicationHost extends AttributedProcesses {
   forgetApplication?(applicationId: string): void;
   /** Put the spec's `ingress` in force on the application's preview origins while it runs (a `PreviewRuntime` does); returns the unregister. */
   registerIngress?(applicationId: string, spec: ApplicationSpec): () => void;
+  /**
+   * Register an HTTP handler on the port registry without announcing it as a
+   * preview server. The AI page gateway uses this; a host that has no virtual
+   * network omits it and no gateway is registered. Must not publish the port
+   * on a preview origin and must not treat it as ingress.
+   */
+  listenHttp?(port: number, handler: HttpHandler, owner?: SecurityContext): { port: number; close(): void };
 }
 
 export interface ApplicationRuntimeOptions {
@@ -103,6 +112,13 @@ export interface ApplicationRuntimeOptions {
   processes?: AttributedProcesses;
   /** Override `runtime.portPolicy`. */
   portPolicy?: ApplicationPortPolicy;
+  /**
+   * Host-held session relay (contract §6). Browser-only. The runtime registers
+   * the page AI gateway and passes `aiEndpoint` into `serviceEnv`. Clients
+   * supply the relay; they do not open a port or inject env. Absent: no
+   * `AI_BASE_URL` is set (the process cannot reach a model host on its own).
+   */
+  hostRelay?: HostRelay;
   /** Default readiness timeout, when a service's readiness sets none. Default 120000ms. */
   readinessTimeoutMs?: number;
   /** How long a stopping service gets after `SIGTERM` before `SIGKILL`. Default 5000ms. */
