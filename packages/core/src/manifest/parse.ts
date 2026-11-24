@@ -9,7 +9,7 @@ import { manifestIssue, type ManifestIssue } from './issues.js';
 import { isRecord } from './overrides.js';
 import { usableWorkspacePaths } from './paths.js';
 import type { AppManifest } from './types.js';
-import { validateManifest } from './validate.js';
+import { validateManifest, type ValidateManifestOptions } from './validate.js';
 
 export interface ManifestParseResult {
   /** The v1 manifest, also when it has validation issues; null when the file is unreadable, legacy or another version. */
@@ -19,7 +19,7 @@ export interface ManifestParseResult {
   issues: ManifestIssue[];
 }
 
-export function parseManifest(text: string): ManifestParseResult {
+export function parseManifest(text: string, options: ValidateManifestOptions = {}): ManifestParseResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text.replace(/^﻿/, ''));
@@ -29,7 +29,7 @@ export function parseManifest(text: string): ManifestParseResult {
   if (!isRecord(parsed)) return { manifest: null, issues: [manifestIssue('not-an-object', '')] };
   if (parsed.version === undefined) return { manifest: null, legacy: parsed, issues: [manifestIssue('legacy-format', 'version', { severity: 'info' })] };
   if (parsed.version !== 1) return { manifest: null, issues: [manifestIssue('unsupported-version', 'version', { value: JSON.stringify(parsed.version) })] };
-  const issues = validateManifest(parsed as unknown as AppManifest);
+  const issues = validateManifest(parsed as unknown as AppManifest, options);
   // A bad `paths` override is reported (above) and left out, so every reader gets the default for it.
   if (parsed.paths === undefined) return { manifest: parsed as unknown as AppManifest, issues };
   const { paths: given, ...rest } = parsed;

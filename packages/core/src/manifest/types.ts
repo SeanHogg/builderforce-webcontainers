@@ -207,6 +207,46 @@ interface JobBase {
 export type JobSpec = JobBase & ({ run: JobRun; invoke?: never } | { invoke: JobInvoke; run?: never });
 
 // ---------------------------------------------------------------------------
+// Agents (the `agents` capability)
+// ---------------------------------------------------------------------------
+
+/** What starts an agent run: by hand, on a five-field cron (same reader as `jobs`), or on a service event. */
+export type AgentTrigger = { manual: true } | { cron: string; timezone?: string } | { service: string; event: string };
+
+/** Spend limits of one agent run. Each a positive number. */
+export interface AgentBudget {
+  tokens?: number;
+  usd?: number;
+  steps?: number;
+}
+
+/** An autonomous agent, declared by role. */
+export interface AgentDeclaration {
+  /** A role or workload key the host's router resolves; never a model id. Exactly one. */
+  role?: string;
+  workload?: string;
+  /** Project-relative path to the agent's instructions. */
+  instructions?: string;
+  skills?: string[];
+  /** Tool catalog keys (`env.fs.read`, …); catalog membership is checked by the host at start. */
+  tools?: string[];
+  /** Memory namespace, id-shaped. */
+  memory?: string;
+  /** Default: `[{ manual: true }]`. */
+  triggers?: AgentTrigger[];
+  budget?: AgentBudget;
+}
+
+/** `capabilities.agents`: the environment's ceilings. A declaration above one is `policy-widening`. */
+export interface AgentsPolicy {
+  maxAgents?: number;
+  maxDepth?: number;
+  maxChildren?: number;
+  tools?: string[];
+  budget?: AgentBudget;
+}
+
+// ---------------------------------------------------------------------------
 // Ingress and environments
 // ---------------------------------------------------------------------------
 
@@ -261,6 +301,10 @@ export interface AppManifest {
    * `.builderforce/logs`, `.builderforce/diagnostics`.
    */
   paths?: import('./paths.js').ManifestPaths;
+  /** Enabled capabilities by id, each with its config (`{ agents?: AgentsPolicy }` for the built-in entry). */
+  capabilities?: Record<string, unknown>;
+  /** Autonomous agents by id; needs `capabilities.agents`. */
+  agents?: Record<string, AgentDeclaration>;
 }
 
 /** The environments a manifest that declares none has. */

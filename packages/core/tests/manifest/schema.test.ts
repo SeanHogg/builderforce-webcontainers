@@ -1,6 +1,7 @@
 /** The published schema accepts the design's example and refuses the obvious mistakes (a tiny structural checker, no new deps). */
 import { describe, expect, it } from 'vitest';
 import { APP_MANIFEST_SCHEMA_URL, APP_MANIFEST_SCHEMA_V1 } from '../../src/manifest/index.js';
+import { agentsManifest } from './agentFixtures.js';
 import { DESIGN_EXAMPLE_JSON } from './fixtures.js';
 
 type Schema = Record<string, any>;
@@ -75,5 +76,16 @@ describe('APP_MANIFEST_SCHEMA_V1', () => {
     expect(withChange((m) => (m.environments.prod.debug = true))).not.toEqual([]);
     expect(withChange((m) => (m.environments.local.target = 'heroku'))).not.toEqual([]);
     expect(withChange((m) => delete m.services.web.command)).not.toEqual([]);
+  });
+
+  it('accepts agents declared by role and refuses a model key or an unknown trigger', () => {
+    const withChange = (edit: (m: any) => void) => {
+      const manifest = JSON.parse(JSON.stringify(agentsManifest()));
+      edit(manifest);
+      return check(root, manifest);
+    };
+    expect(withChange(() => {})).toEqual([]);
+    expect(withChange((m) => (m.agents.coordinator.model = 'gpt-4o'))).not.toEqual([]);
+    expect(withChange((m) => (m.agents.coordinator.triggers = [{ webhook: '/x' }]))).not.toEqual([]);
   });
 });

@@ -9,6 +9,10 @@ export { APP_MANIFEST_SCHEMA_URL, DEFAULT_ENVIRONMENTS, ENVIRONMENT_TIERS, HTTP_
 export { PATH_ISSUE_DETAIL, usableWorkspacePaths, validateWorkspacePath, WORKSPACE_PATH_KEYS } from './paths.js';
 export type { ManifestPaths, PathIssue, PathIssueCode, WorkspacePathKey } from './paths.js';
 export type {
+  AgentBudget,
+  AgentDeclaration,
+  AgentsPolicy,
+  AgentTrigger,
   AppManifest,
   Availability,
   ConnectionResource,
@@ -48,6 +52,7 @@ export type { ManifestIssue, ManifestIssueCode, ManifestIssueSeverity } from './
 export { parseManifest } from './parse.js';
 export type { ManifestParseResult } from './parse.js';
 export { validateManifest } from './validate.js';
+export type { ValidateManifestOptions } from './validate.js';
 export { parseCron, nextFire, isValidTimeZone } from './cron.js';
 export type { CronParseResult, CronSchedule } from './cron.js';
 export { parseDuration } from './duration.js';
@@ -60,3 +65,4 @@ export type { EnvironmentResolution } from './overrides.js';
 export { toApplicationSpec, toReadinessSpec } from './toApplicationSpec.js';
 export type { DeclinedResource, ManifestSpecResult, ToApplicationSpecOptions } from './toApplicationSpec.js';
 export { APP_MANIFEST_SCHEMA_V1 } from './schema.js';
+export * from '../capabilities/index.js';

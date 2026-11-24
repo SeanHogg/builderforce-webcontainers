@@ -87,3 +87,4 @@ export { createVfsWasi } from './node/wasi/vfsWasi.js';
 export type { VfsWasiOptions } from './node/wasi/vfsWasi.js';
 export * from './installer/index.js';
 export * from './system/index.js';
+export * from './capabilities/index.js';

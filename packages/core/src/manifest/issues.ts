@@ -55,8 +55,22 @@ export type ManifestIssueCode =
   | 'shell-command-with-args'
   /** An unquoted backslash before an ordinary character, which the shell drops (`C:\app\x.js` reads `C:appx.js`). A warning. `value` is the line. */
   | 'command-backslash'
-  /** A `paths.*` override is empty, absolute or climbs out with `..`. A warning: the default under `.builderforce/` is used. `value` is the path; `detail` says why. */
+  /** A `paths.*` override (a warning: the default under `.builderforce/` is used) or an agent's `instructions` (an error) is empty, absolute or climbs out with `..`. `value` is the path; `detail` says why. */
   | 'invalid-path'
+  /** `capabilities.<id>` names no capability this environment registers. `value` is the id. */
+  | 'unknown-capability'
+  /** An enabled capability depends on one the manifest does not enable. `value` is the missing id. */
+  | 'capability-missing-dependency'
+  /** Enabled capabilities depend on each other in a loop. `detail` is the cycle. */
+  | 'capability-dependency-cycle'
+  /** `agents` are declared without `capabilities.agents`. `value` is the capability id. */
+  | 'capability-not-enabled'
+  /** A warning: an environment's target lacks a resource type an enabled capability requires. `value` is the capability id; `detail` the target's reason. */
+  | 'capability-unsupported-target'
+  /** An agent names a model (a `model`/`provider` key, or a role shaped like a model id) instead of a role. `value` is the key or value. */
+  | 'agent-model-id'
+  /** A declaration goes above a `capabilities.agents` ceiling; refused, never clamped. `value` is the field; `detail` the ceiling. */
+  | 'policy-widening'
   /** The produced `ApplicationSpec` failed `validateSpec`. `spec` holds the issue. */
   | 'spec';
 
@@ -158,7 +172,21 @@ export function describeManifestIssue(issue: ManifestIssue): string {
     case 'command-backslash':
       return `${at} has command "${issue.value ?? '?'}" with a backslash the shell drops (a backslash escapes the next character). Use forward slashes in paths, or quote the word.`;
     case 'invalid-path':
-      return `${at} is "${issue.value ?? ''}", which is not a project-relative path inside the project; the default is used.${detail}`;
+      return `${at} is "${issue.value ?? ''}", which is not a project-relative path inside the project${issue.severity === 'warning' ? '; the default is used' : ''}.${detail}`;
+    case 'unknown-capability':
+      return `${at} enables capability "${issue.value ?? '?'}", which this environment does not offer.`;
+    case 'capability-missing-dependency':
+      return `${at} needs capability "${issue.value ?? '?'}"; enable it in "capabilities" too.`;
+    case 'capability-dependency-cycle':
+      return `${at}: the enabled capabilities depend on each other in a loop.${detail}`;
+    case 'capability-not-enabled':
+      return `${at} declares agents, but capability "${issue.value ?? '?'}" is not enabled; add it to "capabilities".`;
+    case 'capability-unsupported-target':
+      return `${at} cannot host capability "${issue.value ?? '?'}" on its target.${detail}`;
+    case 'agent-model-id':
+      return `${at} names a model ("${issue.value ?? '?'}"); an agent declares a role or workload and the platform router picks the model.`;
+    case 'policy-widening':
+      return `${at} goes above the environment's "${issue.value ?? '?'}" ceiling; a declaration may only narrow it.${detail}`;
     case 'spec':
       return issue.spec ? describeIssue(issue.spec) : `The application spec is invalid.${detail}`;
   }

@@ -5,12 +5,13 @@
  * produced `ApplicationSpec` can tell (readiness that needs a port, dependency
  * cycles) is left to `validateSpec`, which `toApplicationSpec` runs.
  */
-import { SERVICE_ID } from '../app/validateSpec.js';
+import { BUILTIN_CAPABILITIES } from '../capabilities/agents.js';
+import type { CapabilityRegistry } from '../capabilities/registry.js';
+import { validateAgents, validateCapabilities } from './agents.js';
 import { isResourceType } from './capabilities.js';
-import { isValidTimeZone, parseCron } from './cron.js';
-import { parseDuration } from './duration.js';
+import { checkDuration, checkEnum, checkIds, checkSchedule, checkTimeZone, checkType, isNonEmptyString, required, section, stringArray, type Issues } from './checks.js';
 import { manifestIssue, type ManifestIssue } from './issues.js';
-import { environmentsOf, hasOwnKey, isRecord, isSafeKey, overrideIssues } from './overrides.js';
+import { environmentsOf, hasOwnKey, isRecord, overrideIssues } from './overrides.js';
 import { PATH_ISSUE_DETAIL, validateWorkspacePath, WORKSPACE_PATH_KEYS } from './paths.js';
 import { commandLineIssues } from './serviceCommand.js';
 import { ENVIRONMENT_TIERS, HTTP_METHODS, MANIFEST_TARGETS, type AppManifest } from './types.js';
@@ -24,54 +25,6 @@ const AVAILABILITIES = ['session', 'always-on'];
 const SCALE_METRICS = ['concurrency', 'cpu', 'requests'];
 const CONCURRENCIES = ['allow', 'forbid', 'replace'];
 const MISSED = ['skip', 'run-once'];
-
-type Issues = ManifestIssue[];
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-/** A record section, or an issue when it is present but not an object. */
-function section(value: unknown, path: string, issues: Issues): Record<string, unknown> {
-  if (value === undefined) return {};
-  if (isRecord(value)) return value;
-  issues.push(manifestIssue('invalid-value', path, { detail: 'Expected an object keyed by id.' }));
-  return {};
-}
-
-function checkEnum(value: unknown, allowed: readonly string[], path: string, issues: Issues): void {
-  if (value !== undefined && !(typeof value === 'string' && allowed.includes(value))) {
-    issues.push(manifestIssue('invalid-value', path, { value: String(value), detail: `Use one of: ${allowed.join(', ')}.` }));
-  }
-}
-
-function checkType(value: unknown, type: 'string' | 'boolean' | 'number', path: string, issues: Issues): void {
-  if (value !== undefined && typeof value !== type) issues.push(manifestIssue('invalid-value', path, { value: String(value), detail: `Expected a ${type}.` }));
-}
-
-function stringArray(value: unknown, path: string, issues: Issues): string[] {
-  if (value === undefined) return [];
-  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return value;
-  issues.push(manifestIssue('invalid-value', path, { detail: 'Expected a list of strings.' }));
-  return [];
-}
-
-/** The field's value, or undefined (and a `missing-field` issue) when it is absent or empty. */
-function required(entry: Record<string, unknown>, field: string, path: string, issues: Issues): unknown {
-  const value = entry[field];
-  if (value !== undefined && value !== null && value !== '') return value;
-  issues.push(manifestIssue('missing-field', path, { value: field }));
-  return undefined;
-}
-
-function checkDuration(value: unknown, path: string, issues: Issues): void {
-  if (value !== undefined && (typeof value !== 'string' || parseDuration(value) === undefined)) issues.push(manifestIssue('invalid-duration', path, { value: String(value) }));
-}
-
-function checkIds(entries: Record<string, unknown>, sectionName: string, issues: Issues): void {
-  // A prototype key (`constructor`, `prototype`) is never an id: no manifest walker copies one.
-  for (const id of Object.keys(entries)) if (!SERVICE_ID.test(id) || !isSafeKey(id)) issues.push(manifestIssue('invalid-id', `${sectionName}.${id}`, { value: id }));
-}
 
 function validateResources(resources: Record<string, unknown>, issues: Issues): void {
   for (const [id, entry] of Object.entries(resources)) {
@@ -199,11 +152,8 @@ function validateJobs(jobs: Record<string, unknown>, services: Record<string, un
       continue;
     }
     const schedule = required(entry, 'schedule', path, issues);
-    if (schedule !== undefined) {
-      const parsed = typeof schedule === 'string' ? parseCron(schedule) : { ok: false as const, reason: 'Expected a string.' };
-      if (!parsed.ok) issues.push(manifestIssue('invalid-schedule', `${path}.schedule`, { value: String(schedule), detail: parsed.reason }));
-    }
-    if (entry.timezone !== undefined && !(typeof entry.timezone === 'string' && isValidTimeZone(entry.timezone))) issues.push(manifestIssue('invalid-timezone', `${path}.timezone`, { value: String(entry.timezone) }));
+    if (schedule !== undefined) checkSchedule(schedule, `${path}.schedule`, issues);
+    checkTimeZone(entry.timezone, `${path}.timezone`, issues);
     if (entry.run !== undefined && entry.invoke !== undefined) issues.push(manifestIssue('invalid-value', path, { detail: 'A job either runs a command or invokes an endpoint, not both.' }));
     else if (entry.run === undefined && entry.invoke === undefined) issues.push(manifestIssue('missing-field', path, { value: 'run' }));
     const action = entry.run ?? entry.invoke;
@@ -283,8 +233,13 @@ function validatePaths(paths: unknown, issues: Issues): void {
   }
 }
 
+export interface ValidateManifestOptions {
+  /** The capabilities this environment offers. Default `BUILTIN_CAPABILITIES` (`agents`). */
+  capabilities?: CapabilityRegistry;
+}
+
 /** Every issue in the manifest; empty when it is valid. */
-export function validateManifest(manifest: AppManifest): ManifestIssue[] {
+export function validateManifest(manifest: AppManifest, options: ValidateManifestOptions = {}): ManifestIssue[] {
   const issues: Issues = [];
   const raw = manifest as unknown as Record<string, unknown>;
   if (raw.version !== 1) issues.push(manifestIssue('unsupported-version', 'version', { value: String(raw.version) }));
@@ -302,5 +257,7 @@ export function validateManifest(manifest: AppManifest): ManifestIssue[] {
   validateIngress(raw.ingress, services, issues);
   validateEnvironments(manifest, issues);
   validatePaths(raw.paths, issues);
+  validateCapabilities(manifest, options.capabilities ?? BUILTIN_CAPABILITIES, issues);
+  validateAgents(manifest, services, issues);
   return issues;
 }

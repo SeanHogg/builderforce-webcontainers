@@ -3,6 +3,7 @@
  * external tooling. It matches `types.ts`; `validateManifest` is still the
  * authority (references between entries, cron, tiers are beyond a schema).
  */
+import { AGENT_BUDGET_SCHEMA, AGENT_ROLE_PATTERN, AGENTS_CAPABILITY, TOOL_LIST_SCHEMA } from '../capabilities/agents.js';
 import { APP_MANIFEST_SCHEMA_URL, ENVIRONMENT_TIERS, HTTP_METHODS, MANIFEST_TARGETS } from './types.js';
 
 export { APP_MANIFEST_SCHEMA_URL };
@@ -13,6 +14,8 @@ const ref = (name: string) => ({ $ref: `#/$defs/${name}` });
 const keyedBy = (name: string) => ({ type: 'object', propertyNames: { pattern: ID_PATTERN }, additionalProperties: ref(name) });
 const stringList = { type: 'array', items: { type: 'string' } };
 const availability = { enum: ['session', 'always-on'] };
+const ROLE_SCHEMA = { type: 'string', pattern: AGENT_ROLE_PATTERN.source };
+const strictObject = (properties: Record<string, unknown>, required: string[]) => ({ type: 'object', properties, required, additionalProperties: false });
 
 const resource = (type: string, properties: Record<string, unknown> = {}, required: string[] = []) => ({
   type: 'object',
@@ -43,11 +46,38 @@ export const APP_MANIFEST_SCHEMA_V1 = {
     ingress: ref('ingress'),
     environments: { type: 'object', additionalProperties: ref('environment') },
     paths: ref('paths'),
+    // Open: a third-party capability brings its own config; the built-in one is described.
+    capabilities: { type: 'object', properties: { [AGENTS_CAPABILITY.id]: AGENTS_CAPABILITY.configSchema } },
+    agents: keyedBy('agent'),
   },
   required: ['version'],
   additionalProperties: false,
   $defs: {
     duration: { type: 'string', pattern: DURATION_PATTERN },
+    budget: AGENT_BUDGET_SCHEMA,
+    trigger: {
+      oneOf: [
+        strictObject({ manual: { const: true } }, ['manual']),
+        strictObject({ cron: { type: 'string', minLength: 1 }, timezone: { type: 'string' } }, ['cron']),
+        strictObject({ service: { type: 'string' }, event: { type: 'string', minLength: 1 } }, ['service', 'event']),
+      ],
+    },
+    agent: {
+      type: 'object',
+      properties: {
+        role: ROLE_SCHEMA,
+        workload: ROLE_SCHEMA,
+        instructions: { type: 'string', description: 'Project-relative. No absolute path, no .. segment.' },
+        skills: stringList,
+        tools: TOOL_LIST_SCHEMA,
+        memory: { type: 'string', pattern: ID_PATTERN },
+        triggers: { type: 'array', items: ref('trigger') },
+        budget: ref('budget'),
+      },
+      // A role or a workload; a `model` key is not a property, so it is refused.
+      oneOf: [{ required: ['role'] }, { required: ['workload'] }],
+      additionalProperties: false,
+    },
     resource: {
       oneOf: [
         resource('postgres', { persistent: { type: 'boolean' }, extensions: stringList, name: { type: 'string' } }),
