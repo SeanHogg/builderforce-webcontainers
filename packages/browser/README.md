@@ -48,7 +48,7 @@ shell line, the local launcher page has a "Copy diagnostics" button (labels
 `copyDiagnostics`, `copyDiagnosticsDone`, `copyDiagnosticsFailed`), and
 credential redaction (`scrubString` and the diagnostics report) catches `*_TOKEN=`, `*_PASSWORD=`, JSON keys and
 `Authorization` headers of any scheme. See
-[What's new in 2026.11.9](../../README.md#whats-new-in-2026119).
+[What's new in 2026.11.9](../../CHANGELOG.md#whats-new-in-2026119).
 
 ### Preview origin headers
 

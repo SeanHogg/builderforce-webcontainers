@@ -1,165 +1,122 @@
 # BuilderForce WebContainers
 
-> Part of [Builderforce open source](https://builderforce.ai/open-source): the MIT projects Builderforce.ai is built on.
+**Run apps, servers, and autonomous AI agents entirely in the browser. MIT, no COOP/COEP, no session cap.**
 
-An open, forkable in-browser dev runtime. Hand it a project as files; it serves a
-live preview in an iframe, with TypeScript, JSX, CSS, JSON and npm packages working
-like they do under Vite, all running in the user's browser.
+[![npm: builderforce-webcontainers](https://img.shields.io/npm/v/@seanhogg/builderforce-webcontainers?label=%40seanhogg%2Fbuilderforce-webcontainers)](https://www.npmjs.com/package/@seanhogg/builderforce-webcontainers)
+[![npm: builderforce-webcontainers-core](https://img.shields.io/npm/v/@seanhogg/builderforce-webcontainers-core?label=%40seanhogg%2Fbuilderforce-webcontainers-core)](https://www.npmjs.com/package/@seanhogg/builderforce-webcontainers-core)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/SeanHogg/builderforce-webcontainers?style=social)](https://github.com/SeanHogg/builderforce-webcontainers)
 
-It is the runtime behind [BuilderForce.ai](https://builderforce.ai)'s canvas
-previews, built to be forked.
+> Part of [Builderforce open source](https://builderforce.ai/open-source): the MIT projects Builderforce.ai is built on. · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md)
+
+Hand it a project as files. It serves a live preview in an iframe, with
+TypeScript, JSX, CSS, JSON and npm packages working as they do under Vite. It runs
+Node programs and servers too, and now the AI agents that work on the project, all
+in the user's browser tab. It is the runtime behind [BuilderForce.ai](https://builderforce.ai)'s
+canvas previews, and it is built to be forked.
 
 | Package | What it is |
 |---|---|
 | [`@seanhogg/builderforce-webcontainers-core`](packages/core) | The dev server, runtime-agnostic and testable in Node: virtual file system, module resolution, import rewriting, CSS/JSON/asset modules, project detection |
 | [`@seanhogg/builderforce-webcontainers`](packages/browser) | The browser runtime: boots the dev server in a page and serves it to an iframe through a service worker. Compiles with esbuild-wasm. |
 
-## Why another one
+## Why teams pick it
 
-| | BuilderForce WebContainers | StackBlitz WebContainers |
-|---|---|---|
-| Licence | MIT. Fork it, ship it, sell it. A small badge is on by default; `attribution: false` switches it off ([Attribution](#attribution)). | Proprietary. Free tier non-commercial, attribution required. |
-| Session cap | None | 25,000 API sessions/month on the free tier |
-| Cross-origin isolation (COOP/COEP) | **Not required**: embeds and third-party scripts keep working | Required |
-| Compiler / package source | Pluggable ports: swap esbuild for SWC, esm.sh for your own mirror | Fixed |
-| Errors | Uncaught errors in the preview are posted to the host page | — |
-| Load diagnostics | `runtime.diagnostics()`: phase timings, package CDN and per-origin requests, slowest origins, cold/warm cache, and what could not be measured ([Diagnostics](packages/browser/README.md#diagnostics)) | — |
-| Blocked-request reports | `runtime.onCspViolation(listener)`: the directive and origin the preview's CSP blocked, no paths ([Preview origin headers](packages/browser/README.md#preview-origin-headers)) | — |
-| Production build, type-check | In the browser: `runtime.build()`, `createChecker()` | Via `npm run build` / `tsc` in the container |
-| Node.js programs and servers, `npm install`, shell | Yes: one Web Worker per process, still no COOP/COEP (limits in [ROADMAP](ROADMAP.md)) | Yes |
+- **Free for commercial use, with no session cap.** MIT: fork it, ship it, sell it. There is no monthly API-session quota to plan around.
+- **Your embeds keep working.** No cross-origin isolation (COOP/COEP) is required, so third-party scripts and embeds keep working.
+- **Agents with MCP tools, in a sandbox.** Declare agents by role and give each one an allowlist of tools, and they run inside the environment. A tool off the list is refused with a typed error.
+- **A full stack in a tab.** Node, `npm install` from the real registry, a shell, Python, PHP, .NET and Postgres all run in the page.
+- **Ship-ready output in the page.** `runtime.build()` produces a production build and `createChecker()` type-checks, with no server round-trip.
+- **Secure by default.** The Security Shield refuses unsafe preview setups before they boot, and relay mode isolates untrusted code on its own origin.
 
-It runs **frontend apps** (Vite with React, Vue or Svelte, Create React App,
-static sites), which it previews, builds for deployment and type-checks; and
-**Node programs**: `npm install` from the real registry, Node scripts and
-Express-style servers, and an interactive shell for a terminal. Framework dev
-servers run as the real thing: `next dev` serves a Next.js app from its own
-process, with Next's WebAssembly compiler (`@next/swc-wasm-nodejs`) standing in
-for the native one, and `vite dev` runs SvelteKit on real Vite. Installs swap native-only build tools for their WebAssembly
-twins (`esbuild` → `esbuild-wasm`, `rollup` → `@rollup/wasm-node`, napi-rs
-`-wasm32-wasip1` builds first, over `node:wasi`, then `-wasm32-wasi`). Nuxt does
-not run yet: Nuxt 3's parser has only a threaded WebAssembly build, which needs
-cross-origin isolation, and Nuxt 4 stalls during start-up (see the
-[ROADMAP](ROADMAP.md)). The roadmap is how it closes the rest of the gap.
+## New in 2026.11.24: autonomous agents inside the environment
 
-## What's new in 2026.11.11
+Agents no longer work on your app from the outside. Declare them in the
+project's `.builderforce/builderforce.json`, and they run inside the environment,
+next to the code, processes and services they work on.
 
-- **The manifest location is checked.** The launcher page now shows a notice
-  when it reads a root `builderforce.json` or `bfwc.app.json` from an older
-  version: move it to `.builderforce/builderforce.json` (`/manifest move`). A
-  manifest whose real path leaves the project, such as a `.builderforce` linked
-  elsewhere, is refused and never read, and the launch stops with that reason
-  (not "run /manifest init", which would write through the same link). Reads
-  go through the same contained reader as the project file API, capped at
-  1 MiB. A `.builderforce` that is a file, or a
-  manifest path that is a directory, counts as missing instead of failing the
-  launch. A manifest that is there but cannot be read (no permission, over
-  1 MiB) stops the launch with the reason; a stale root file is never read in
-  its place. Three new overridable labels: `legacyManifestLocation`,
-  `manifestOutsideProject` and `manifestUnreadable`.
-- **`paths` are validated.** An empty or absolute `paths.logs`,
-  `paths.diagnostics` or `paths.methodology`, a `..` segment, or an unknown key
-  is an `invalid-path` (or `invalid-value`) warning. `parseManifest` leaves it
-  out, so the default under `.builderforce/` applies.
-- **The launcher names the project after its directory.** With the manifest in
-  `.builderforce/` and no `name`, the header showed ".builderforce".
-  `LaunchInfo.projectDir` now carries the project directory.
-- **Links from outside the browser open a preview root only.** A link in mail
-  or chat (`Sec-Fetch-Site: none`) opens `/__bfwc/<id>/` or
-  `/__bfwc/<id>/__port/<n>/` through `/preview`. A deeper path, a query or a
-  fragment gets a 404 or a 403, so a link cannot drive a request into the
-  running app.
-  The launcher's own "Open in new tab" is unchanged.
-- **Eval-free export names.** String-literal export names
-  (`export { x as "a-b" }`) are decoded without `eval`, like import specifiers
-  in 2026.11.10.
+- **Declared by role, never by model.** Each entry under `agents` names a `role`
+  (or a `workload`). The host's model router picks the model, so a declaration
+  that names a model id is refused (`agent-model-id`).
+- **Policies only narrow.** `capabilities.agents` sets the environment's ceilings
+  (`maxAgents`, `maxDepth`, `maxChildren`, `tools`, `budget`). A declaration
+  above a ceiling is refused, never quietly clamped.
+- **Allowlisted tools.** An agent gets the MCP tools from your catalog that are
+  on its allowlist, plus the environment's own `env.*` tools
+  (`env.fs.read|write|list`, `env.run`, `env.preview.fetch`,
+  `env.services.status`) through one `EnvironmentToolPort`. Paths stay inside the
+  project, and a fetch reaches only the environment's own services. Every
+  refusal is typed and reported to the Shield.
+- **Hosted through one port.** `AgentHostPort` (`start`, `steer`, `cancel`,
+  `events`) connects the runtime to the agent loop you run. The
+  `runtime.agents.*` tools (`createRuntimeAgents`) list, start, steer and cancel
+  runs, and report their status.
+- **Triggers.** Runs start manually, on a cron schedule with a time zone, or on
+  a service event. `createJobScheduler` fires them under the runtime lease, so
+  two tabs never both fire.
+- **Checkpoint, resume, no repeats.** Mutating calls carry an idempotency key.
+  After a crash, `createEnvironmentRecovery` restores files, database rows and
+  services. A run then continues from its next step without repeating a side
+  effect.
+- **An environment inside an environment.** `createChildRuntimes` starts child
+  runtimes that inherit the parent's limits and can only narrow them. A child's
+  failure does not fail its parent.
 
-## What's new in 2026.11.10
+```json
+{
+  "capabilities": {
+    "agents": {
+      "maxAgents": 3,
+      "tools": ["env.fs.read", "env.fs.write", "env.run", "env.services.status"],
+      "budget": { "tokens": 200000 }
+    }
+  },
+  "agents": {
+    "coordinator": { "role": "coordinator", "triggers": [{ "manual": true }] },
+    "developer": {
+      "role": "developer",
+      "instructions": "agents/developer.md",
+      "tools": ["env.fs.read", "env.fs.write", "env.run"],
+      "triggers": [{ "cron": "0 3 * * *", "timezone": "UTC" }],
+      "budget": { "tokens": 100000 }
+    },
+    "tester": {
+      "workload": "test",
+      "memory": "tests",
+      "tools": ["env.services.status"],
+      "triggers": [{ "service": "api", "event": "deployed" }]
+    }
+  }
+}
+```
 
-- **Launcher previews render.** A React app run by `bfwc-launch` showed an
-  empty frame with only the badge: the dev server sent its modules with bare
-  imports (`react`, `react/jsx-runtime`) left in, and the browser refused them.
-  es-module-lexer decodes each import specifier with `eval`, which the launcher
-  page's CSP forbids, so every specifier came back empty and none was rewritten.
-  Specifiers are now decoded without `eval`, so imports
-  are rewritten to the package CDN under any CSP. The CSP itself is unchanged.
-- **"Open in new tab" works.** A preview opened in its own tab (the launcher's
-  link, or the `Local:` URL Vite prints) answered "Not found.". Preview origins
-  are a different site from the launcher page, so the relay's service worker
-  lives in the launcher page's storage partition, and a top-level tab on a
-  preview origin has none. The preview origin now redirects such a tab to the
-  launcher page's new `/preview?src=<url>`, which frames the preview full size
-  under the same partition, served by the running launcher tab. The page runs
-  no script, holds no token, and frames only this launcher's preview origins.
-  Only the user can open it, never another site: the redirect happens only for
-  a tab the user opened (`Sec-Fetch-Site: none`) and carries a 60-second ticket
-  signed for that one URL, and `/preview` otherwise answers only the launcher
-  page's own link.
-  A framed preview that loads before its service worker is active gets a small
-  bootstrap page (one hash-pinned script) that reloads once the worker is
-  active, or says the preview is not running. Three new overridable labels:
-  `previewStarting`, `previewNotRunning` and `previewInvalid`.
-- **The manifest lives in `.builderforce/`.** `.builderforce/builderforce.json`
-  is the canonical manifest (`./manifest` exports `locateManifest` and
-  `manifestWritePath`; `bfwc-launch` reads it there). A root `builderforce.json`
-  or `bfwc.app.json` is a deprecated fallback: still read, never written. The
-  manifest gains `paths` (`logs`, `diagnostics`, `methodology`), each
-  project-relative inside the project, defaulting under `.builderforce/`.
+*(This is the `agents` part of the core test fixture `packages/core/tests/manifest/agentFixtures.ts`.)*
 
-## What's new in 2026.11.9
+```mermaid
+flowchart LR
+  T["Trigger<br/>manual · cron · service event"] --> A["Agent<br/>declared by role"]
+  A --> G{"On the allowlist?"}
+  G -- "no" --> R["Typed refusal<br/>+ Shield event"]
+  G -- "MCP tool" --> M["Your MCP catalog"]
+  G -- "env.* tool" --> E["EnvironmentToolPort"]
+  E --> ENV["Environment<br/>files · processes · services"]
+  ENV --> C["Child runtime<br/>narrower limits"]
+```
 
-- **A manifest `command` is a command line.** `npm install`, `npm run dev` and
-  `uvicorn main:app --host 0.0.0.0` are split into the program and its
-  arguments, ahead of any `args`. Before, the whole line was taken as one
-  program name and the service exited 127 ("command not found"). Quotes group
-  words (`"/path with space/node" server.js`). A job's `run.command` is read
-  the same way.
-- **Shell lines.** A line that needs a shell (`&&`, `|`, redirects,
-  `FOO=1 cmd`, `$VAR`) runs as `bfsh -c <line>` for a node service on the
-  browser target. Anywhere else it is a typed issue, not a mangled command.
-- **New manifest issue codes.** `shell-command-unsupported` (the line needs a
-  shell its runtime or target does not have), `shell-command-with-args` (a
-  shell line cannot also take `args`; put the whole line in `command`) and
-  `command-backslash` (a warning: an unquoted `\` the shell drops, so use
-  forward slashes in paths). An unterminated quote is an `invalid-value`.
-- **The node decline list sees inside shell lines.** `cd infra && docker compose up`,
-  `sh -c '…'`, `bash -e -c '…'` and command substitutions are unwrapped, so a
-  declined program (Docker, `wrangler dev`) is declined wherever it appears.
-- **"Copy diagnostics" on the launcher page.** One button copies a report of
-  the launch: header, status, services, problems and every buffered log line,
-  with credentials redacted. Its text comes from three new overridable labels:
-  `copyDiagnostics`, `copyDiagnosticsDone` and `copyDiagnosticsFailed`.
-- **Broader credential redaction.** The shield's `scrubCredentials`, which
-  scrubs security event evidence (`scrubString`) and the copied diagnostics
-  report, now catches any key ending in a secret word (`GITHUB_TOKEN=`,
-  `DB_PASSWORD=`, `OPENAI_API_KEY:`), quoted JSON keys
-  (`"token":"…"`), and `Authorization` headers of any scheme.
-- **Diagnostics.** `runtime.diagnostics()` returns one load report: phase
-  timings (runtime start, service worker ready, compiler load, preview first
-  paint), package CDN request count, total time and errors, requests per
-  origin, the slowest requests (origin only, never a URL), recent CSP
-  violations, a cold or warm cache, and `unavailable` for what could not be
-  measured. See [Diagnostics](packages/browser/README.md#diagnostics).
-- **CSP violations on the host page.** `runtime.onCspViolation(listener)`
-  reports which origin the preview's policy blocked and under which directive.
-  Paths are never forwarded; reports are deduplicated and capped. See
-  [Preview origin headers](packages/browser/README.md#preview-origin-headers).
-- **Report-only previews for migrations.** `previewCspMode: 'report-only'`
-  reports violations without blocking. It turns the protection off, so your
-  `sw.js` gate must allow it deliberately (Builderforce never does).
-- **A custom package CDN joins the preview CSP.** A `cdn` factory declares
-  `origins` and the runtime adds them to the preview egress;
-  `createEsmShCdnFactory({ origin })` does this for an esm.sh mirror. A custom
-  CDN with no `origins` logs one warning instead of producing a blank page.
-  See [Since 2026.11.9](#since-2026119).
-- **Laravel's `php artisan serve` runs.** A Vite frontend, a Laravel API and
-  Postgres start end to end as one application, and a setup step's output
-  (`composer install`, `npm install`) ends with its last line before a service
-  changes state. See
-  [Example: a Vite front end, a Laravel API and Postgres](packages/browser/README.md#example-a-vite-front-end-a-laravel-api-and-postgres).
-- **Hosting.** The .NET runtime bundle installs from npm as
-  `@seanhogg/builderforce-webcontainers-dotnet` ([.NET](packages/browser/README.md#net)),
-  and [Assets fetched at runtime](#assets-fetched-at-runtime) lists every
-  origin the runtime downloads from, for strict-CSP and offline hosts.
+Import these from three subpaths. `@seanhogg/builderforce-webcontainers/agents`
+has the tool port, the `runtime.agents.*` tools, `createAgentsCapability` and
+`createChildRuntimes`. `/app` has `createJobScheduler`, and `/recovery` has
+`createEnvironmentRecovery`. Preview-only apps never load any of it.
+
+## Use cases
+
+| Who | What they build on it |
+|---|---|
+| AI app builders | A live, editable preview of the app the model is generating, with its backend running beside it |
+| Coding-agent sandboxes | Agents that edit files, run the tests and check services inside a scoped environment, with typed refusals for anything off their allowlist |
+| Interactive docs and tutorials | Runnable examples that install real npm packages and start real servers, with nothing to host |
+| Internal-tool platforms | A full-stack app (frontend, API and Postgres) that starts in the user's tab |
+| Education | A whole class running Node, Python or PHP projects in the browser, with no machines to provision |
 
 ## Quick start
 
@@ -190,102 +147,39 @@ Shield refuses to boot a preview on your page's own origin otherwise
 (`PreviewShieldError`, reason `ingress.same_origin_refused`). For anything but
 code your own user wrote, use [relay mode](#isolating-the-preview-relay-mode).
 
-### Upgrading to 2026.11.5
 
-2026.11.5 added the Security Shield. If you upgrade from 2026.11.4 or earlier
-without changing your code, three things can break:
+## How it compares
 
-1. **Same-origin previews are refused.** `startPreviewRuntime({ serviceWorkerUrl })`
-   throws `PreviewShieldError` (`ingress.same_origin_refused`). You have two
-   choices:
-   - Opt in by name with `unprotectedSameOrigin: true`. Do this only for code
-     your own user wrote.
-   - Serve the preview from its own origin with `relayUrl`
-     ([relay mode](#isolating-the-preview-relay-mode)). The relay must be https
-     and must not be on your page's origin.
-2. **Previews get a default CSP, and it blocks third-party origins.** The
-   service worker stamps a Content-Security-Policy on every response it serves.
-   This applies in both modes. The policy allows the preview's own origin and
-   these external sources:
-   - the package CDN: `https://esm.sh` when `cdn` is unset (with a custom `cdn`
-     in 2026.11.5, list your CDN's origin yourself);
-   - whatever you list in `previewEgress`.
 
-   Everything else a previewed app loads or fetches is blocked: map tiles, web
-   fonts, public APIs, analytics. The app may render blank or half-styled. To
-   allow a source, list it in `previewEgress` as an https or wss origin. A `*.`
-   wildcard is allowed. Paths are not. The runtime keeps at most 64 sources and
-   silently drops anything else (an `http:` origin, a path, a keyword). The
-   runtime adds the policy beside any CSP the app sets, so it can only tighten
-   the app's own. `previewEgress` can also be a function that answers per
-   application (`undefined` means the workspace's previews).
-3. **Applications need their own origin.** In relay mode,
-   `startApplicationRuntime` refuses an application (`ingress.app_origin_required`)
-   unless you set `previewOrigin`
-   ([one origin per application](#one-origin-per-application-previeworigin)) or
-   opt out with `sharedPreviewOrigin: 'unprotected'`. In same-origin mode,
-   `unprotectedSameOrigin: true` already covers this.
+| | BuilderForce WebContainers | StackBlitz WebContainers |
+|---|---|---|
+| Licence | MIT. Fork it, ship it, sell it. A small badge is on by default; `attribution: false` switches it off ([Attribution](#attribution)). | Proprietary. Free tier non-commercial, attribution required. |
+| Session cap | None | 25,000 API sessions/month on the free tier |
+| Cross-origin isolation (COOP/COEP) | **Not required**: embeds and third-party scripts keep working | Required |
+| Compiler / package source | Pluggable ports: swap esbuild for SWC, esm.sh for your own mirror | Fixed |
+| Errors | Uncaught errors in the preview are posted to the host page | — |
+| Load diagnostics | `runtime.diagnostics()`: phase timings, package CDN and per-origin requests, slowest origins, cold/warm cache, and what could not be measured ([Diagnostics](packages/browser/README.md#diagnostics)) | — |
+| Blocked-request reports | `runtime.onCspViolation(listener)`: the directive and origin the preview's CSP blocked, no paths ([Preview origin headers](packages/browser/README.md#preview-origin-headers)) | — |
+| Production build, type-check | In the browser: `runtime.build()`, `createChecker()` | Via `npm run build` / `tsc` in the container |
+| Node.js programs and servers, `npm install`, shell | Yes: one Web Worker per process, still no COOP/COEP (limits in [ROADMAP](ROADMAP.md)) | Yes |
+| Autonomous agents with scoped MCP tools | Yes (2026.11.24): declared by role, allowlisted tools, typed refusals ([details](#new-in-20261124-autonomous-agents-inside-the-environment)) | — |
 
-To see what the policy blocks, set `cspReportUrl`. Browsers then send
-violation reports to that endpoint (`report-to bfwc-csp`, with
-`Reporting-Endpoints`). It must be an absolute https URL with no credentials,
-quotes, commas, semicolons or spaces, or it is ignored. Reports go to your
-server, not to the host page.
 
-Before (2026.11.4):
+It runs **frontend apps** (Vite with React, Vue or Svelte, Create React App,
+static sites), which it previews, builds for deployment and type-checks; and
+**Node programs**: `npm install` from the real registry, Node scripts and
+Express-style servers, and an interactive shell for a terminal. Framework dev
+servers run as the real thing: `next dev` serves a Next.js app from its own
+process, with Next's WebAssembly compiler (`@next/swc-wasm-nodejs`) standing in
+for the native one, and `vite dev` runs SvelteKit on real Vite. Installs swap native-only build tools for their WebAssembly
+twins (`esbuild` → `esbuild-wasm`, `rollup` → `@rollup/wasm-node`, napi-rs
+`-wasm32-wasip1` builds first, over `node:wasi`, then `-wasm32-wasi`). Nuxt does
+not run yet: Nuxt 3's parser has only a threaded WebAssembly build, which needs
+cross-origin isolation, and Nuxt 4 stalls during start-up (see the
+[ROADMAP](ROADMAP.md)). The roadmap is how it closes the rest of the gap.
 
-```ts
-const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
-```
 
-After (2026.11.5). Same origin, for trusted code only:
-
-```ts
-const runtime = await startPreviewRuntime({
-  serviceWorkerUrl: '/__bfwc/sw.js',
-  unprotectedSameOrigin: true, // previews can read this page's cookies and storage
-  id: projectId,
-  // What the previewed apps may reach besides esm.sh: origins only, no paths.
-  previewEgress: ['https://tile.openstreetmap.org', 'https://fonts.googleapis.com', 'https://fonts.gstatic.com', 'https://api.example.com'],
-  cspReportUrl: 'https://api.example.com/csp-reports',
-});
-```
-
-Or isolated, for AI-written or third-party code:
-
-```ts
-const runtime = await startPreviewRuntime({
-  relayUrl: 'https://preview.example.com/__bfwc/relay.html',
-  id: projectId,
-  previewEgress: ['https://tile.openstreetmap.org', 'https://api.example.com'],
-  cspReportUrl: 'https://api.example.com/csp-reports',
-});
-```
-
-In relay mode, the preview origin serves its files with the headers in
-[Preview origin headers](packages/browser/README.md#preview-origin-headers).
-
-#### Since 2026.11.9
-
-- A custom `cdn` factory may declare `origins`. The runtime adds them to the
-  preview CSP automatically. esm.sh's default factory declares
-  `https://esm.sh`. A custom CDN without `origins` logs one console warning,
-  and you list its origin in `previewEgress` as before.
-- `runtime.onCspViolation(listener)` forwards in-page CSP violations to the
-  host page. Each one carries the directive and the blocked origin.
-- `previewCspMode: 'report-only'` reports violations without blocking anything.
-  Use it while you migrate.
-- `runtime.diagnostics()` returns one load report, CSP violations included.
-- **Check your `sw.js` gate.** 2026.11.9 is the first runtime that honours
-  `csp=report-only` in the `sw.js` URL, and preview code can register `sw.js`
-  again with any query. So every embedder's gate must be an allowlist of the
-  query keys it checks. It must refuse `csp`, unless you deliberately run
-  report-only, and refuse any key named twice.
-- A custom CDN's `origins` now join each relay origin's egress too, so your
-  `sw.js` gate (and any signed policy) must grant them. If it does not, `sw.js`
-  is refused and the runtime fails to start, naming the egress. See the `sw.js`
-  entry in
-  [Preview origin headers](packages/browser/README.md#preview-origin-headers).
+## Guides
 
 ### Vue and Svelte
 
@@ -717,6 +611,105 @@ a change applies on the next reload. Any process in the project can create or
 delete that file. `attribution: false` always wins over the marker. Don't build
 on the command.
 
+## Upgrade notes
+
+### Upgrading to 2026.11.5
+
+2026.11.5 added the Security Shield. If you upgrade from 2026.11.4 or earlier
+without changing your code, three things can break:
+
+1. **Same-origin previews are refused.** `startPreviewRuntime({ serviceWorkerUrl })`
+   throws `PreviewShieldError` (`ingress.same_origin_refused`). You have two
+   choices:
+   - Opt in by name with `unprotectedSameOrigin: true`. Do this only for code
+     your own user wrote.
+   - Serve the preview from its own origin with `relayUrl`
+     ([relay mode](#isolating-the-preview-relay-mode)). The relay must be https
+     and must not be on your page's origin.
+2. **Previews get a default CSP, and it blocks third-party origins.** The
+   service worker stamps a Content-Security-Policy on every response it serves.
+   This applies in both modes. The policy allows the preview's own origin and
+   these external sources:
+   - the package CDN: `https://esm.sh` when `cdn` is unset (with a custom `cdn`
+     in 2026.11.5, list your CDN's origin yourself);
+   - whatever you list in `previewEgress`.
+
+   Everything else a previewed app loads or fetches is blocked: map tiles, web
+   fonts, public APIs, analytics. The app may render blank or half-styled. To
+   allow a source, list it in `previewEgress` as an https or wss origin. A `*.`
+   wildcard is allowed. Paths are not. The runtime keeps at most 64 sources and
+   silently drops anything else (an `http:` origin, a path, a keyword). The
+   runtime adds the policy beside any CSP the app sets, so it can only tighten
+   the app's own. `previewEgress` can also be a function that answers per
+   application (`undefined` means the workspace's previews).
+3. **Applications need their own origin.** In relay mode,
+   `startApplicationRuntime` refuses an application (`ingress.app_origin_required`)
+   unless you set `previewOrigin`
+   ([one origin per application](#one-origin-per-application-previeworigin)) or
+   opt out with `sharedPreviewOrigin: 'unprotected'`. In same-origin mode,
+   `unprotectedSameOrigin: true` already covers this.
+
+To see what the policy blocks, set `cspReportUrl`. Browsers then send
+violation reports to that endpoint (`report-to bfwc-csp`, with
+`Reporting-Endpoints`). It must be an absolute https URL with no credentials,
+quotes, commas, semicolons or spaces, or it is ignored. Reports go to your
+server, not to the host page.
+
+Before (2026.11.4):
+
+```ts
+const runtime = await startPreviewRuntime({ serviceWorkerUrl: '/__bfwc/sw.js', id: projectId });
+```
+
+After (2026.11.5). Same origin, for trusted code only:
+
+```ts
+const runtime = await startPreviewRuntime({
+  serviceWorkerUrl: '/__bfwc/sw.js',
+  unprotectedSameOrigin: true, // previews can read this page's cookies and storage
+  id: projectId,
+  // What the previewed apps may reach besides esm.sh: origins only, no paths.
+  previewEgress: ['https://tile.openstreetmap.org', 'https://fonts.googleapis.com', 'https://fonts.gstatic.com', 'https://api.example.com'],
+  cspReportUrl: 'https://api.example.com/csp-reports',
+});
+```
+
+Or isolated, for AI-written or third-party code:
+
+```ts
+const runtime = await startPreviewRuntime({
+  relayUrl: 'https://preview.example.com/__bfwc/relay.html',
+  id: projectId,
+  previewEgress: ['https://tile.openstreetmap.org', 'https://api.example.com'],
+  cspReportUrl: 'https://api.example.com/csp-reports',
+});
+```
+
+In relay mode, the preview origin serves its files with the headers in
+[Preview origin headers](packages/browser/README.md#preview-origin-headers).
+
+#### Since 2026.11.9
+
+- A custom `cdn` factory may declare `origins`. The runtime adds them to the
+  preview CSP automatically. esm.sh's default factory declares
+  `https://esm.sh`. A custom CDN without `origins` logs one console warning,
+  and you list its origin in `previewEgress` as before.
+- `runtime.onCspViolation(listener)` forwards in-page CSP violations to the
+  host page. Each one carries the directive and the blocked origin.
+- `previewCspMode: 'report-only'` reports violations without blocking anything.
+  Use it while you migrate.
+- `runtime.diagnostics()` returns one load report, CSP violations included.
+- **Check your `sw.js` gate.** 2026.11.9 is the first runtime that honours
+  `csp=report-only` in the `sw.js` URL, and preview code can register `sw.js`
+  again with any query. So every embedder's gate must be an allowlist of the
+  query keys it checks. It must refuse `csp`, unless you deliberately run
+  report-only, and refuse any key named twice.
+- A custom CDN's `origins` now join each relay origin's egress too, so your
+  `sw.js` gate (and any signed policy) must grant them. If it does not, `sw.js`
+  is refused and the runtime fails to start, naming the egress. See the `sw.js`
+  entry in
+  [Preview origin headers](packages/browser/README.md#preview-origin-headers).
+
 ## Develop
 
 ```bash
@@ -724,6 +717,10 @@ pnpm install
 pnpm build
 pnpm test
 ```
+
+**Like it?** [Star the repo](https://github.com/SeanHogg/builderforce-webcontainers) so others can find it, or see it
+running in [Builderforce.ai](https://builderforce.ai): describe an app and watch it, and its agents, come up in
+the tab.
 
 ## Licence
 
