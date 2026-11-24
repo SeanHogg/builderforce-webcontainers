@@ -47,6 +47,16 @@ export interface RuntimeLease {
   assertFence(token: number): boolean;
 }
 
+/** A lease from `claimRuntimeLease`, whose `release()` settles once the Web Lock is actually given up. */
+export interface ClaimedRuntimeLease extends RuntimeLease {
+  /**
+   * Give up ownership, or the place in line. Resolves once the lock is free —
+   * the lock manager frees it asynchronously, so a claim made before then (by
+   * this tab restarting the same runtime, say) would still find it held.
+   */
+  release(): Promise<void>;
+}
+
 /** Where fencing tokens are kept. Only the lock holder calls `advance`, so a read-then-write cannot race. */
 export interface LeaseTokenStore {
   /** Record an acquisition of `runtimeId` by `holder`: the stored token plus one. */
@@ -85,7 +95,7 @@ let sharedTokenStore: LeaseTokenStore | undefined;
 const defaultTokenStore = () => (sharedTokenStore ??= indexedDbLeaseTokenStore());
 
 /** Take the lease on `key` if free (advancing its fencing token), else join the line for it. */
-export async function claimRuntimeLease(locks: LockManagerLike | undefined, key: string, store: LeaseTokenStore = defaultTokenStore()): Promise<RuntimeLease> {
+export async function claimRuntimeLease(locks: LockManagerLike | undefined, key: string, store: LeaseTokenStore = defaultTokenStore()): Promise<ClaimedRuntimeLease> {
   if (!locks) throw new DatabaseCoordinationError(key);
   const holder = newTabId();
   const abort = new AbortController();
@@ -103,17 +113,18 @@ export async function claimRuntimeLease(locks: LockManagerLike | undefined, key:
   };
   /** Hold the lock until released: the callback's promise is the lock's lifetime. */
   const hold = () => new Promise<void>((resolve) => (release = resolve));
+  /** Settles when this tab's lock request is over: the lock given up, or the place in line abandoned. */
+  let settled: Promise<unknown> = Promise.resolve();
   const immediately = await new Promise<boolean>((resolve, reject) => {
-    locks
-      .request(lockName(key), { ifAvailable: true }, async (lock) => {
-        const owner = await take(lock);
-        resolve(owner);
-        if (owner) await hold();
-      })
-      .catch(reject);
+    settled = locks.request(lockName(key), { ifAvailable: true }, async (lock) => {
+      const owner = await take(lock);
+      resolve(owner);
+      if (owner) await hold();
+    });
+    settled.catch(reject);
   });
   if (!immediately) {
-    void locks
+    settled = locks
       .request(lockName(key), { signal: abort.signal }, async (lock) => {
         if (!(await take(lock))) return;
         queueMicrotask(() => onOwner?.());
@@ -137,6 +148,7 @@ export async function claimRuntimeLease(locks: LockManagerLike | undefined, key:
       state = OWNED_ELSEWHERE;
       abort.abort();
       release?.();
+      return settled.then(() => undefined);
     },
     assertFence: (token) => state.kind === 'owner' && state.fencingToken === token,
   };

@@ -69,11 +69,11 @@ export interface DatabaseHost extends DatabaseControl {
   readonly booted: Promise<void>;
   /** Run SQL with the engine to itself (between client transactions); resolves with the rows. */
   query<T = Record<string, unknown>>(sql: string): Promise<T[]>;
-  /** Close every connection, close PGlite (flushed; `terminate()` after `closeTimeoutMs`), release the database. */
+  /** Close every connection, close PGlite (flushed; `terminate()` after `closeTimeoutMs`), release the database; resolves once it is free to claim again. */
   close(): Promise<void>;
   /** Stop at once: terminate the Worker, release the database. PGlite does not get to flush. */
   terminate(): void;
-  /** Resolves with 0 once closed, 1 when the database failed, 137 when terminated. */
+  /** Resolves with 0 once closed, 1 when the database failed, 137 when terminated (after the database is released). */
   readonly closed: Promise<number>;
 }
 
@@ -155,7 +155,7 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
       case 'db-failed':
         options.log?.(`PGlite failed to start: ${message.message}`);
         booted.reject(new Error(message.message));
-        return role === 'owner' ? end(1, message.message) : undefined;
+        return role === 'owner' ? void end(1, message.message) : undefined;
       case 'db-log':
         return options.log?.(message.text);
       case 'db-reset':
@@ -184,7 +184,7 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
     worker = options.createWorker();
     worker.onerror = (event) => {
       options.log?.(`The database Worker failed: ${event?.message ?? 'unknown error'}`);
-      end(1, 'The database Worker failed.');
+      void end(1, 'The database Worker failed.');
     };
     const base = workerLink(worker);
     const mux = createLinkMux(base);
@@ -193,8 +193,8 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
     if (persistent && Channel) tabs = serveFollowerTabs(Channel, key, tabId, mux);
   };
 
-  /** Stop for good: no listener, no clients, no Worker, no claim on the database. */
-  const end = (code: number, reason: string) => {
+  /** Stop for good: no listener, no clients, no Worker, no claim on the database. Resolves once the claim is given up. */
+  const end = async (code: number, reason: string): Promise<void> => {
     if (ended) return;
     ended = true;
     registration.close();
@@ -204,7 +204,8 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
     tabs?.close(); // followers hear the owner went; the next in line takes over
     link?.close();
     worker?.terminate();
-    ownership?.release();
+    // The lock is freed asynchronously: wait for it, so a restart in this tab right after close() claims it rather than queueing behind its own predecessor.
+    await ownership?.release();
     resolveClosed(code);
   };
 
@@ -250,8 +251,8 @@ export async function startDatabaseHost(options: DatabaseHostOptions): Promise<D
         clearTimeout(timer);
         if (!inTime) return end(137, 'The database did not close in time.');
       }
-      end(0, 'The database is closed.');
+      await end(0, 'The database is closed.');
     },
-    terminate: () => end(137, 'The database was terminated.'),
+    terminate: () => void end(137, 'The database was terminated.'),
   };
 }

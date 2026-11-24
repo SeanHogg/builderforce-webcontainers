@@ -21,8 +21,8 @@ export interface DatabaseOwnership {
   readonly owner: boolean;
   /** Called once, when this tab becomes the owner after waiting. */
   onOwner(listener: () => void): void;
-  /** Give up ownership, or the place in line. */
-  release(): void;
+  /** Give up ownership, or the place in line. Resolves once the database's lock is free to claim again. */
+  release(): Promise<void>;
 }
 
 /** Take ownership of `key` if free, else join the line for it. */

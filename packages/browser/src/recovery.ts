@@ -5,7 +5,7 @@
  * consumers never load it.
  */
 export { claimRuntimeLease, indexedDbLeaseTokenStore, lockName, LOCK_PREFIX, DatabaseCoordinationError } from './shared/runtimeLease.js';
-export type { LeaseState, LeaseTokenStore, LockManagerLike, RuntimeLease, RuntimeLeaseRecord } from './shared/runtimeLease.js';
+export type { ClaimedRuntimeLease, LeaseState, LeaseTokenStore, LockManagerLike, RuntimeLease, RuntimeLeaseRecord } from './shared/runtimeLease.js';
 export { capabilityParticipants, createEnvironmentRecovery, RECOVERY_STAGES, RecoveryCheckpointError, RecoveryLeaseError } from './recovery/environmentRecovery.js';
 export type { Durability, EnvironmentRecovery, EnvironmentRecoveryOptions, RecoveryParticipant, RecoveryResult, RecoveryStage } from './recovery/environmentRecovery.js';
 export { createRecoveryStore, identityRedact, loadRecord, RECOVERY_STORE_ENTRIES, RecoveryStorageError, saveRecord } from './recovery/persistedRecord.js';
