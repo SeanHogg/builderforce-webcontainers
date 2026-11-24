@@ -49,7 +49,7 @@ export function createVfsParticipant(options: VfsParticipantOptions): RecoveryPa
     stage: 'vfs',
     async checkpoint() {
       const snapshot = options.snapshots.snapshot();
-      const payloads = [new Uint8Array(snapshot.pack)];
+      const payloads: Uint8Array[] = [new Uint8Array(snapshot.pack)];
       const ops = snapshot.ops.map((op): RecordedOp => {
         if (op.op !== 'write') return op;
         const content = op.content;

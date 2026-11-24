@@ -77,6 +77,20 @@ describe('environment tool port', () => {
     expect(events[0]!.evidence).toMatchObject({ agentId: 'developer', tool: 'env.run' });
   });
 
+  it.each(['env.secrets.read', 'runtime.agents.start', 'env.fs'])(
+    'refuses %s even when the allowlist names it: only catalog keys on the allowlist dispatch',
+    async (tool) => {
+      const { port, shield, runs, requests } = setup({ tools: [...ALL_TOOLS, tool] });
+      const result = await port.call(tool as Parameters<typeof port.call>[0], {}, KEY);
+      expect(result).toMatchObject({ ok: false, refusal: { code: 'tool-not-allowed', tool } });
+      expect(runs).toEqual([]);
+      expect(requests).toEqual([]);
+      expect(shield.events().map((event) => [event.reasonCode, event.evidence])).toEqual([
+        ['agent.tool_not_allowed', expect.objectContaining({ agentId: 'developer', tool })],
+      ]);
+    },
+  );
+
   it('refuses a mutating call without an idempotency key', async () => {
     const { port, fs } = setup();
     const result = await port.call('env.fs.write', { path: 'src/a.ts', content: 'x' });

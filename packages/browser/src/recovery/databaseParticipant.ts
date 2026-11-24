@@ -48,7 +48,8 @@ export function createDatabaseParticipant(options: DatabaseParticipantOptions): 
       if (!saved) return { id, status: 'fresh' };
       const [data] = saved.payloads;
       if (!data) throw new Error(`The database checkpoint "${options.key}" has no export.`);
-      await (await options.database()).import(new Blob([data], { type: saved.record.type }));
+      // A payload is a view into the store's buffer, which may be shared; a Blob part needs its own `ArrayBuffer`.
+      await (await options.database()).import(new Blob([new Uint8Array(data)], { type: saved.record.type }));
       return { id, status: 'restored' };
     },
   };

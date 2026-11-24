@@ -167,7 +167,7 @@ export function streamBytes(source: AsyncIterable<Uint8Array>): ReadableStream<U
  */
 export function aiGatewayHandler(relay: HostRelay, resource: AiGatewayResource): HttpHandler {
   return async (request) => {
-    const path = request.path.split('?')[0] ?? request.path;
+    const path = request.url.split('?')[0] ?? request.url;
     if (request.method !== 'POST' || (path !== AI_COMPLETIONS_PATH && path !== '/chat/completions')) {
       return jsonResponse(404, 'Not found');
     }

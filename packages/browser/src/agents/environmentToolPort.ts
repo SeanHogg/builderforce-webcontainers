@@ -9,9 +9,10 @@
  * the Security Shield's telemetry; nothing here throws for an agent's input.
  */
 import {
+  allowedTools,
+  ENV_TOOL_KEYS,
   ENV_TOOL_MUTATES,
   idempotencyKeyString,
-  isEnvToolKey,
   normalizePath,
   type EnvToolKey,
   type EnvToolRefusal,
@@ -120,7 +121,8 @@ function cappedText(limit: number) {
 
 export function createEnvironmentToolPort(deps: EnvironmentToolPortDeps, agent: EnvironmentAgent): EnvironmentToolPort {
   const timeoutMs = deps.timeoutMs ?? ENV_RUN_DEFAULT_TIMEOUT_MS;
-  const allowed = new Set(agent.tools);
+  // The environment tools ∩ the agent's allowlist: an allowlist entry that is not an `env.*` key grants nothing.
+  const allowed: ReadonlySet<string> = new Set(allowedTools(ENV_TOOL_KEYS, agent.tools));
   const context = applicationContext(deps.app.applicationId);
 
   const handlers: Record<EnvToolKey, (args: Record<string, unknown>) => Promise<unknown> | unknown> = {
@@ -212,7 +214,7 @@ export function createEnvironmentToolPort(deps: EnvironmentToolPortDeps, agent: 
   return {
     mutates: ENV_TOOL_MUTATES,
     async call(tool, args, key) {
-      if (!isEnvToolKey(tool) || !allowed.has(tool)) {
+      if (!allowed.has(tool)) {
         return refuse(String(tool), 'tool-not-allowed', 'agent.tool_not_allowed', `"${String(tool)}" is not on agent "${agent.id}"'s allowlist.`, key);
       }
       if (ENV_TOOL_MUTATES[tool] && !key) {
