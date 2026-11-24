@@ -4,9 +4,9 @@ The goal is a runtime that matches StackBlitz WebContainers where it matters and
 beats it on openness, isolation requirements and extensibility. Each milestone
 ships on its own.
 
-## Shipped (2026.10.0)
+## Shipped 
 
-- Virtual file system with versioned files and change events.
+- (2026.10.0) Virtual file system with versioned files and change events.
 - Per-file dev server: TS/TSX/JSX via a pluggable compiler (esbuild-wasm default).
 - Resolution: relative paths, extension and `index` probing, the `.js`→`.ts`
   convention, tsconfig `paths` aliases.
@@ -65,6 +65,7 @@ ships on its own.
   - A link from outside the browser (mail, chat) opens only a preview ROOT through `/preview`; a deeper path or a query is refused, so it cannot drive a request into the running app. The report token is compared in constant time with the launch token's helper.
   - String-literal export names are decoded without `eval` too.
 - 2026.11.12: **Launcher: preview any service, and a Running / All filter.** Clicking a service that serves HTTP (not a database, not a port-less one-off) shows it in the preview pane; the heading and "Open in new tab" follow it, and the choice is held through a restart or a crash the runtime will recover from, falling back to the frontend with a notice only when the service stops for good. The Services panel shows **Running** by default — finished setup steps (`install-web`, `install-api`) are under **All (n)** — and a failed service is never hidden. 11 new `LauncherLabels` keys (`servicesFilter*`, `servicesHidden`, `servicesShowAll`, `noRunningServices`, `preview*`).
+- 2026.11.24: **Autonomous agents inside the environment** (Builderforce PRD 31 §W12, phases 1–6). Manifest v1 takes `capabilities` and `agents`, declared by role or workload and never by model id (`agent-model-id`); a declaration above a `capabilities.agents` ceiling is a `policy-widening` error. `/agents` adds `createEnvironmentToolPort` (the `env.*` tools, allowlisted, idempotency-keyed and path- and service-checked), `createRuntimeAgents` (`runtime.agents.list|start|steer|cancel|status`), `createAgentsCapability` and `createChildRuntimes`, so an environment can run inside an environment with policies that only narrow its parent's. `/recovery` adds `createEnvironmentRecovery` and a one-holder runtime lease, restoring files, databases and services after a tab dies; agent runs resume from checkpoints at tool-result boundaries and never repeat a side effect. `/app` adds `createJobScheduler` for `jobs` and cron agent triggers. Tested: core 598 passed, browser 978 passed, both typecheck clean.
 
 ## Shipped in 2026.10.3
 
