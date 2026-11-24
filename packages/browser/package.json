@@ -24,6 +24,14 @@
       "types": "./dist/app.d.ts",
       "import": "./dist/app.js"
     },
+    "./recovery": {
+      "types": "./dist/recovery.d.ts",
+      "import": "./dist/recovery.js"
+    },
+    "./agents": {
+      "types": "./dist/agents.d.ts",
+      "import": "./dist/agents.js"
+    },
     "./security": {
       "types": "./dist/security.d.ts",
       "import": "./dist/security.js"

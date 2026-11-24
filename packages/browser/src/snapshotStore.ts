@@ -8,6 +8,7 @@
  * index walked with a key cursor, so pruning and `keys()` never load a zip. Every operation fails soft —
  * storage blocked (private windows) or full means a miss, never a throw.
  */
+import { done, request } from './shared/idb.js';
 
 export interface SnapshotStoreOptions {
   /** IndexedDB database name. Default `bfwc-snapshots`. */
@@ -40,21 +41,6 @@ const STORE = 'snapshots';
 const USED_AT = 'usedAt';
 /** v1: the store; v2: the `usedAt` index (built over existing rows by the upgrade itself). */
 const DB_VERSION = 2;
-
-function request<T>(req: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function done(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
 
 export function createSnapshotStore(options: SnapshotStoreOptions = {}): SnapshotStore {
   const maxEntries = options.maxEntries ?? 4;

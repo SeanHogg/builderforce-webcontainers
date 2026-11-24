@@ -55,19 +55,31 @@ export function createCapabilityRegistry(defs: readonly CapabilityDefinition[]):
   };
 }
 
-export type CapabilityOrder = { ok: true; order: string[] } | { ok: false; cycle: string[] };
+/** Ids in dependency order (dependencies first), or the first cycle found. */
+export type DependencyOrder = { ok: true; order: string[] } | { ok: false; cycle: string[] };
+export type CapabilityOrder = DependencyOrder;
 
 /** `ids` in dependency order (dependencies first), or the first cycle found. Ids not registered are ignored. */
 export function orderCapabilities(ids: readonly string[], registry: CapabilityRegistry): CapabilityOrder {
+  return orderByDependencies(ids, (id) => registry.get(id)?.dependsOn);
+}
+
+/**
+ * `ids` in dependency order (dependencies first), or the first cycle found.
+ * `dependenciesOf` answers undefined for an unknown id, which is then ignored
+ * (as an entry of `ids` and as a dependency).
+ */
+export function orderByDependencies(ids: readonly string[], dependenciesOf: (id: string) => readonly string[] | undefined): DependencyOrder {
   const order: string[] = [];
   const done = new Set<string>();
   const stack: string[] = [];
   const visit = (id: string): string[] | undefined => {
-    if (done.has(id) || !registry.has(id)) return undefined;
+    const dependencies = dependenciesOf(id);
+    if (done.has(id) || !dependencies) return undefined;
     const at = stack.indexOf(id);
     if (at >= 0) return [...stack.slice(at), id];
     stack.push(id);
-    for (const dependency of registry.get(id)!.dependsOn) {
+    for (const dependency of dependencies) {
       const cycle = visit(dependency);
       if (cycle) return cycle;
     }

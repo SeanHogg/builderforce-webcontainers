@@ -5,12 +5,14 @@
  * declaration above one is refused, never clamped.
  */
 import { SERVICE_ID } from '../app/validateSpec.js';
-import { AGENT_BUDGET_KEYS, AGENT_ROLE_PATTERN, AGENTS_CAPABILITY, AGENTS_CAPABILITY_ID, budgetIssues, toolListIssues } from '../capabilities/agents.js';
+import { AGENT_ROLE_PATTERN, AGENTS_CAPABILITY, AGENTS_CAPABILITY_ID, budgetIssues, toolListIssues } from '../capabilities/agents.js';
+import { ENV_TOOL_KEYS, ENV_TOOL_PREFIX, isEnvToolKey } from '../agents/contract.js';
 import { orderCapabilities, type CapabilityConfigIssue, type CapabilityRegistry } from '../capabilities/registry.js';
 import { resourceCapability } from './capabilities.js';
 import { checkIds, checkSchedule, checkTimeZone, checkType, isNonEmptyString, section, stringArray, type Issues } from './checks.js';
 import { manifestIssue } from './issues.js';
 import { environmentsOf, hasOwnKey, isRecord } from './overrides.js';
+import { budgetWideningIssues, countWideningIssues, toolWideningIssues } from './agentsPolicy.js';
 import { PATH_ISSUE_DETAIL, validateWorkspacePath } from './paths.js';
 import { MANIFEST_TARGETS, type AgentsPolicy, type AppManifest } from './types.js';
 
@@ -101,22 +103,18 @@ function validateInstructions(instructions: unknown, path: string, issues: Issue
 function validateTools(tools: unknown, path: string, policy: AgentsPolicy, issues: Issues): void {
   const found = toolListIssues(tools);
   pushConfigIssues(found, path, issues);
-  if (found.length > 0 || !Array.isArray(tools) || !policy.tools) return;
-  const allowed = policy.tools;
+  if (found.length > 0 || !Array.isArray(tools)) return;
   for (const tool of tools as string[]) {
-    if (!allowed.includes(tool)) issues.push(manifestIssue('policy-widening', path, { value: tool, detail: `Allowed tools: ${allowed.join(', ') || 'none'}.` }));
+    if (tool.startsWith(ENV_TOOL_PREFIX) && !isEnvToolKey(tool)) issues.push(manifestIssue('invalid-value', path, { value: tool, detail: `Environment tools: ${ENV_TOOL_KEYS.join(', ')}.` }));
   }
+  issues.push(...toolWideningIssues(tools as string[], policy, path));
 }
 
 function validateBudget(budget: unknown, path: string, policy: AgentsPolicy, issues: Issues): void {
   const found = budgetIssues(budget);
   pushConfigIssues(found, path, issues);
-  if (found.length > 0 || !isRecord(budget) || !policy.budget) return;
-  for (const key of AGENT_BUDGET_KEYS) {
-    const value = budget[key];
-    const ceiling = policy.budget[key];
-    if (typeof value === 'number' && ceiling !== undefined && value > ceiling) issues.push(manifestIssue('policy-widening', `${path}.${key}`, { value: `budget.${key}`, detail: `The ceiling is ${ceiling}.` }));
-  }
+  if (found.length > 0 || !isRecord(budget)) return;
+  issues.push(...budgetWideningIssues(budget, policy, path));
 }
 
 function validateTriggers(triggers: unknown, path: string, services: Record<string, unknown>, issues: Issues): void {
@@ -155,7 +153,7 @@ export function validateAgents(manifest: AppManifest, services: Record<string, u
   const enabled = isRecord(manifest.capabilities) ? manifest.capabilities : {};
   if (!hasOwnKey(enabled, AGENTS_CAPABILITY_ID)) issues.push(manifestIssue('capability-not-enabled', 'agents', { value: AGENTS_CAPABILITY_ID }));
   const policy = agentsPolicy(manifest);
-  if (policy.maxAgents !== undefined && ids.length > policy.maxAgents) issues.push(manifestIssue('policy-widening', 'agents', { value: 'maxAgents', detail: `At most ${policy.maxAgents} agents; ${ids.length} are declared.` }));
+  issues.push(...countWideningIssues('maxAgents', ids.length, policy.maxAgents, 'agents', `At most ${policy.maxAgents} agents; ${ids.length} are declared.`));
   for (const [id, entry] of Object.entries(agents)) {
     const path = `agents.${id}`;
     if (!isRecord(entry)) {

@@ -77,7 +77,13 @@ export type ShieldReasonCode =
   /** The embedder's egress policy id for an application is malformed: dropped, so its Workers get the most restrictive policy. */
   | 'egress.policy_invalid'
   /** A message to or from a process Worker could not be delivered across origins (`messageerror`): the process was ended. */
-  | 'process.message_undeliverable';
+  | 'process.message_undeliverable'
+  /** An agent called an environment tool outside its allowlist (or a mutating one without an idempotency key): refused. */
+  | 'agent.tool_not_allowed'
+  /** An agent's environment file path was absolute or had a `..` segment: refused. */
+  | 'agent.path_invalid'
+  /** An agent asked to fetch from a service that is not one of its environment's own: refused. */
+  | 'agent.service_not_allowed';
 
 /** A page-side decision; `reject` carries the reason the caller surfaces (ECONNREFUSED, 403, EACCES…). */
 export type ShieldDecision = { readonly allow: true } | { readonly allow: false; readonly reason: ShieldReasonCode };

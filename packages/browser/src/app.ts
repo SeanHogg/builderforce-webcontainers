@@ -39,3 +39,6 @@ export type { ProcessKindPolicy, PythonExtensionRef, WorkerKind } from './node/i
 export * from '@seanhogg/builderforce-webcontainers-core/app';
 // The app manifest v1 (`builderforce.json`): parse, validate, environments, and `toApplicationSpec` for `startApplicationRuntime`.
 export * from '@seanhogg/builderforce-webcontainers-core/manifest';
+// The job scheduler: fires the manifest's `jobs` and agent cron triggers while this runtime holds the lease.
+export { agentTriggerFire, collectTriggers, createJobScheduler, MAX_TIMER_DELAY_MS, ON_TIME_TOLERANCE_MS } from './app/jobScheduler.js';
+export type { AgentTriggerFireOptions, InvalidTrigger, JobScheduler, JobSchedulerOptions, ScheduledTrigger, SkipReason, TriggerFire } from './app/jobScheduler.js';

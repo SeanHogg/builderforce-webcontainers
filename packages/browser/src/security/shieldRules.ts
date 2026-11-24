@@ -41,4 +41,7 @@ export const SHIELD_RULES: Readonly<Record<ShieldReasonCode, ShieldRule>> = Obje
   'ingress.handoff_conflict': rule('ingress', 'ingress.handoff-conflict', 'medium'),
   'egress.policy_invalid': rule('network', 'egress.policy-id', 'medium'),
   'process.message_undeliverable': rule('process', 'process.message-delivery', 'medium'),
+  'agent.tool_not_allowed': rule('process', 'agent.tool-allowlist', 'medium'),
+  'agent.path_invalid': rule('filesystem', 'agent.workspace-path', 'high'),
+  'agent.service_not_allowed': rule('network', 'agent.own-services', 'high'),
 });

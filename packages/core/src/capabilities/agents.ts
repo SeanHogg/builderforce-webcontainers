@@ -6,6 +6,7 @@
  */
 import { isRecord } from '../manifest/overrides.js';
 import type { AgentsPolicy } from '../manifest/types.js';
+import { CHILD_RUNTIMES_CAPABILITY } from './childRuntimes.js';
 import { createCapabilityRegistry, type CapabilityConfigIssue, type CapabilityDefinition } from './registry.js';
 
 export const AGENTS_CAPABILITY_ID = 'agents';
@@ -87,5 +88,5 @@ export const AGENTS_CAPABILITY: CapabilityDefinition = {
   validateConfig: validateAgentsPolicy,
 };
 
-/** The capabilities core ships: `agents`. */
-export const BUILTIN_CAPABILITIES = createCapabilityRegistry([AGENTS_CAPABILITY]);
+/** The capabilities core ships: `agents` and `child-runtimes`. */
+export const BUILTIN_CAPABILITIES = createCapabilityRegistry([AGENTS_CAPABILITY, CHILD_RUNTIMES_CAPABILITY]);
