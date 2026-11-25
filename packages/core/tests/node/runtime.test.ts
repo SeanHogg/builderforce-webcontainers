@@ -137,6 +137,12 @@ describe('node runtime: event loop', () => {
     expect(code).toBe(0);
   });
 
+  it('a one-shot `once("data")` listener starts stdin flowing and keeps the process alive, as `on("data")` does', async () => {
+    const { output, code } = await runNode({ 'index.js': 'process.stdin.once("data", (d) => console.log("got " + String(d)))' }, 'index.js', [], { input: 'hello' });
+    expect(output).toBe('got hello\n');
+    expect(code).toBe(0);
+  });
+
   it('reads stdin to the end', async () => {
     const { output } = await runNode({ 'index.js': 'let s = ""; process.stdin.on("data", (d) => s += d); process.stdin.on("end", () => console.log(s.toUpperCase()))' }, 'index.js', [], { input: 'hello\nworld' });
     expect(output).toBe('HELLO\nWORLD\n');

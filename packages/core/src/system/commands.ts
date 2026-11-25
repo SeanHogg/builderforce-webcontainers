@@ -7,6 +7,7 @@
 import type { VirtualFileSystem } from '../vfs.js';
 import { dirname, extname, join, normalizePath, resolveFrom } from '../paths.js';
 import { readBinLink } from '../installer/bins.js';
+import { DEV_SERVER_TOOLS, handoffFor } from '../shell/devHandoff.js';
 import type { Program } from './types.js';
 
 export interface ResolvedCommand {
@@ -84,12 +85,15 @@ export function resolveCommand(
   args: string[],
   cwd: string,
   env: Record<string, string | undefined>,
+  previewUrl?: string,
 ): ResolvedCommand | undefined {
-  if (!command.includes('/') && Object.prototype.hasOwnProperty.call(programs, command)) {
-    return { name: command, program: programs[command]!, args };
-  }
+  // A dev-server tool (`vite`, `ng` …) is the handoff program only when the handoff applies; else it resolves as any command does.
+  // The gate is judged on the program's NAME, so `vite` and `/usr/local/bin/vite` answer alike.
+  const usable = (name: string): boolean =>
+    Object.prototype.hasOwnProperty.call(programs, name) && (!DEV_SERVER_TOOLS.includes(name) || handoffFor(fs, cwd, previewUrl, [name, ...args]) !== undefined);
+  if (!command.includes('/') && usable(command)) return { name: command, program: programs[command]!, args };
   const system = systemProgramName(fs, command);
-  if (system && Object.prototype.hasOwnProperty.call(programs, system)) return { name: system, program: programs[system]!, args };
+  if (system && usable(system)) return { name: system, program: programs[system]!, args };
   const file = findExecutable(fs, command, cwd, env);
   if (!file) return undefined;
   const { name, args: lead } = interpreterFor(fs, file);

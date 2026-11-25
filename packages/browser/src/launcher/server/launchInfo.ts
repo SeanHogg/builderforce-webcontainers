@@ -30,6 +30,8 @@ export interface LaunchInfoInput {
   hosts: LauncherHosts;
   environment?: string;
   manifestText?: string;
+  /** The validated page (`validateLaunchPage`), when one was asked for. */
+  page?: string;
   dotnet: DotnetBundleSource;
   labels?: Partial<LauncherLabels>;
 }
@@ -41,6 +43,7 @@ export async function buildLaunchInfo(input: LaunchInfoInput): Promise<LaunchInf
     projectId: input.projectId,
     projectDir: input.root,
     environment: input.environment ?? null,
+    ...(input.page !== undefined ? { page: input.page } : {}),
     manifestText: input.manifestText ?? located?.text ?? null,
     manifestPath: located?.path ?? manifestWritePath(input.root),
     manifestSource: input.manifestText !== undefined ? 'override' : located?.source ?? 'missing',

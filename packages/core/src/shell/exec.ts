@@ -12,8 +12,9 @@
  * browser is a separate Web Worker.
  */
 import type { System } from '../system/types.js';
-import { InputQueue, textChunks } from '../system/terminal.js';
-import { SIGPIPE_STATUS, brokePipe, isBrokenPipe } from '../system/signals.js';
+import { InputQueue } from '../system/terminal.js';
+import { SIGPIPE_STATUS, brokePipe } from '../system/signals.js';
+import { relayChild } from './childRelay.js';
 import type { Command as CommandNode, FunctionDefinition, Pipeline, Redirect, Script, SimpleCommand, Word } from './ast.js';
 import { parse, ShellSyntaxError } from './parse.js';
 import { expandWord, expandWords, type ExpandContext } from './expand.js';
@@ -361,37 +362,7 @@ export class Shell implements ShellState, ScriptRunner {
       io.stderr(`bfsh: command not found: ${name}\n`);
       return 127;
     }
-    // The shell's own IO is text; a child's bytes are decoded as they enter it. Writing into
-    // a pipe whose reader has exited kills the child with SIGPIPE (its timers stop with it),
-    // then raises the break here, so the stage owning the pipe ends — a loop around it too.
-    let brokenPipe: unknown;
-    const relay = (write: (text: string) => void) => (text: string | null) => {
-      if (text === null || brokenPipe !== undefined) return;
-      try {
-        write(text);
-      } catch (error) {
-        if (!isBrokenPipe(error)) throw error;
-        brokenPipe = error;
-        child.kill('SIGPIPE');
-      }
-    };
-    child.onStdout(textChunks(relay(io.stdout)));
-    child.onStderr(textChunks(relay(io.stderr)));
-    let stop: (() => void) | undefined;
-    if (size && input.setRawSink) input.setRawSink((data) => child.write(data));
-    else stop = input.queue.subscribe((chunk) => (chunk === null ? child.closeStdin() : child.write(chunk)));
-    const onAbort = () => child.kill(typeof signal.reason === 'string' ? signal.reason : 'SIGINT');
-    if (signal.aborted) onAbort();
-    signal.addEventListener('abort', onAbort);
-    try {
-      const code = await child.exit;
-      if (brokenPipe !== undefined) throw brokenPipe;
-      return code;
-    } finally {
-      signal.removeEventListener('abort', onAbort);
-      if (size && input.setRawSink) input.setRawSink(undefined);
-      stop?.();
-    }
+    return relayChild(child, io, input, signal, size !== undefined);
   }
 }
 

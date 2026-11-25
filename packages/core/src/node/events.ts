@@ -58,7 +58,8 @@ export class EventEmitterBase {
   }
 
   once(event: string | symbol, listener: Listener): this {
-    return this._add(event, this._onceWrap(event, listener), false);
+    // Through `on`, as Node's does: a stream's `on('data')` starts it flowing (`process.stdin.once('data', …)` must read).
+    return this.on(event, this._onceWrap(event, listener));
   }
 
   prependOnceListener(event: string | symbol, listener: Listener): this {

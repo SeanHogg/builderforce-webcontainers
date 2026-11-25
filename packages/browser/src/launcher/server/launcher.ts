@@ -30,6 +30,7 @@ import { classifyHostname, launcherHosts, type LauncherHosts } from './hosts.js'
 import { requestUrl, sendText } from './httpResponses.js';
 import { loadLauncherAssets } from './launcherAssets.js';
 import { buildLaunchInfo, projectIdOf } from './launchInfo.js';
+import { validateLaunchPage } from './launchPage.js';
 import { servePageOrigin } from './pageRoutes.js';
 import { servePreviewOrigin } from './previewRoutes.js';
 import { readProjectTree, type ProjectLimits } from './projectFiles.js';
@@ -50,6 +51,12 @@ export interface LocalLauncherOptions {
   environment?: string;
   /** The manifest's text, used instead of `builderforce.json` (a project without one, detected in memory). */
   manifestText?: string;
+  /**
+   * A project-relative HTML file (`/mockup.html`) shown at `/` instead of `index.html`: a page launched
+   * on its own, with the files beside it. Must be an existing `.html`/`.htm` file inside `projectDir`
+   * (`validateLaunchPage`); the launch fails with the reason otherwise.
+   */
+  page?: string;
   /** The port (default 0: a free one). */
   port?: number;
   /** Label overrides for the page (English by default). */
@@ -100,6 +107,7 @@ function listen(server: Server, port: number): Promise<number> {
 
 export async function createLocalLauncher(options: LocalLauncherOptions): Promise<LocalLauncher> {
   const root = await realpath(options.projectDir);
+  const page = options.page === undefined ? undefined : await validateLaunchPage(root, options.page);
   const assets = await loadLauncherAssets(options.distDir ?? options.assetsDir);
   const projectId = projectIdOf(root);
   const labels = resolveLabels(options.labels);
@@ -128,7 +136,7 @@ export async function createLocalLauncher(options: LocalLauncherOptions): Promis
         streams,
         labels,
         previewSecret,
-        launchInfo: () => buildLaunchInfo({ root, projectId, hosts: hosts!, environment: options.environment, manifestText: options.manifestText, dotnet, labels: options.labels }),
+        launchInfo: () => buildLaunchInfo({ root, projectId, hosts: hosts!, environment: options.environment, manifestText: options.manifestText, page, dotnet, labels: options.labels }),
         files: () => readProjectTree(root, options.limits),
       });
     }

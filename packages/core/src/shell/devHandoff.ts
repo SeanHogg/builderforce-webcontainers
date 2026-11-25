@@ -16,30 +16,78 @@
  * Rollup's wasm builds (installer/wasmBuilds.ts). Nor when no preview is attached.
  */
 import type { CommandContext } from './context.js';
+import type { Program } from '../system/types.js';
 import { ownServerReason } from '../detectProject.js';
 import { rootedFileSystem } from '../rootedFs.js';
+import { InputQueue } from '../system/terminal.js';
+import type { VirtualFileSystem } from '../vfs.js';
 
 interface Handoff {
   tool: 'vite' | 'react-scripts' | 'angular';
   defaultPort: number;
 }
 
+/** The ONE table of handed-off tools: their handoff and the subcommands (none = bare) that start the dev server. `ng dev` is not a command. */
+const DEV_SERVERS: Readonly<Record<string, Handoff & { subcommands: ReadonlyArray<string | undefined> }>> = {
+  vite: { tool: 'vite', defaultPort: 5173, subcommands: [undefined, 'dev', 'serve'] },
+  'react-scripts': { tool: 'react-scripts', defaultPort: 3000, subcommands: ['start'] },
+  craco: { tool: 'react-scripts', defaultPort: 3000, subcommands: ['start'] },
+  // The Angular CLI's dev server (`ng serve`, alias `ng s`).
+  ng: { tool: 'angular', defaultPort: 4200, subcommands: ['serve', 's'] },
+};
+
+/** The command names a dev-server handoff answers to: registered as programs (`system/programs.ts`) so a bare `vite` service command resolves. */
+export const DEV_SERVER_TOOLS: readonly string[] = Object.keys(DEV_SERVERS);
+
 /** Does this command line start a dev server we hand off? */
 export function matchDevServer(argv: string[]): Handoff | undefined {
   const [command, ...rest] = argv;
+  const row = command !== undefined && Object.prototype.hasOwnProperty.call(DEV_SERVERS, command) ? DEV_SERVERS[command] : undefined;
   const sub = rest[0] !== undefined && !rest[0].startsWith('-') ? rest[0] : undefined;
-  if (command === 'vite' && (sub === undefined || sub === 'dev' || sub === 'serve')) return { tool: 'vite', defaultPort: 5173 };
-  if ((command === 'react-scripts' || command === 'craco') && sub === 'start') return { tool: 'react-scripts', defaultPort: 3000 };
-  // The Angular CLI's dev server (`ng serve`, alias `ng s`; `ng dev` is not a command).
-  if (command === 'ng' && (sub === 'serve' || sub === 's')) return { tool: 'angular', defaultPort: 4200 };
-  return undefined;
+  return row && row.subcommands.includes(sub) ? { tool: row.tool, defaultPort: row.defaultPort } : undefined;
+}
+
+/**
+ * The program a handoff tool name runs as when it is spawned directly (a service's `command: "vite"`)
+ * rather than from a shell line. It exists ONLY for the handoff: `resolveCommand` resolves a dev-server tool
+ * to it when `handoffFor` applies, and otherwise to the installed binary (or "not found") like any command,
+ * so a direct spawn keeps its `ipc`, `thread`, `detached` and byte stdio.
+ */
+export function devServerProgram(name: string): Program {
+  return async (program) => {
+    const ctx: CommandContext = {
+      args: program.args,
+      name,
+      cwd: program.cwd,
+      env: program.env,
+      fs: program.system.fs,
+      system: program.system,
+      io: { stdout: program.io.stdout, stderr: program.io.stderr, stdin: new InputQueue(), isTerminal: !!program.io.terminal },
+      signal: program.signal,
+    };
+    const argv = [name, ...program.args];
+    const handoff = devServerHandoff(ctx, argv);
+    if (handoff) return runDevServerHandoff(ctx, argv, handoff);
+    // `resolveCommand` hands this program a command only when the handoff applies; reaching here means it was asked for directly.
+    ctx.io.stderr(`bfsh: command not found: ${name}\n`);
+    return 127;
+  };
+}
+
+/**
+ * The handoff for this command line in `cwd`, when a preview is attached and can serve the project instead.
+ * The ONE condition: the shell asks it (`devServerHandoff`) and so does command resolution (`resolveCommand`), which
+ * resolves a dev-server tool to the handoff program only then — otherwise to the installed binary, as any command.
+ */
+export function handoffFor(fs: VirtualFileSystem, cwd: string, previewUrl: string | undefined, argv: string[]): Handoff | undefined {
+  const handoff = matchDevServer(argv);
+  // The project is the working directory (`npm run` starts scripts in the package's own).
+  return handoff && previewUrl && !ownServerReason(rootedFileSystem(fs, cwd)) ? handoff : undefined;
 }
 
 /** The handoff for this command line, when the attached preview can serve the project instead. */
 export function devServerHandoff(ctx: CommandContext, argv: string[]): Handoff | undefined {
-  const handoff = matchDevServer(argv);
-  // The project is the working directory (`npm run` starts scripts in the package's own).
-  return handoff && ctx.system.previewUrl && !ownServerReason(rootedFileSystem(ctx.fs, ctx.cwd)) ? handoff : undefined;
+  return handoffFor(ctx.fs, ctx.cwd, ctx.system.previewUrl, argv);
 }
 
 function portOf(argv: string[], fallback: number, env: Record<string, string>): number {

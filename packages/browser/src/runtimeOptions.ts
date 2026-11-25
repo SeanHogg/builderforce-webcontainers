@@ -135,6 +135,8 @@ export interface CommonRuntimeOptions {
    * reloads on every edit. Default true.
    */
   hot?: boolean;
+  /** A project-relative HTML file (`/mockup.html`) served at `/` instead of `index.html`: a page run on its own with the files beside it. */
+  page?: string;
   /** Your scripts (JavaScript source), run in every preview page before the app — analytics, test hooks, a mock `fetch`. */
   previewScripts?: string[];
   /** The Node runtime behind `run` (process workers, npm registry). */

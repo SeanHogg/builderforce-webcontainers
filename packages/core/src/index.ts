@@ -12,7 +12,7 @@ export { normalizePath, dirname, basename, join, extname, resolveFrom } from './
 export { DevServer } from './devServer.js';
 export type { DevServerOptions, ServedFile } from './devServer.js';
 export { detectProject } from './detectProject.js';
-export type { ProjectKind, ProjectFramework, ProjectProfile } from './detectProject.js';
+export type { DetectProjectOptions, ProjectKind, ProjectFramework, ProjectProfile } from './detectProject.js';
 export { readProjectConfig, parseLooseJson, parseDotenv, envFiles } from './projectConfig.js';
 export type { ProjectConfig, PathAlias, BuildMode } from './projectConfig.js';
 export { ESM_SH_ORIGIN, createEsmShCdn, createEsmShCdnFactory, esmShCdnFactory, isRegistryRange, loadPackageManifests } from './packageCdn.js';

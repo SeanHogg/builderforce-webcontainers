@@ -5,6 +5,29 @@ Release history for `@seanhogg/builderforce-webcontainers` and
 Upgrade steps that change your code are in the README's
 [Upgrade notes](README.md#upgrade-notes).
 
+## What's new in 2026.11.26
+
+- **Launch a single HTML page.** `createLocalLauncher({ page })` takes a
+  project-relative, top-level `.html`/`.htm` page. It is served at `/`, and its
+  relative CSS, script and image links resolve against the project directory.
+  The page is validated at start: it must be contained in the project (symlinks
+  are resolved), top level, HTML and present. A bad page throws
+  `LaunchPageError` with a `code` (`not-relative`, `not-top-level`,
+  `not-html`, `missing`, `directory`, `outside`).
+  `detectProject(fs, { page })` serves that document and never falls back to
+  `index.html`.
+- **Bare dev-server commands start the instant preview.** A service whose
+  command is `vite`, `react-scripts`, `craco` or `ng`, with nothing installed,
+  now hands off to the in-browser DevServer. Before, it failed with
+  "command not found". An installed binary in `node_modules/.bin` still runs as
+  itself, with the terminal's size, raw keystrokes and resize. With neither a
+  preview nor a binary, the command exits 127.
+- **Fix: `once('data')` on stdin now reads input.** `EventEmitter.once` now
+  goes through `on`, as in Node. A program that reads stdin with a one-shot
+  listener (`process.stdin.once('data', …)`, as prompt libraries and dev-server
+  shortcuts do) starts the stream and gets its input. Before, it exited at
+  once with nothing read.
+
 ## What's new in 2026.11.25
 
 - **Stable application identity from the manifest name (W10).**

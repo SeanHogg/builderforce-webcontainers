@@ -88,6 +88,8 @@ export interface LaunchInfo {
   projectDir: string;
   /** The environment asked for; null lets the page pick (the first `browser` environment, else the first). */
   environment: string | null;
+  /** A project-relative HTML file (`/mockup.html`) the application shows at `/` instead of `index.html`; absent for a whole project. */
+  page?: string;
   /** The manifest text (or the launcher's override); null when the project has none. */
   manifestText: string | null;
   /** Where the manifest was read, or the canonical `.builderforce/builderforce.json` when missing. */

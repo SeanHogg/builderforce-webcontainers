@@ -126,7 +126,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
         // process Worker the page starts for them.
         const cwd = options.cwd ?? message.cwd;
         const env = { ...message.env, ...options.env };
-        if (!foreign?.test(basename(command)) && !resolveCommand(fs, programs, command, args, cwd, env)) throw commandNotFound(command);
+        if (!foreign?.test(basename(command)) && !resolveCommand(fs, programs, command, args, cwd, env, message.previewUrl)) throw commandNotFound(command);
         return remoteChild(command, args, { ...options, cwd, env });
       },
       listen(port, handler, upgrade, accept) {
@@ -177,7 +177,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
       trapUncaught: deps.trapUncaught,
     };
 
-    const resolved = resolveCommand(fs, programs, message.command, message.args, message.cwd, message.env);
+    const resolved = resolveCommand(fs, programs, message.command, message.args, message.cwd, message.env, message.previewUrl);
     if (!resolved) {
       deps.post({ type: 'stderr', data: `bfsh: command not found: ${message.command}\n` });
       deps.post({ type: 'exit', code: 127 });

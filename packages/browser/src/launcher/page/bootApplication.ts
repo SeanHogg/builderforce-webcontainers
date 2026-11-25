@@ -53,6 +53,7 @@ export function runtimeOptionsFor(info: LaunchInfo, deps: Pick<BootDeps, 'previe
     previewOrigin: deps.previewOriginTemplate(info.previewOriginTemplate),
     id: info.projectId,
     root: LAUNCH_PROJECT_ROOT,
+    ...(info.page !== undefined ? { page: info.page } : {}),
     node: { workerUrl: info.hostWorkerUrl },
     php: deps.phpOptions,
     ...(info.dotnet.bundleUrl ? { dotnet: { bundleUrl: info.dotnet.bundleUrl } } : {}),

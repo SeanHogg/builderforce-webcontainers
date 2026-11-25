@@ -128,6 +128,14 @@ describe('createLocalLauncher: the /__bf API', () => {
     expect(again.projectId).toBe(launcher.projectId);
   });
 
+  it('launch.json: carries a validated page, and a page that is not an HTML file in the project fails the launch', async () => {
+    const { launcher } = await launch({ 'mockup.html': '<p>a</p>' }, { page: '/mockup.html', manifestText: NODE_MANIFEST });
+    expect((await json<LaunchInfo>(launcher, '/__bf/launch.json')).page).toBe('/mockup.html');
+    const project = tempProject({ 'a.html': '<p>a</p>' });
+    cleanups.push(project.cleanup);
+    await expect(createLocalLauncher({ projectDir: project.dir, tls: false, page: '/missing.html' })).rejects.toThrow(/does not exist/);
+  });
+
   it('launch.json: a canonical .builderforce/builderforce.json is read as the file, with the project directory and no deprecation', async () => {
     const { launcher, project } = await launch({ '.builderforce/builderforce.json': NODE_MANIFEST, 'builderforce.json': '{"version":1,"name":"stale root"}' });
     const info = await json<LaunchInfo>(launcher, '/__bf/launch.json');

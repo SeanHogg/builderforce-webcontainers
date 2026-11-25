@@ -62,6 +62,12 @@ describe('runtimeOptionsFor', () => {
     });
     expect(options).not.toHaveProperty('sharedPreviewOrigin');
     expect(runtimeOptionsFor({ ...INFO, dotnet: { bundleUrl: 'https://127.0.0.1:4000/dotnet/' } }, all)).toMatchObject({ dotnet: { bundleUrl: 'https://127.0.0.1:4000/dotnet/' } });
+    expect(options).not.toHaveProperty('page');
+  });
+
+  it('carries the page a launch asked for to the runtime', () => {
+    const { all } = deps();
+    expect(runtimeOptionsFor({ ...INFO, page: '/mockup.html' }, all)).toMatchObject({ page: '/mockup.html' });
   });
 });
 

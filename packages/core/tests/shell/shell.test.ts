@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import * as esbuild from 'esbuild';
+import { DevServer } from '../../src/devServer.js';
+import { createEsbuildTransformer } from '../../src/transformer.js';
 import { parse, type SimpleCommand } from '../../src/shell/parse.js';
 import { exec, kernelWith, readAll } from '../node/helpers.js';
 import { fakeRegistry, REGISTRY } from '../installer/fakeRegistry.js';
@@ -197,6 +200,71 @@ describe('shell execution', () => {
     expect(await announced(kernel, 'npx', ['ng', 'serve'])).toMatchObject({ port: 4200 });
     expect(await announced(kernel, 'bfsh', ['-c', 'ng s --port=4321'])).toMatchObject({ port: 4321 });
     expect(matchDevServer(['ng', 'build'])).toBeUndefined();
+  });
+
+  it('boots a service whose command is a bare `vite` with no package.json, and the preview serves the launched page at /', async () => {
+    const kernel = kernelWith({ 'mock.html': '<html><body>mock page</body></html>', 'mock.css': 'body{color:red}' }, { previewUrl: 'https://app.test/__bfwc/p1/' });
+    // Spawned directly, as a manifest service's plain command is (no shell): `vite` is a program, not "command not found".
+    expect(await announced(kernel, 'vite', [])).toEqual({ port: 5173, url: 'https://app.test/__bfwc/p1/', root: '/' });
+    const server = new DevServer({ fs: kernel.fs, transformer: createEsbuildTransformer(esbuild), base: '/__bfwc/p1/', page: '/mock.html' });
+    const body = (await server.handle('/')).body;
+    expect(typeof body === 'string' ? body : new TextDecoder().decode(body)).toContain('mock page');
+  });
+
+  it('without a preview a directly spawned `vite` runs the installed binary, as a shell line does', async () => {
+    const kernel = kernelWith({ 'node_modules/.bin/vite': '#!/usr/bin/env node\nconsole.log("installed vite " + process.argv.slice(2).join(" "))' });
+    expect(await exec(kernel, 'vite', ['--help'])).toEqual({ output: 'installed vite --help\n', code: 0 });
+    expect(await sh(kernel, 'vite --help')).toEqual({ output: 'installed vite --help\n', code: 0 });
+  });
+
+  it('an installed `vite` run on a terminal gets the terminal size and raw keystrokes, as any external command does', async () => {
+    const script = [
+      '#!/usr/bin/env node',
+      "console.log('tty=' + process.stdout.isTTY + ' cols=' + process.stdout.columns);",
+      'process.stdin.setRawMode(true);',
+      "process.stdin.once('data', (d) => { console.log('raw=' + JSON.stringify(String(d))); process.exit(0); });",
+      "console.log('ready');",
+    ].join('\n');
+    const kernel = kernelWith({ 'node_modules/.bin/vite': script });
+    const proc = kernel.run('vite', [], { terminal: { cols: 100, rows: 30 } });
+    const reader = proc.combinedOutput.getReader();
+    let text = '';
+    const until = async (needle: string) => {
+      while (!text.includes(needle)) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        text += value;
+      }
+    };
+    // The key is written only once the child is in raw mode (it says so): before that the terminal is cooked and holds a line without a newline.
+    await until('ready');
+    await proc.stdin.getWriter().write('q'); // no newline: only a raw tap delivers it
+    expect(await proc.wait()).toBe(0);
+    await until('raw=');
+    expect(text).toContain('tty=true cols=100');
+    expect(text).toContain('raw="q"');
+  });
+
+  it('a direct spawn of an installed `vite` keeps its ipc channel (no wrapper in between)', async () => {
+    const script = ['#!/usr/bin/env node', "process.send({ from: 'vite' });", 'process.exit(0);'].join('\n');
+    const kernel = kernelWith({ 'node_modules/.bin/vite': script });
+    const child = kernel.spawnChild('vite', [], { ipc: true });
+    const message = new Promise((resolve) => child.ipc!.onMessage(resolve));
+    expect(await message).toEqual({ from: 'vite' });
+    expect(await child.exit).toBe(0);
+  });
+
+  it('an absolute-path spawn of a dev-server tool follows the same gate: handed off with a preview, command not found without one', async () => {
+    const withPreview = kernelWith({}, { previewUrl: 'https://app.test/__bfwc/p1/' });
+    expect(await announced(withPreview, '/usr/local/bin/vite', [])).toMatchObject({ port: 5173 });
+    const without = kernelWith({});
+    expect(() => without.run('/usr/local/bin/vite')).toThrow(/ENOENT/);
+  });
+
+  it('with nothing installed and no handoff, `vite` is command not found: ENOENT directly, the shell line\'s message in a shell', async () => {
+    const kernel = kernelWith({});
+    expect(() => kernel.run('vite')).toThrow(/ENOENT/);
+    expect(await sh(kernel, 'vite')).toEqual({ output: 'bfsh: command not found: vite\n', code: 127 });
   });
 
   it('withdraws the handoff when it is interrupted, so the host stops serving its directory', async () => {

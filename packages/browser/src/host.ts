@@ -99,7 +99,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   let server: DevServer;
   try {
     const transformer = options.transformer ?? (await diagnostics.time('compiler.load', createEsbuildWasmTransformer()));
-    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, styles, attribution: attributionFromMarker(files, options.attribution), previewScripts, previewNonce: nonce, hot: options.hot });
+    server = new DevServer({ fs, transformer, base, cdn: options.cdn, components, styles, attribution: attributionFromMarker(files, options.attribution), previewScripts, previewNonce: nonce, hot: options.hot, page: options.page });
   } catch (error) {
     stopHostRequests();
     transport.dispose();

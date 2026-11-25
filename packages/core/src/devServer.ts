@@ -55,6 +55,8 @@ export interface DevServerOptions {
    * edit, keeping state (see {@link DevServer.planUpdate}). Default true.
    */
   hot?: boolean;
+  /** A project-relative HTML file served at `/` instead of `index.html` (`detectProject`'s `page`). */
+  page?: string;
 }
 
 const NO_STORE = { 'cache-control': 'no-store' };
@@ -172,7 +174,7 @@ export class DevServer {
   }
 
   profile(): ProjectProfile {
-    return (this.profileCache ??= detectProject(this.fs));
+    return (this.profileCache ??= detectProject(this.fs, { page: this.options.page }));
   }
 
   async handle(requestPath: string, search = ''): Promise<ServedFile> {

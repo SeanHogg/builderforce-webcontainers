@@ -10,6 +10,7 @@ import { nodeProgram } from '../node/program.js';
 import { shellProgram } from '../shell/program.js';
 import { COREUTILS } from '../shell/builtins.js';
 import { asProgram } from '../shell/context.js';
+import { DEV_SERVER_TOOLS, devServerProgram } from '../shell/devHandoff.js';
 
 const quote = (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`);
 
@@ -29,5 +30,8 @@ export function defaultPrograms(): Record<string, Program> {
     yarn: viaShell('yarn'),
   };
   for (const [name, command] of Object.entries(COREUTILS)) programs[name] = asProgram(command, name);
+  // `vite`, `react-scripts`, `craco`, `ng`: the in-browser dev server's handoff, for a direct spawn (a service's plain command).
+  // `resolveCommand` picks it only when the handoff applies; otherwise these resolve as any command (the installed binary, or not found).
+  for (const name of DEV_SERVER_TOOLS) programs[name] = devServerProgram(name);
   return programs;
 }

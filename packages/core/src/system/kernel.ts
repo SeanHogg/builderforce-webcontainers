@@ -79,7 +79,7 @@ export class Kernel {
   spawnChild(command: string, args: string[] = [], options: ProcessOptions = {}): ChildHandle {
     const cwd = options.cwd ?? '/';
     const env = { ...this.env, ...options.env };
-    const resolved = resolveCommand(this.fs, this.options.programs, command, args, cwd, env);
+    const resolved = resolveCommand(this.fs, this.options.programs, command, args, cwd, env, this.options.previewUrl);
     if (!resolved) throw commandNotFound(command);
     const [parentEnd, childEnd] = options.ipc ? createIpcPair() : [];
     const child = runProgram({ program: resolved.program, args: resolved.args, system: this.system, cwd, env, terminal: options.terminal, thread: options.thread, channel: childEnd });

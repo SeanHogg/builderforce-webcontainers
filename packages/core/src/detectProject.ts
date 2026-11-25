@@ -73,7 +73,21 @@ export function ownServerReason(fs: VirtualFileSystem): string | undefined {
   return NEEDS_NODE.find((row) => deps.has(row.dependency))?.reason;
 }
 
-export function detectProject(fs: VirtualFileSystem): ProjectProfile {
+export interface DetectProjectOptions {
+  /**
+   * A project-relative HTML file (`/mockup.html`) to serve at `/` instead of `index.html`: a page
+   * launched on its own, with the files beside it. When it is not a file here the project is
+   * unsupported, with the reason — it never falls back to `index.html`.
+   */
+  page?: string;
+}
+
+export function detectProject(fs: VirtualFileSystem, options: DetectProjectOptions = {}): ProjectProfile {
+  if (options.page !== undefined) {
+    return fs.isFile(options.page)
+      ? { supported: true, kind: 'static', htmlPath: options.page, staticDirs: PUBLIC_DIR }
+      : { supported: false, staticDirs: PUBLIC_DIR, reason: `The page ${options.page} is not in the project: it is missing, or the launcher left it out (over its size limits).` };
+  }
   const blocker = ownServerReason(fs);
   if (blocker) return { supported: false, staticDirs: PUBLIC_DIR, reason: blocker };
   const deps = readDependencyNames(fs);
