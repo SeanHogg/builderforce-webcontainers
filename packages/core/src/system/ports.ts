@@ -16,7 +16,7 @@
 import { addressInUseError, type ByteChannel, type ConnectionHandler, type HttpHandler, type HttpRequestData, type HttpResponseData, type HttpStreamResponse, type UpgradeHandler } from './types.js';
 import { bufferResponse } from './httpStream.js';
 import { acceptConnection, createChannelPair } from './byteChannel.js';
-import { deny, PLATFORM_CONTEXT, type SecurityContext, type ShieldDecision } from './securityContext.js';
+import { deny, PLATFORM_CONTEXT, sameService, type SecurityContext, type ShieldDecision } from './securityContext.js';
 import { ServiceGraphPolicy } from '../app/servicePortPolicy.js';
 
 export interface PortEvent {
@@ -52,6 +52,7 @@ export class PortRegistry {
   private readonly upgrades = new Map<number, UpgradeHandler>();
   private readonly connections = new Map<number, ConnectionHandler>();
   private readonly owners = new Map<number, SecurityContext>();
+  private readonly exclusive = new Set<number>();
   private readonly listeners = new Set<(event: PortEvent) => void>();
   private nextEphemeral = EPHEMERAL_START;
   readonly policy: PortAccessPolicy;
@@ -96,6 +97,23 @@ export class PortRegistry {
     };
   }
 
+  /** A port only its owner's own service may reach: never a dependent, a preview origin or the platform (the AI gateway, contract §5). */
+  listenExclusive(port: number, handler: HttpHandler, owner: SecurityContext): { port: number; close(): void } {
+    const registration = this.listen(port, handler, undefined, undefined, owner);
+    this.exclusive.add(registration.port);
+    return {
+      port: registration.port,
+      close: () => {
+        this.exclusive.delete(registration.port);
+        registration.close();
+      },
+    };
+  }
+
+  isExclusive(port: number): boolean {
+    return this.exclusive.has(port);
+  }
+
   has(port: number): boolean {
     return this.handlers.has(port);
   }
@@ -114,6 +132,7 @@ export class PortRegistry {
   reaches(port: number, caller: SecurityContext): boolean {
     const owner = this.owners.get(port);
     if (!owner) return false;
+    if (this.exclusive.has(port) && !sameService(caller, owner)) return false;
     try {
       return this.policy.decide(caller, owner).allow;
     } catch {
@@ -173,7 +192,7 @@ export class PortRegistry {
     const owner = this.owners.get(port) ?? PLATFORM_CONTEXT;
     let decision: ShieldDecision;
     try {
-      decision = this.policy.decide(caller, owner);
+      decision = this.exclusive.has(port) && !sameService(caller, owner) ? deny('port.not_owner') : this.policy.decide(caller, owner);
     } catch {
       decision = deny('port.not_owner'); // a broken policy refuses, never allows
     }

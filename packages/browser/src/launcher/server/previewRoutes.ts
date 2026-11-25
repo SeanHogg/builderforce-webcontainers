@@ -25,6 +25,8 @@ export const REPORT_TOKEN_HEADER = 'x-bfwc-report-token';
 
 export interface PreviewRouteContext {
   hosts: LauncherHosts;
+  /** Who may frame a preview (`resolveFrameAncestors`): the host page's origin first. */
+  frameAncestors: readonly string[];
   assets: LauncherAssets;
   /** The .NET bundle's directory, when there is one. */
   dotnetDir: string | null;
@@ -56,7 +58,7 @@ function bundleCors(origin: string | string[] | undefined, hosts: LauncherHosts)
 }
 
 export async function servePreviewOrigin(req: IncomingMessage, res: ServerResponse, url: URL, host: string, context: PreviewRouteContext): Promise<void> {
-  const frameAncestors = [context.hosts.pageOrigin];
+  const { frameAncestors } = context;
   const documentHeaders = previewDocumentHeaders(host, frameAncestors);
   if (url.pathname === '/__bfwc/report') {
     if (!context.reportToken) return sendText(req, res, 404, documentHeaders, 'Not found.');

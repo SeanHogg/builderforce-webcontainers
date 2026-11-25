@@ -53,7 +53,7 @@ async function run(client: LaunchClient, info: LaunchInfo, view: LauncherView, l
   view.problems.add(...snapshot.skipped.map((path) => ({ severity: 'warning' as const, kind: 'skipped' as const, subject: path, text: formatLabel(labels.skippedFile, { path }) })));
 
   view.header.setStatus(labels.bootingRuntime);
-  const { runtime, application } = await bootApplication(plan, info, snapshot, runtimeDeps);
+  const { runtime, application } = await bootApplication(plan, info, snapshot, { ...runtimeDeps, hostRelay: client.hostRelay() });
   hold.application = application;
   const refresh = () => view.update(application.listServices());
   application.onStateChange(refresh);

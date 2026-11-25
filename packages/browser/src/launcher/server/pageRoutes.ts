@@ -8,6 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { LauncherLabels } from '../labels.js';
 import { LAUNCH_PATHS, LAUNCH_TOKEN_HEADER, PAGE_ASSET_PREFIX, PREVIEW_PAGE_PATH, PREVIEW_PROBE_PATH, PREVIEW_SCRIPT_PREFIX, type LaunchInfo, type ProjectChange, type ProjectSnapshot } from '../protocol.js';
 import type { LauncherHosts } from './hosts.js';
+import { serveAiRelay, type LauncherForwardAi } from './aiRelay.js';
 import { send, sendText, tokenMatches } from './httpResponses.js';
 import { PAGE_FILES, type LauncherAssets } from './launcherAssets.js';
 import { apiHeaders, pageHeaders, workerScriptHeaders } from './previewHeaders.js';
@@ -27,6 +28,8 @@ export interface PageRouteContext {
   labels: LauncherLabels;
   /** Checks the preview origin's redirect ticket. */
   previewSecret: Uint8Array;
+  /** The host's model relay; absent, `/__bf/ai` is a 404. */
+  forwardAi?: LauncherForwardAi;
 }
 
 /** How often an idle change stream sends a comment, so proxies and the page see it is alive. */
@@ -57,6 +60,9 @@ async function serveApi(req: IncomingMessage, res: ServerResponse, url: URL, con
   if (!tokenMatches(req.headers[LAUNCH_TOKEN_HEADER], context.token)) {
     sendText(req, res, 403, apiHeaders('text/plain; charset=utf-8'), 'The launch token is missing or wrong.');
     return;
+  }
+  if (url.pathname === LAUNCH_PATHS.ai) {
+    return context.forwardAi ? serveAiRelay(req, res, context.forwardAi) : sendText(req, res, 404, apiHeaders('text/plain; charset=utf-8'), 'Not found.');
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     sendText(req, res, 405, { ...apiHeaders('text/plain; charset=utf-8'), Allow: 'GET, HEAD' }, 'Method not allowed.');

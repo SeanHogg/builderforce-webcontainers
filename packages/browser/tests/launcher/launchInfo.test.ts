@@ -27,13 +27,13 @@ describe('buildLaunchInfo manifest source', () => {
   it('reads a root manifest as legacy and still names the canonical write path when missing', async () => {
     const dir = root();
     writeFileSync(join(dir, 'builderforce.json'), '{"version":1}');
-    const legacy = await buildLaunchInfo({ root: dir, projectId: 'p1', hosts, dotnet: { dir: null, reason: 'none' } });
+    const legacy = await buildLaunchInfo({ root: dir, projectId: 'p1', hosts, dotnet: { dir: null, reason: 'none' }, aiRelay: false });
     expect(legacy.manifestSource).toBe('legacy');
     expect(legacy.deprecation).toBe(LEGACY_MANIFEST_DEPRECATION);
     expect(legacy.manifestPath).toBe(join(dir, 'builderforce.json'));
 
     const empty = root();
-    const missing = await buildLaunchInfo({ root: empty, projectId: 'p1', hosts, dotnet: { dir: null, reason: 'none' } });
+    const missing = await buildLaunchInfo({ root: empty, projectId: 'p1', hosts, dotnet: { dir: null, reason: 'none' }, aiRelay: false });
     expect(missing.manifestSource).toBe('missing');
     expect(missing.manifestPath).toBe(manifestWritePath(empty));
   });
@@ -46,7 +46,7 @@ describe('buildLaunchInfo manifest source', () => {
       projectId: 'p1',
       hosts,
       manifestText: '{"version":1}',
-      dotnet: { dir: null, reason: 'none' },
+      dotnet: { dir: null, reason: 'none' }, aiRelay: false,
     });
     expect(info.manifestSource).toBe('override');
     expect(info.manifestPath).toBe(manifestWritePath(dir));
@@ -58,7 +58,7 @@ describe('buildLaunchInfo manifest source', () => {
     const elsewhere = root();
     writeFileSync(join(elsewhere, 'builderforce.json'), '{"version":1}');
     symlinkSync(elsewhere, join(dir, '.builderforce'), 'junction');
-    const info = await buildLaunchInfo({ root: dir, projectId: 'p1', hosts, dotnet: { dir: null, reason: 'none' } });
+    const info = await buildLaunchInfo({ root: dir, projectId: 'p1', hosts, dotnet: { dir: null, reason: 'none' }, aiRelay: false });
     expect(info).toMatchObject({ manifestText: null, manifestSource: 'missing', manifestOutside: true });
   });
 });

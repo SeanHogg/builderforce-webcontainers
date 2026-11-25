@@ -72,6 +72,12 @@ ships on its own.
   application. Different names distinguish applications with identical services.
   See the [release notes](CHANGELOG.md#whats-new-in-20261125).
 
+- 2026.11.27 — **Host-delivered AI for services.** Backend `ai` resources get
+  `AI_BASE_URL` from an owner-only gateway port served by
+  `startApplicationRuntime` through a `hostRelay`. The local launcher relays
+  models at a token-gated `/__bf/ai`, and takes `frameAncestors` and
+  `ignoredDirs`. See the [release notes](CHANGELOG.md#whats-new-in-20261127).
+
 ## Shipped in 2026.10.3
 
 - **Process isolation in relay mode.** Process workers (node, npm, the shell) start inside the relay frame, on the preview origin, from `process-worker.js`, so the code a project runs never shares the host's storage or session.

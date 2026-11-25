@@ -23,6 +23,7 @@ function info(manifest: unknown, overrides: Partial<LaunchInfo> = {}): LaunchInf
     previewOriginTemplate: 'https://{key}.localhost:4000',
     hostWorkerUrl: 'https://localhost:4000/__bfwc/process-worker.js',
     dotnet: { bundleUrl: null, reason: 'not installed' },
+    aiRelay: false,
     ...overrides,
   };
 }

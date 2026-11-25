@@ -18,13 +18,24 @@ import { EXCLUDED_DIRECTORIES, PROJECT_LIMITS, type ProjectChange, type ProjectS
 
 export type ProjectLimits = { maxFiles: number; maxFileBytes: number; maxTotalBytes: number };
 
-const EXCLUDED = new Set(EXCLUDED_DIRECTORIES);
+const EXCLUDED: ReadonlySet<string> = new Set(EXCLUDED_DIRECTORIES);
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 
+/**
+ * The directory names never read or watched: {@link EXCLUDED_DIRECTORIES} plus the integrator's `extra`.
+ * Each extra is one path segment (no `/`, `\` or `..`); anything else throws.
+ */
+export function resolveExcludedDirectories(extra: readonly string[] = []): ReadonlySet<string> {
+  for (const name of extra) {
+    if (name === '' || name === '.' || name === '..' || /[\\/]/.test(name)) throw new Error(`ignoredDirs: "${name}" is not a single directory name.`);
+  }
+  return extra.length === 0 ? EXCLUDED : new Set([...EXCLUDED_DIRECTORIES, ...extra]);
+}
+
 /** Whether a project-relative path (`/`-separated) lies in an excluded directory. */
-export function isExcludedPath(path: string): boolean {
+export function isExcludedPath(path: string, excluded: ReadonlySet<string> = EXCLUDED): boolean {
   const segments = path.split('/');
-  return segments.slice(0, -1).some((segment) => EXCLUDED.has(segment)) || EXCLUDED.has(segments[segments.length - 1] ?? '');
+  return segments.slice(0, -1).some((segment) => excluded.has(segment)) || excluded.has(segments[segments.length - 1] ?? '');
 }
 
 /** A project-relative path from an OS one (`a\b` → `a/b`). */
@@ -48,7 +59,7 @@ export function encodeFile(bytes: Uint8Array): { content: string } | { base64: s
  * Read the tree under `projectDir`. `root` must be its real path (`realpath`), so
  * containment compares like with like.
  */
-export async function readProjectTree(root: string, limits: ProjectLimits = PROJECT_LIMITS): Promise<ProjectSnapshot> {
+export async function readProjectTree(root: string, limits: ProjectLimits = PROJECT_LIMITS, excluded: ReadonlySet<string> = EXCLUDED): Promise<ProjectSnapshot> {
   const snapshot: ProjectSnapshot = { files: {}, binary: {}, skipped: [] };
   let count = 0;
   let total = 0;
@@ -60,11 +71,11 @@ export async function readProjectTree(root: string, limits: ProjectLimits = PROJ
       const absolute = join(directory, entry.name);
       const path = toProjectPath(relative(root, absolute));
       if (entry.isDirectory()) {
-        if (!EXCLUDED.has(entry.name)) await visit(absolute);
+        if (!excluded.has(entry.name)) await visit(absolute);
         continue;
       }
       if (!entry.isFile() && !entry.isSymbolicLink()) continue; // sockets, devices, FIFOs
-      if (entry.isSymbolicLink() && EXCLUDED.has(entry.name)) continue;
+      if (entry.isSymbolicLink() && excluded.has(entry.name)) continue;
       const file = await containedFile(root, absolute);
       if (file === null) continue; // a dangling link: nothing to send
       if (file === 'outside' || file === 'directory') {
@@ -96,8 +107,8 @@ export async function readProjectTree(root: string, limits: ProjectLimits = PROJ
  * One changed path as a {@link ProjectChange}; null when there is nothing to send (an
  * excluded path, a directory). A path that no longer exists is `deleted`.
  */
-export async function readProjectChange(root: string, path: string, limits: ProjectLimits = PROJECT_LIMITS): Promise<ProjectChange | null> {
-  if (!path || isExcludedPath(path)) return null;
+export async function readProjectChange(root: string, path: string, limits: ProjectLimits = PROJECT_LIMITS, excluded: ReadonlySet<string> = EXCLUDED): Promise<ProjectChange | null> {
+  if (!path || isExcludedPath(path, excluded)) return null;
   const absolute = join(root, ...path.split('/'));
   if (!isInside(root, absolute)) return null;
   const exists = await lstat(absolute).then(() => true, () => false);

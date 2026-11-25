@@ -24,6 +24,17 @@ export function sendText(req: IncomingMessage, res: ServerResponse, status: numb
   send(req, res, status, { 'Content-Type': 'text/plain; charset=utf-8', ...headers }, text);
 }
 
+/** Read the request body up to `max` bytes; null when it is larger (read through and dropped, never buffered, so the refusal can still be sent). */
+export async function readBoundedBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    total += chunk.byteLength;
+    if (total <= max) chunks.push(chunk);
+  }
+  return total > max ? null : Buffer.concat(chunks);
+}
+
 /** The request's path (no query), or null when it is not a well-formed origin-form target. */
 export function requestUrl(req: IncomingMessage, origin: string): URL | null {
   const target = req.url ?? '';

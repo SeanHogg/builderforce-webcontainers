@@ -21,6 +21,7 @@ const INFO: LaunchInfo = {
   previewOriginTemplate: 'https://{key}.localhost:4000',
   hostWorkerUrl: 'https://localhost:4000/__bfwc/process-worker.js',
   dotnet: { bundleUrl: null, reason: 'none' },
+  aiRelay: false,
 };
 
 const PLAN: Extract<LaunchPlan, { kind: 'ready' }> = {

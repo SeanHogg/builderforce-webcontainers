@@ -4,6 +4,8 @@
  * project tree, and the change stream (read with `fetch`, since `EventSource`
  * cannot send the token header).
  */
+import type { HostRelay } from '../../app/hostRelay.js';
+import { launcherHostRelay } from './aiRelay.js';
 import { LAUNCH_PATHS, LAUNCH_TOKEN_HEADER, LAUNCH_TOKEN_PARAM, type LaunchInfo, type ProjectChange, type ProjectSnapshot } from '../protocol.js';
 
 /** The token in a launch URL's fragment (`#token=…`), or null. */
@@ -56,6 +58,8 @@ export interface LaunchClient {
   files(): Promise<ProjectSnapshot>;
   /** Follow the change stream until `signal` aborts; resolves when it ends. */
   followChanges(handlers: ChangeHandlers, signal: AbortSignal): Promise<void>;
+  /** The model relay through this launch's `/__bf/ai` (the token stays inside the client). */
+  hostRelay(): HostRelay;
 }
 
 export function createLaunchClient(token: string, fetchImpl: FetchLike = (input, init) => fetch(input, init)): LaunchClient {
@@ -68,6 +72,7 @@ export function createLaunchClient(token: string, fetchImpl: FetchLike = (input,
   return {
     launch: () => getJson<LaunchInfo>(LAUNCH_PATHS.launch),
     files: () => getJson<ProjectSnapshot>(LAUNCH_PATHS.files),
+    hostRelay: () => launcherHostRelay(token),
     async followChanges(handlers, signal) {
       try {
         const response = await fetchImpl(LAUNCH_PATHS.changes, { headers, signal });

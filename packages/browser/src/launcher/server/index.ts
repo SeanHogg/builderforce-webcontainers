@@ -11,6 +11,7 @@
  */
 export { createLocalLauncher, defaultCaStoreDir } from './launcher.js';
 export type { LocalLauncher, LocalLauncherOptions } from './launcher.js';
+export type { LauncherForwardAi } from './aiRelay.js';
 export { isLaunchPageError, LaunchPageError } from './launchPage.js';
 export type { LaunchPageErrorCode } from './launchPage.js';
 export { CA_COMMON_NAME, loadOrCreateLocalCa } from './tls/localCa.js';

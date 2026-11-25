@@ -147,6 +147,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   const cookies = new PortCookieJars();
   /** Whether a request that came through `origin` may reach `port`: only through its owner's preview origin. */
   const admitPort = (origin: string, port: number) => {
+    if (processes.ports.isExclusive(port)) return false; // an owner-only port (the AI gateway) is on no preview origin
     if (origins.mayServe(origin, processes.ports.ownerOf(port))) return true;
     // The asker is a preview document on `origin`: no process of ours, so unattributed; the port's owner is evidence.
     const owner = processes.ports.ownerOf(port);
@@ -250,6 +251,10 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
     listProcesses: () => processes.list().map((info) => ({ ...info, cwd: baseToProject(root, info.cwd) ?? info.cwd })),
     request: (port, request, caller) => processes.request(port, { method: 'GET', headers: {}, body: null, ...request }, caller),
     listenTcp: (port, accept, owner) => processes.ports.listen(port, async () => textResponse(502, 'Not an HTTP server'), undefined, accept, owner),
+    listenHttp: (port, handler, owner) => {
+      if (!owner) throw new Error('listenHttp needs an owning service.');
+      return processes.ports.listenExclusive(port, handler, owner);
+    },
     connect: (port, caller) => processes.ports.connect(port, caller),
     portPolicy: processes.portPolicy,
     registerIngress: (applicationId, spec) => ingress.register(applicationId, spec),

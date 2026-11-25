@@ -11,6 +11,7 @@
 import type { RuntimeProvider } from '@seanhogg/builderforce-webcontainers-core/app';
 import type { FileTree } from '@seanhogg/builderforce-webcontainers-core';
 import type { ApplicationRuntime, ApplicationRuntimeOptions, PhpHostOptions } from '../../app.js';
+import type { HostRelay } from '../../app/hostRelay.js';
 import type { PreviewOriginOption } from '../../previewOrigin.js';
 import type { PreviewRuntime, PreviewRuntimeOptions } from '../../runtimeOptions.js';
 import { LAUNCH_PROJECT_ROOT, type LaunchInfo, type ProjectSnapshot } from '../protocol.js';
@@ -24,6 +25,8 @@ export interface BootDeps {
   providers(runtime: PreviewRuntime): RuntimeProvider[];
   /** The ONE PHP options object: given to the runtime and to the `php` provider, so both judge the same PHP. */
   phpOptions: PhpHostOptions;
+  /** The host's model relay (`LaunchClient.hostRelay`); used only when the launch says the host supplies one. */
+  hostRelay?: HostRelay;
 }
 
 export interface BootedApplication {
@@ -37,6 +40,14 @@ export function decodeBase64(base64: string): Uint8Array {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+/** Bytes to base64, in slices so a large body cannot overflow the argument limit. */
+export function encodeBase64(bytes: Uint8Array): string {
+  const SLICE = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += SLICE) binary += String.fromCharCode(...bytes.subarray(i, i + SLICE));
+  return btoa(binary);
 }
 
 /** The snapshot as a flat file tree (text as strings, the rest as bytes). */
@@ -70,7 +81,11 @@ export async function bootApplication(
   const runtime = await deps.startPreviewRuntime(runtimeOptionsFor(info, deps));
   try {
     runtime.writeTree(snapshotTree(snapshot));
-    const application = deps.startApplicationRuntime(plan.spec, { runtime, providers: deps.providers(runtime) });
+    const application = deps.startApplicationRuntime(plan.spec, {
+      runtime,
+      providers: deps.providers(runtime),
+      ...(info.aiRelay && deps.hostRelay ? { hostRelay: deps.hostRelay } : {}),
+    });
     return { runtime, application };
   } catch (error) {
     runtime.dispose();

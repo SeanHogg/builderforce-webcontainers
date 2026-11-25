@@ -33,6 +33,8 @@ export interface LaunchInfoInput {
   /** The validated page (`validateLaunchPage`), when one was asked for. */
   page?: string;
   dotnet: DotnetBundleSource;
+  /** Whether the host supplied a model relay (`LocalLauncherOptions.forwardAi`). */
+  aiRelay: boolean;
   labels?: Partial<LauncherLabels>;
 }
 
@@ -54,6 +56,7 @@ export async function buildLaunchInfo(input: LaunchInfoInput): Promise<LaunchInf
     previewOriginTemplate: hosts.appOriginTemplate,
     hostWorkerUrl: `${hosts.pageOrigin}${PREVIEW_SCRIPT_PREFIX}process-worker.js`,
     dotnet: input.dotnet.dir !== null ? { bundleUrl: `${hosts.relayOrigin}${DOTNET_BUNDLE_PREFIX}` } : { bundleUrl: null, reason: input.dotnet.reason },
+    aiRelay: input.aiRelay,
     ...(input.labels ? { labels: input.labels } : {}),
   };
 }

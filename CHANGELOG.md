@@ -5,6 +5,28 @@ Release history for `@seanhogg/builderforce-webcontainers` and
 Upgrade steps that change your code are in the README's
 [Upgrade notes](README.md#upgrade-notes).
 
+## What's new in 2026.11.27
+
+- **Agents' models reach the services that use them.** A backend service that
+  declares an `ai` resource now gets `AI_BASE_URL` (or `<ID>_AI_BASE_URL` when
+  it uses several) pointing at an OpenAI-compatible port inside the
+  environment. `startApplicationRuntime` serves it from a `hostRelay` you pass;
+  the relay attaches the signed-in session on the host side, so no key or
+  token ever enters a process's environment. The port belongs to its service
+  alone: a dependent service, a preview origin and the platform cannot reach
+  it, and it closes on `dispose()`. A model outside the manifest's allowlist
+  is refused before the relay is called, and a relay that fails answers 502.
+  `PreviewRuntime.listenHttp` and `PortRegistry.listenExclusive` are the new
+  seams.
+- **The local launcher can relay models.** `createLocalLauncher({ forwardAi })`
+  serves a token-gated `POST /__bf/ai` on the page origin only (never on a
+  preview origin) and `launch.json` reports `aiRelay`. The launcher page builds
+  the `HostRelay` for you.
+- **Launcher options.** `frameAncestors` lets a VS Code webview or embedding
+  site frame previews (exact https or `vscode-webview` origins; a wildcard or
+  http origin throws). `ignoredDirs` leaves named directories out of the file
+  API and live sync, beside the built-in ones.
+
 ## What's new in 2026.11.26
 
 - **Launch a single HTML page.** `createLocalLauncher({ page })` takes a

@@ -18,7 +18,20 @@ export const LAUNCH_PATHS = {
   launch: '/__bf/launch.json',
   files: '/__bf/files',
   changes: '/__bf/changes',
+  ai: '/__bf/ai',
 } as const;
+
+/** The largest `/__bf/ai` request body the launcher reads (matches the file API's total cap's order, never more). */
+export const MAX_AI_REQUEST_BYTES = 32 * 1024 * 1024;
+
+/** `POST /__bf/ai`: the page gateway's request, the process body base64 so the envelope is JSON. Headers never cross. */
+export interface AiRelayEnvelope {
+  resourceId: string;
+  models?: string[];
+  stream: boolean;
+  /** Base64 of the process's request body. */
+  body: string;
+}
 
 /** Where the runtime's files are served on every preview origin (the relay's and each application's). */
 export const PREVIEW_SCRIPT_PREFIX = '/__bfwc/';
@@ -109,6 +122,8 @@ export interface LaunchInfo {
   /** The process worker on the host page's own origin: what database Workers start from (they never run on a preview origin). */
   hostWorkerUrl: string;
   dotnet: LaunchDotnet;
+  /** The host supplies a model relay at {@link LAUNCH_PATHS.ai}: the page then runs `ai` resources through it. */
+  aiRelay: boolean;
   /** Label overrides (English by default). */
   labels?: Partial<LauncherLabels>;
 }

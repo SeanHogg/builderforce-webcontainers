@@ -33,8 +33,10 @@ import { buildLaunchInfo, projectIdOf } from './launchInfo.js';
 import { validateLaunchPage } from './launchPage.js';
 import { servePageOrigin } from './pageRoutes.js';
 import { servePreviewOrigin } from './previewRoutes.js';
-import { readProjectTree, type ProjectLimits } from './projectFiles.js';
+import { readProjectTree, resolveExcludedDirectories, type ProjectLimits } from './projectFiles.js';
 import { createProjectWatch } from './projectWatch.js';
+import { resolveFrameAncestors, validateFrameAncestors } from './frameAncestors.js';
+import type { LauncherForwardAi } from './aiRelay.js';
 import { createLeafCache } from './tls/issueCert.js';
 import { loadOrCreateLocalCa, type LocalCa } from './tls/localCa.js';
 import { createSniCallback } from './tls/sni.js';
@@ -69,6 +71,18 @@ export interface LocalLauncherOptions {
   assetsDir?: string;
   /** When set, preview pages may POST `/__bfwc/report` with header `x-bfwc-report-token`. */
   reportToken?: string;
+  /**
+   * The host's model relay for `ai` resources (contract §6): attaches the signed-in session host-side and
+   * streams the completion back; never returns a token. Absent, `ai` resources get no `AI_BASE_URL`.
+   */
+  forwardAi?: LauncherForwardAi;
+  /**
+   * Extra origins that may frame a preview, beside the launcher page's own (a VS Code webview, an embedding
+   * site): exact `https://host[:port]` or `vscode-webview://<id>` origins; a wildcard or http origin throws.
+   */
+  frameAncestors?: readonly string[];
+  /** Directory names to leave out of the file API and live sync, beside the built-in ones (`node_modules`, `.git`, …): single names, no path separators. */
+  ignoredDirs?: readonly string[];
   /** Override the tree caps (tests). */
   limits?: ProjectLimits;
   /** The change stream's debounce (default 120ms). */
@@ -118,9 +132,12 @@ export async function createLocalLauncher(options: LocalLauncherOptions): Promis
   const tls = options.tls === undefined ? { storeDir: defaultCaStoreDir() } : options.tls;
   const ca = tls === false ? null : await loadOrCreateLocalCa(tls.storeDir);
   const scheme = ca ? 'https' : 'http';
-  const watch = createProjectWatch(root, { debounceMs: options.watchDebounceMs, limits: options.limits });
+  const extraFrameAncestors = validateFrameAncestors(options.frameAncestors);
+  const excluded = resolveExcludedDirectories(options.ignoredDirs);
+  const watch = createProjectWatch(root, { debounceMs: options.watchDebounceMs, limits: options.limits, excluded });
   const streams = new Set<ServerResponse>();
   let hosts: LauncherHosts | undefined;
+  let frameAncestors: string[] | undefined;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const origin = hosts!.classify(req.headers.host);
@@ -136,11 +153,12 @@ export async function createLocalLauncher(options: LocalLauncherOptions): Promis
         streams,
         labels,
         previewSecret,
-        launchInfo: () => buildLaunchInfo({ root, projectId, hosts: hosts!, environment: options.environment, manifestText: options.manifestText, page, dotnet, labels: options.labels }),
-        files: () => readProjectTree(root, options.limits),
+        forwardAi: options.forwardAi,
+        launchInfo: () => buildLaunchInfo({ root, projectId, hosts: hosts!, environment: options.environment, manifestText: options.manifestText, page, dotnet, aiRelay: options.forwardAi !== undefined, labels: options.labels }),
+        files: () => readProjectTree(root, options.limits, excluded),
       });
     }
-    return servePreviewOrigin(req, res, url, req.headers.host!.toLowerCase(), { hosts: hosts!, assets, dotnetDir: dotnet.dir, reportToken: options.reportToken, labels, previewSecret });
+    return servePreviewOrigin(req, res, url, req.headers.host!.toLowerCase(), { hosts: hosts!, frameAncestors: frameAncestors!, assets, dotnetDir: dotnet.dir, reportToken: options.reportToken, labels, previewSecret });
   }
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {
@@ -163,6 +181,7 @@ export async function createLocalLauncher(options: LocalLauncherOptions): Promis
   }
   const port = await listen(server, options.port ?? 0);
   hosts = launcherHosts(port, scheme);
+  frameAncestors = resolveFrameAncestors(hosts.pageOrigin, extraFrameAncestors);
 
   let closing: Promise<void> | undefined;
   return {

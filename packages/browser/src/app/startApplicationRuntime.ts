@@ -19,6 +19,7 @@ import {
 } from '@seanhogg/builderforce-webcontainers-core/app';
 import { hashAlgorithm } from '@seanhogg/builderforce-webcontainers-core';
 import { applicationDiagnostics } from './appDiagnostics.js';
+import { startAiGateway } from './aiGateway.js';
 import { messageOf } from './asyncHelpers.js';
 import { ServiceFailure } from './awaitReadiness.js';
 import { createListeners } from './listeners.js';
@@ -78,29 +79,44 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   const processes = options.processes ?? options.runtime;
   const portPolicy = options.portPolicy ?? options.runtime.portPolicy;
 
-  for (const id of graph.startOrder) {
-    // Start order: every dependency is created before its dependents.
-    const dependencies = graph.dependenciesOf(id).map((dependency) => services.get(dependency)!);
-    services.set(
-      id,
-      superviseService({
-        spec: spec.services.find((service) => service.id === id)!,
-        env: serviceEnv(spec, id, { databaseCredentials }),
-        registry,
-        logs,
-        onStateChange: (change) => stateChanges.emit(change),
-        onError: (error) => errors.emit(error),
-        dependencies: () => dependencies,
-        readinessTimeoutMs: options.readinessTimeoutMs ?? DEFAULTS.readinessTimeoutMs,
-        dependencyTimeoutMs: options.dependencyTimeoutMs ?? DEFAULTS.dependencyTimeoutMs,
-        stopTimeoutMs: options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs,
-        restart: options.restart ?? {},
-        stableAfterMs: options.stableAfterMs ?? DEFAULTS.stableAfterMs,
-        security: Object.freeze({ applicationId, serviceId: id }),
-        projectId: spec.projectId,
-        processes,
-      }),
-    );
+  // Host-delivered AI (contract §5): one exclusive port per backend `ai` use, before env is computed. No relay or no listenHttp: no AI_BASE_URL.
+  const listenHttp = options.runtime.listenHttp?.bind(options.runtime);
+  const gateway = options.hostRelay && listenHttp
+    ? startAiGateway({ applicationId, services: spec.services, relay: options.hostRelay, listen: listenHttp })
+    : undefined;
+  const aiEndpoint = (resourceId: string, client: ServiceSpec) => {
+    const baseUrl = gateway?.baseUrl(client.id, resourceId);
+    return baseUrl ? { baseUrl } : undefined;
+  };
+
+  try {
+    for (const id of graph.startOrder) {
+      // Start order: every dependency is created before its dependents.
+      const dependencies = graph.dependenciesOf(id).map((dependency) => services.get(dependency)!);
+      services.set(
+        id,
+        superviseService({
+          spec: spec.services.find((service) => service.id === id)!,
+          env: serviceEnv(spec, id, { databaseCredentials, aiEndpoint }),
+          registry,
+          logs,
+          onStateChange: (change) => stateChanges.emit(change),
+          onError: (error) => errors.emit(error),
+          dependencies: () => dependencies,
+          readinessTimeoutMs: options.readinessTimeoutMs ?? DEFAULTS.readinessTimeoutMs,
+          dependencyTimeoutMs: options.dependencyTimeoutMs ?? DEFAULTS.dependencyTimeoutMs,
+          stopTimeoutMs: options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs,
+          restart: options.restart ?? {},
+          stableAfterMs: options.stableAfterMs ?? DEFAULTS.stableAfterMs,
+          security: Object.freeze({ applicationId, serviceId: id }),
+          projectId: spec.projectId,
+          processes,
+        }),
+      );
+    }
+  } catch (error) {
+    gateway?.close();
+    throw error;
   }
 
   const service = (serviceId: string) => {
@@ -160,6 +176,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
       if (disposed) return;
       disposed = true;
       await stopAll();
+      gateway?.close(); // not on stop(): env is fixed at construction, and a later start() reuses this port
       if (!named) options.runtime.forgetApplication?.(applicationId);
       // Live readers get every service's last lines before their streams end (each wait bounded by the stop timeout).
       // (Each stop already waits for its running process's output; this covers whatever exited outside a stop.)

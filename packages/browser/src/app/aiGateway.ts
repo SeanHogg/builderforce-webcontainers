@@ -16,7 +16,7 @@
 import type { SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
 import type { ServiceSpec } from '@seanhogg/builderforce-webcontainers-core/app';
 import type { HttpHandler, HttpRequestData, HttpStreamResponse } from '@seanhogg/builderforce-webcontainers-core';
-import { roleOf } from '@seanhogg/builderforce-webcontainers-core/app';
+import { receivesDatabaseCredentials } from '@seanhogg/builderforce-webcontainers-core/app';
 import type { AiForwardRequest, HostRelay } from './hostRelay.js';
 
 /** Headers that must never be written back to the process (contract §5). */
@@ -138,13 +138,14 @@ function wantsStream(body: Uint8Array, headers: Map<string, string>): boolean {
   }
 }
 
-/** Stream `source` without buffering the completion. */
-export function streamBytes(source: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
-  const iterator = source[Symbol.asyncIterator]();
+/** Stream `iterator` without buffering the completion; `first` is a chunk already pulled from it. */
+export function streamBytes(iterator: AsyncIterator<Uint8Array>, first?: IteratorResult<Uint8Array>): ReadableStream<Uint8Array> {
+  let pending = first;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
-        const next = await iterator.next();
+        const next = pending ?? (await iterator.next());
+        pending = undefined;
         if (next.done) {
           controller.close();
           return;
@@ -183,9 +184,12 @@ export function aiGatewayHandler(relay: HostRelay, resource: AiGatewayResource):
       body,
       stream: wantsStream(body, headers),
     };
-    let upstream: AsyncIterable<Uint8Array>;
+    // The first chunk is pulled before the head is written, so a relay that fails early answers 502.
+    let iterator: AsyncIterator<Uint8Array>;
+    let first: IteratorResult<Uint8Array>;
     try {
-      upstream = relay.forwardAi(forward);
+      iterator = relay.forwardAi(forward)[Symbol.asyncIterator]();
+      first = await iterator.next();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'AI relay failed';
       return jsonResponse(502, message);
@@ -197,14 +201,13 @@ export function aiGatewayHandler(relay: HostRelay, resource: AiGatewayResource):
         'content-type': forward.stream ? 'text/event-stream' : 'application/json',
         'cache-control': 'no-cache',
       },
-      body: streamBytes(upstream),
+      body: streamBytes(iterator, first),
     };
   };
 }
 
-function isBackend(service: ServiceSpec): boolean {
-  return service.type !== 'database' && roleOf(service) === 'backend';
-}
+/** The same predicate `serviceEnv` uses for credentials, so env and bindings cannot disagree. */
+const isBackend = receivesDatabaseCredentials;
 
 /**
  * Register one gateway port per backend `ai` use, before services start.

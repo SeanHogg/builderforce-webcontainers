@@ -23,6 +23,8 @@ export interface ProjectWatch {
 export interface ProjectWatchOptions {
   debounceMs?: number;
   limits?: ProjectLimits;
+  /** Directory names never watched (default: the built-in exclusions). */
+  excluded?: ReadonlySet<string>;
 }
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -47,7 +49,7 @@ export function createProjectWatch(root: string, options: ProjectWatchOptions = 
     const changes: ProjectChange[] = [];
     for (const path of paths) {
       try {
-        const change = await readProjectChange(root, path, options.limits);
+        const change = await readProjectChange(root, path, options.limits, options.excluded);
         if (change) changes.push(change);
       } catch (error) {
         broadcastError(`Reading ${path} failed: ${errorMessage(error)}`);
@@ -62,7 +64,7 @@ export function createProjectWatch(root: string, options: ProjectWatchOptions = 
       watcher = watch(root, { recursive: true, persistent: false }, (_event, filename) => {
         if (!filename) return;
         const path = toProjectPath(String(filename));
-        if (!path || isExcludedPath(path)) return;
+        if (!path || isExcludedPath(path, options.excluded)) return;
         pending.add(path);
         if (timer === undefined) timer = setTimeout(() => void flush(), debounceMs);
       });

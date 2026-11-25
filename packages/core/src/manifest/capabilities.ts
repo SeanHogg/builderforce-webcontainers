@@ -37,7 +37,7 @@ export const RESOURCE_CAPABILITIES: Readonly<Record<ResourceType, CapabilityRow>
     gcp: yes('connection'),
   },
   connection: { browser: yes('vault'), cloudflare: yes('vault'), aws: yes('vault'), azure: yes('vault'), gcp: yes('vault') },
-  // `ai` flips to yes only in the change that lands its delivery: browser ships the host relay here;
+  // `ai` flips to yes only in the change that lands its delivery: browser delivers through the page gateway (startApplicationRuntime);
   // cloudflare waits for an app-scoped token acceptor on POST /v1/chat/completions; the customer clouds are not built.
   ai: { browser: yes('host-relay'), cloudflare: no('app-token'), aws: no('app-token'), azure: no('app-token'), gcp: no('app-token') },
   external: { browser: no(CLOUD_ONLY_MODULES), cloudflare: no(CLOUD_ONLY_MODULES), aws: yes('opentofu'), azure: yes('opentofu'), gcp: yes('opentofu') },

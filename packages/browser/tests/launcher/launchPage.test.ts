@@ -62,7 +62,7 @@ describe('buildLaunchInfo page', () => {
   it('carries the page, and leaves it out for a whole project', async () => {
     const root = project({ 'a.html': '' });
     const dotnet = { dir: null, reason: 'none' };
-    expect(await buildLaunchInfo({ root, projectId: 'p1', hosts, dotnet, page: '/a.html' })).toMatchObject({ page: '/a.html' });
-    expect(await buildLaunchInfo({ root, projectId: 'p1', hosts, dotnet })).not.toHaveProperty('page');
+    expect(await buildLaunchInfo({ root, projectId: 'p1', hosts, dotnet, aiRelay: false, page: '/a.html' })).toMatchObject({ page: '/a.html' });
+    expect(await buildLaunchInfo({ root, projectId: 'p1', hosts, dotnet, aiRelay: false })).not.toHaveProperty('page');
   });
 });

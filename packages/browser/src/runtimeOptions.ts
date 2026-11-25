@@ -9,6 +9,7 @@ import type {
   ConnectionHandler,
   DevServer,
   FileTree,
+  HttpHandler,
   HttpRequestData,
   HttpResponseData,
   PackageCdnFactory,
@@ -292,6 +293,12 @@ export interface PreviewRuntime {
    * port policy allows reach it. Throws `EADDRINUSE`.
    */
   listenTcp(port: number, accept: ConnectionHandler, owner?: SecurityContext): { port: number; close(): void };
+  /**
+   * Serve HTTP on a virtual port only `owner`'s own service may reach (the AI
+   * gateway): never announced as a preview server, never on a preview origin,
+   * never reachable by a dependent or the platform. Throws `EADDRINUSE`.
+   */
+  listenHttp(port: number, handler: HttpHandler, owner?: SecurityContext): { port: number; close(): void };
   /** Open a raw TCP connection to whatever listens on `port`; undefined when nothing does (or `caller`, default the platform, may not reach it). */
   connect(port: number, caller?: SecurityContext): ByteChannel | undefined;
   /** The runtime's port policy: pass it as `startApplicationRuntime`'s `portPolicy`, so each application's `dependsOn` graph is in force while it runs. */
