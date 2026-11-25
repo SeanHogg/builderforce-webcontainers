@@ -24,5 +24,19 @@ file extension, and Angular 17–20 (standalone, JIT) for the TypeScript of a
 project depending on `@angular/core` — see `angularCompilerFor` and the
 [browser README](../browser/README.md#angular) for what is supported.
 
+## API overview
+
+Exported from `src/index.ts`:
+
+| Area | Exports |
+|---|---|
+| File system | `VirtualFileSystem`, `VfsSnapshots`, `mountSnapshot`, `rootedFileSystem`, `exportZip`, `importZip` |
+| Dev server | `DevServer`, `detectProject`, `readProjectConfig`, `ModuleGraph`, `planUpdate` |
+| Compile | `createEsbuildTransformer`, `createEsbuildBundler`, `compileScript`, `compileComponent`, `compileStylesheet`, `rewriteImports` |
+| Build | `buildProject`, `createBuildHost`, `findHtmlEntries`, `rewriteBuiltHtml` |
+| Packages | `createEsmShCdn`, `loadPackageManifests`, `resolvePackage`, `resolveLocal` |
+| Preview bridges | `transformHtml`, `previewDiagnosticsScript`, `previewSocketScript`, `hotUpdateScript` |
+| WASI | `createVfsWasi`, `WasiExit` |
+
 For the in-browser runtime, use
 [`@seanhogg/builderforce-webcontainers`](../browser). MIT licensed.

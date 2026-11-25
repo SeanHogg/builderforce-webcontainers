@@ -20,6 +20,15 @@ canvas previews, and it is built to be forked.
 | [`@seanhogg/builderforce-webcontainers-core`](packages/core) | The dev server, runtime-agnostic and testable in Node: virtual file system, module resolution, import rewriting, CSS/JSON/asset modules, project detection |
 | [`@seanhogg/builderforce-webcontainers`](packages/browser) | The browser runtime: boots the dev server in a page and serves it to an iframe through a service worker. Compiles with esbuild-wasm. |
 
+## Where this fits
+
+Part of BuilderForce's **Idea → Make → Run → Measure → Reach** method ([definitions](https://github.com/SeanHogg/Builderforce.ai/blob/main/docs/specs/README.md)). This repo serves **Make** and **Run** as the foundational execution environment: one execution contract that browser, IDE, desktop and cloud hosts adapt to.
+
+- **Runtimes:** Node, Python, PHP, .NET and Rust.
+- **Manifest:** `builderforce.json` declares the application, its services and its capabilities.
+- **Security Shield tier:** ingress and egress policy and isolation, enforced before a preview boots.
+- **Marketing page:** [builderforce.ai/features/web-containers](https://builderforce.ai/features/web-containers).
+
 ## Why teams pick it
 
 - **Free for commercial use, with no session cap.** MIT: fork it, ship it, sell it. There is no monthly API-session quota to plan around.
