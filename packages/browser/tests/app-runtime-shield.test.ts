@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { WORKSPACE_APPLICATION, PLATFORM_APPLICATION, type ProcessOptions, type SecurityContext } from '@seanhogg/builderforce-webcontainers-core';
+import { toApplicationSpec, type AppManifest } from '@seanhogg/builderforce-webcontainers-core/manifest';
 import { createNodeProvider, startApplicationRuntime, type ApplicationSpec, type NodeServiceHost, type ServiceSpec } from '../src/app.js';
 import { fakeProvider, settle, stubRuntime, until } from './app-fakeProvider.js';
 
@@ -47,7 +48,54 @@ describe('application identity', () => {
     // The same services in another project.
     const elsewhere = startApplicationRuntime({ ...shop(), projectId: 'p2' }, { providers: [fake.provider], ...fast });
     expect(elsewhere.applicationId).not.toBe(first.applicationId);
-    expect(first.applicationId).toMatch(/^app:p1:[0-9a-f]{16}$/);
+    expect(first.applicationId).toBe('app:p1:b50454b399d7da11');
+  });
+
+  it('distinguishes named applications with identical services in one project and keeps their ids across service changes', async () => {
+    const fake = fakeProvider({ autoReady: ['api'] });
+    const options = { ...fast, providers: [{ ...fake.provider, id: 'node' }] };
+    const manifest: AppManifest = { version: 1, services: { api: { runtime: 'node', root: '/apps/shared', command: 'node server.js', restart: 'always' } } };
+    const specFor = (name?: string, projectId = 'p1') => toApplicationSpec({ ...manifest, name }, 'local', { projectId }).spec!;
+    const shopSpec = specFor('shop');
+    const shop = startApplicationRuntime(shopSpec, options);
+    const blog = startApplicationRuntime(specFor('blog'), options);
+    const changed = startApplicationRuntime({ ...shopSpec, services: [svc('worker')] }, options);
+    const elsewhere = startApplicationRuntime(specFor('shop', 'p2'), options);
+    const unnamed = startApplicationRuntime(specFor(), options);
+
+    expect(changed.applicationId).toBe(shop.applicationId);
+    expect(new Set([shop.applicationId, blog.applicationId, elsewhere.applicationId, unnamed.applicationId]).size).toBe(4);
+    await shop.start();
+    expect(fake.last('api').security).toEqual({ applicationId: shop.applicationId, serviceId: 'api' });
+    await blog.start();
+    expect(fake.last('api').security).toEqual({ applicationId: blog.applicationId, serviceId: 'api' });
+    await Promise.all([shop.dispose(), blog.dispose()]);
+  });
+
+  it('only lets the handle that owns a named application stop its processes and clear its state', async () => {
+    const fake = fakeProvider({ autoReady: ['api'] });
+    const { kills, processes } = recordingProcesses();
+    const forgotten: string[] = [];
+    const runtime = { ...stubRuntime(), forgetApplication: (id: string) => void forgotten.push(id) };
+    const options = { ...fast, runtime, processes, providers: [fake.provider] };
+    const spec = { ...app(svc('api')), name: 'shop' };
+    const first = startApplicationRuntime(spec, options);
+    const duplicate = startApplicationRuntime(spec, options);
+    const next = startApplicationRuntime(spec, options);
+
+    await first.start();
+    await expect(duplicate.start()).rejects.toThrow('already registered');
+    await expect(duplicate.restart('api')).rejects.toThrow('already registered');
+    await duplicate.dispose();
+    expect(kills).toEqual([]);
+    expect(forgotten).toEqual([]);
+
+    await first.stop();
+    await next.start();
+    await first.dispose();
+    expect(kills).toEqual([[next.applicationId, 'api'], [next.applicationId, undefined]]);
+    expect(forgotten).toEqual([next.applicationId]);
+    await next.dispose();
   });
 
   it('the node provider spawns, and probes readiness, as the service, from its directory', async () => {

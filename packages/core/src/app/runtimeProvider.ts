@@ -25,10 +25,8 @@ export interface ServiceStartContext {
    */
   readonly security: SecurityContext;
   /**
-   * The application's spec `projectId`: the same on every run of the
-   * application (unlike `security.applicationId`, minted per run). A provider
-   * keeps durable per-service state (training artifacts) under it. Set by
-   * `startApplicationRuntime`.
+   * The application's spec `projectId`, set by `startApplicationRuntime`.
+   * A provider keeps durable per-service state (training artifacts) under it.
    */
   readonly projectId?: string;
 }

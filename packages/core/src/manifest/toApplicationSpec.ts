@@ -153,6 +153,7 @@ export function toApplicationSpec(manifest: AppManifest, envName: string, option
   }
 
   const spec: ApplicationSpec = { projectId: options.projectId, services: specServices };
+  if (resolved.name !== undefined) spec.name = resolved.name;
   const routes = resolved.ingress?.routes ?? [];
   if (routes.length > 0) spec.ingress = { routes: routes.map((route) => ({ path: route.path, serviceId: route.service })) };
   issues.push(...validateSpec(spec).map(specIssue));

@@ -43,16 +43,18 @@ async function settle(starts: Array<[string, Promise<void>]>): Promise<void> {
 }
 
 /**
- * The application's STABLE identity, derived here from the project and the
- * application's services (their ids and directories) — the same on every start,
- * so its preview origin (keyed on it) and that origin's storage are too; two
- * applications in one project live in different service directories, so they
- * never share one. Never `workspace` or `platform`.
+ * Named applications keep their identity across service changes. Unnamed
+ * specs retain their service-based ids so existing preview origins and their
+ * storage remain accessible.
  */
-function mintApplicationId(spec: ApplicationSpec): string {
-  const services = spec.services.map((service) => `${service.id}\u0000${service.root ?? '/'}`).sort().join('\u0001');
-  const digest = hashAlgorithm('sha256').digest(new TextEncoder().encode(services));
-  return `app:${spec.projectId}:${Array.from(digest.subarray(0, 8), (b) => b.toString(16).padStart(2, '0')).join('')}`;
+function deriveApplicationId(spec: ApplicationSpec): string {
+  const named = spec.name !== undefined;
+  const key = named
+    ? JSON.stringify(spec.name)
+    : spec.services.map((service) => `${service.id}\u0000${service.root ?? '/'}`).sort().join('\u0001');
+  const digest = hashAlgorithm('sha256').digest(new TextEncoder().encode(key));
+  const suffix = Array.from(digest.subarray(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
+  return `app:${spec.projectId}:${named ? 'named-' : ''}${suffix}`;
 }
 
 export function startApplicationRuntime(spec: ApplicationSpec, options: ApplicationRuntimeOptions): ApplicationRuntime {
@@ -64,7 +66,8 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   const services = new Map<string, SupervisedService>();
   let disposed = false;
   // Derived here, never a value the spec sets: every service's processes carry it (W10 principle 3).
-  const applicationId = mintApplicationId(spec);
+  const applicationId = deriveApplicationId(spec);
+  const named = spec.name !== undefined;
   /** A client's login for a database: generated and held by the database's provider (W10 control 5). */
   const databaseCredentials = (database: ServiceSpec, client: ServiceSpec) => {
     const resolution = registry.resolve(database);
@@ -112,11 +115,19 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   let unregisterGraph: (() => void) | undefined;
   /** The spec's ingress routes, in force on the application's preview origins while it runs (W11). */
   let unregisterIngress: (() => void) | undefined;
+  const register = () => {
+    unregisterGraph ??= portPolicy.register(applicationId, spec);
+    if (spec.ingress?.routes.length) unregisterIngress ??= options.runtime.registerIngress?.(applicationId, spec);
+  };
   const stopAll = async () => {
+    const registeredGraph = unregisterGraph;
     unregisterIngress?.();
     unregisterIngress = undefined;
     for (const id of graph.stopOrder) await service(id).stop();
+    // Another handle can own this name after a rejected start or a completed stop.
+    if (named && (!registeredGraph || registeredGraph !== unregisterGraph)) return;
     processes.killApplication(applicationId); // whatever outlived its service: the whole attributed set
+    if (named) options.runtime.forgetApplication?.(applicationId);
     unregisterGraph?.();
     unregisterGraph = undefined;
   };
@@ -134,8 +145,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
         throw new ApplicationStartError(failures);
       }
       // Before any service runs: its dials are decided against this graph.
-      unregisterGraph ??= portPolicy.register(applicationId, spec);
-      if (spec.ingress?.routes.length) unregisterIngress ??= options.runtime.registerIngress?.(applicationId, spec);
+      register();
       // In start order, so each service exists and is on its way before its dependents look at it.
       await settle(graph.startOrder.map((id) => [id, service(id).start()]));
     },
@@ -143,13 +153,14 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
     async restart(serviceId) {
       assertLive();
       const target = service(serviceId);
+      if (named) register();
       await settle([[serviceId, target.restart()]]);
     },
     async dispose() {
       if (disposed) return;
       disposed = true;
       await stopAll();
-      options.runtime.forgetApplication?.(applicationId);
+      if (!named) options.runtime.forgetApplication?.(applicationId);
       // Live readers get every service's last lines before their streams end (each wait bounded by the stop timeout).
       // (Each stop already waits for its running process's output; this covers whatever exited outside a stop.)
       await Promise.all([...services.values()].map((supervised) => supervised.outputDrained()));

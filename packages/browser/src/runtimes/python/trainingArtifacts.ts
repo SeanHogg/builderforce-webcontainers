@@ -8,7 +8,7 @@
  *
  * Keyed by a STABLE page-side identity — the host's project id, the
  * application's spec `projectId` and the service id — so the next run of the
- * same application finds its last save (the per-run `applicationId` is not part
+ * same application finds its last save (`applicationId` is not part
  * of the key). Nothing the process sets (its env) goes into a key: the Python
  * provider registers the key from the spec before it spawns. The spec's
  * `projectId` is therefore the boundary within a host project: any application

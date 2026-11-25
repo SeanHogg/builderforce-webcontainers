@@ -29,6 +29,14 @@ canvas previews, and it is built to be forked.
 - **Ship-ready output in the page.** `runtime.build()` produces a production build and `createChecker()` type-checks, with no server round-trip.
 - **Secure by default.** The Security Shield refuses unsafe preview setups before they boot, and relay mode isolates untrusted code on its own origin.
 
+## New in 2026.11.25 — stable application identity
+
+Set a unique `name` for each application in a project's manifest or
+`ApplicationSpec`. The runtime derives `applicationId` from the project ID
+and name. Applications with identical services get distinct IDs, and each ID
+stays stable as services change. See the [upgrade notes](#upgrading-to-20261125)
+for the preview-origin change.
+
 ## New in 2026.11.24: autonomous agents inside the environment
 
 Agents no longer work on your app from the outside. Declare them in the
@@ -612,6 +620,13 @@ delete that file. `attribution: false` always wins over the marker. Don't build
 on the command.
 
 ## Upgrade notes
+
+### Upgrading to 2026.11.25
+
+Previously launched named applications get a new preview origin because the
+origin is keyed by `applicationId`. Cookies and other browser data scoped to
+the previous origin stay there. Unnamed applications keep their previous IDs
+and preview origins. Existing lease and recovery records keep their storage keys.
 
 ### Upgrading to 2026.11.5
 

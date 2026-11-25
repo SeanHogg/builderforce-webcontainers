@@ -5,6 +5,18 @@ Release history for `@seanhogg/builderforce-webcontainers` and
 Upgrade steps that change your code are in the README's
 [Upgrade notes](README.md#upgrade-notes).
 
+## What's new in 2026.11.25
+
+- **Stable application identity from the manifest name (W10).**
+  `toApplicationSpec` passes the manifest's optional `name` to `ApplicationSpec`.
+  The runtime derives `applicationId` from the project ID and application name,
+  so two named applications in the same project get distinct IDs even with
+  identical services. Each ID persists across launches and service changes.
+- **Compatibility.** Unnamed applications retain their existing service-based
+  IDs. Existing lease and recovery storage keeps its keys. Previously launched
+  named applications get a new preview origin on upgrade. Browser data tied to
+  the previous origin stays there. See the [upgrade notes](README.md#upgrading-to-20261125).
+
 ## What's new in 2026.11.24
 
 Autonomous agents now run inside the environment. See

@@ -101,6 +101,8 @@ export interface ApplicationIngress {
 export interface ApplicationSpec {
   /** Stable project id; services see it as `BUILDERFORCE_PROJECT_ID`. */
   projectId: string;
+  /** Stable application name within the project. Omit it to identify the application by its service ids and roots. */
+  name?: string;
   services: ServiceSpec[];
   /** Environment for every service (below each service's own `env`). */
   env?: Record<string, string>;

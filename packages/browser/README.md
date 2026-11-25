@@ -427,6 +427,7 @@ runtime.writeTree(files);
 const app = startApplicationRuntime(
   {
     projectId,
+    name: 'storefront',
     services: [
       { id: 'api', type: 'application', runtime: 'node', root: '/api', command: 'node', args: ['server.js'],
         port: 8000, readiness: { kind: 'http', path: '/health' }, restartPolicy: 'on-failure' },
@@ -434,13 +435,17 @@ const app = startApplicationRuntime(
         port: 3000, dependsOn: ['api'] },
     ],
   },
-  { providers: [createNodeProvider(runtime)] },
+  { runtime, providers: [createNodeProvider(runtime)] },
 );
 app.onStateChange(({ serviceId, to }) => console.log(serviceId, to));
 await app.start();            // api first; web once api's /health answers
 iframe.src = app.getUrl('web')!;
 ```
 
+- **Identity.** The optional `name` is unique within a project. The runtime uses
+  `projectId` and `name` for a stable `app.applicationId` across launches and
+  service changes. `toApplicationSpec` carries over the manifest's `name`.
+  Unnamed applications use their service IDs and roots.
 - **Order.** A service starts once everything in its `dependsOn` is ready.
   `stop()` stops dependents first: `SIGTERM`, then `SIGKILL` after `stopTimeoutMs`.
 - **Readiness.** `port` (the port opens; the default with a port), `http` (a

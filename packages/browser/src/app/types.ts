@@ -84,7 +84,7 @@ export interface ApplicationPortPolicy {
 export interface ApplicationHost extends AttributedProcesses {
   /** The runtime's port policy: the application's `dependsOn` graph is put in force here while it runs (W10 control 4). */
   readonly portPolicy: ApplicationPortPolicy;
-  /** The application was disposed: drop what the runtime keeps for it (its `pip install` record, training state). */
+  /** Drop the runtime's application state (its `pip install` record, training state) when releasing a named application or disposing an unnamed one. */
   forgetApplication?(applicationId: string): void;
   /** Put the spec's `ingress` in force on the application's preview origins while it runs (a `PreviewRuntime` does); returns the unregister. */
   registerIngress?(applicationId: string, spec: ApplicationSpec): () => void;
@@ -137,7 +137,7 @@ export interface ApplicationRuntimeOptions {
 
 export interface ApplicationRuntime {
   readonly projectId: string;
-  /** This application's identity, minted when it was created: every service's processes carry it (`SecurityContext.applicationId`). */
+  /** Stable application identity carried by every service's processes (`SecurityContext.applicationId`). */
   readonly applicationId: string;
   /**
    * Start every service: each one after the services it depends on are ready.

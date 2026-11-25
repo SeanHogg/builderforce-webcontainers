@@ -13,6 +13,7 @@ describe('toApplicationSpec', () => {
     expect(declined).toEqual([]);
     expect(environment?.name).toBe('local');
     expect(spec).not.toBeNull();
+    expect(spec!.name).toBe('react-node');
     expect(validateSpec(spec!)).toEqual([]);
     const byId = Object.fromEntries(spec!.services.map((service) => [service.id, service]));
     expect(byId.db).toEqual({ id: 'db', type: 'database', runtime: 'pglite', port: 5432, database: { engine: 'postgres', provider: 'pglite', persistent: true } });
