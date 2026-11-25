@@ -48,12 +48,16 @@ export interface AiGatewayBinding {
   /** `http://localhost:<port>/v1` — no trailing slash; the app appends `/chat/completions`. */
   readonly baseUrl: string;
   close(): void;
+  /** Listen again on the recorded port; throws when it was taken meanwhile (never moves). Idempotent. */
+  open(): void;
 }
 
 export interface AiGateway {
   readonly bindings: readonly AiGatewayBinding[];
   /** Base URL for this backend + resource, or undefined when it has no gateway. */
   baseUrl(serviceId: string, resourceId: string): string | undefined;
+  /** Re-listen every closed binding on its original port (a later `start()`); the env stays valid. */
+  open(): void;
   close(): void;
 }
 
@@ -225,13 +229,27 @@ export function startAiGateway(options: StartAiGatewayOptions): AiGateway {
         ...(use.models && use.models.length > 0 ? { models: use.models } : {}),
       };
       const owner: SecurityContext = { applicationId: options.applicationId, serviceId: service.id };
-      const registration = options.listen(0, aiGatewayHandler(options.relay, resource), owner);
+      const handler = aiGatewayHandler(options.relay, resource);
+      const first = options.listen(0, handler, owner);
+      const { port } = first;
+      let registration: { close(): void } | undefined = first;
       const binding: AiGatewayBinding = {
         serviceId: service.id,
         resourceId: use.id,
-        port: registration.port,
-        baseUrl: `http://localhost:${registration.port}/v1`,
-        close: () => registration.close(),
+        port,
+        baseUrl: `http://localhost:${port}/v1`,
+        close() {
+          registration?.close();
+          registration = undefined;
+        },
+        open() {
+          if (registration) return;
+          try {
+            registration = options.listen(port, handler, owner);
+          } catch (error) {
+            throw new Error(`AI gateway port ${port} is taken.`, { cause: error });
+          }
+        },
       };
       bindings.push(binding);
       byKey.set(`${service.id}\0${use.id}`, binding);
@@ -240,6 +258,15 @@ export function startAiGateway(options: StartAiGatewayOptions): AiGateway {
   return {
     bindings,
     baseUrl: (serviceId, resourceId) => byKey.get(`${serviceId}\0${resourceId}`)?.baseUrl,
+    open() {
+      // All or nothing: a rejected start() leaves no gateway port open.
+      try {
+        for (const binding of bindings) binding.open();
+      } catch (error) {
+        for (const binding of bindings) binding.close();
+        throw error;
+      }
+    },
     close() {
       for (const binding of bindings) binding.close();
     },

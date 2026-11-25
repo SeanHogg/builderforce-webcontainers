@@ -45,6 +45,8 @@ async function install(ctx: CommandContext, options: Partial<InstallOptions>, di
       registry: ctx.env.npm_config_registry ?? npmrc.registry ?? ctx.system.registry,
       npmrc,
       cache: ctx.system.packageCache,
+      scanner: ctx.system.scanner,
+      onScanIncomplete: ctx.system.onScanIncomplete,
       cwd: dir,
       signal: ctx.signal,
       onProgress: progress ? (p) => p.phase === 'fetch' && ctx.io.stdout(`\r\x1b[Kfetching ${p.done}/${p.total} ${p.package ?? ''}`) : undefined,

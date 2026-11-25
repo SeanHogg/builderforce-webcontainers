@@ -83,7 +83,11 @@ export type ShieldReasonCode =
   /** An agent's environment file path was absolute or had a `..` segment: refused. */
   | 'agent.path_invalid'
   /** An agent asked to fetch from a service that is not one of its environment's own: refused. */
-  | 'agent.service_not_allowed';
+  | 'agent.service_not_allowed'
+  /** The code scanner's verdict (block / quarantine) refused an install, a write or a spawn of malicious code. */
+  | 'code.blocked'
+  /** Telemetry: the code scanner could not finish a scan. Refuses only when the embedder's policy is `refuse`. */
+  | 'code.scan_incomplete';
 
 /** A page-side decision; `reject` carries the reason the caller surfaces (ECONNREFUSED, 403, EACCES…). */
 export type ShieldDecision = { readonly allow: true } | { readonly allow: false; readonly reason: ShieldReasonCode };

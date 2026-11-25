@@ -22,7 +22,7 @@
  * process and the page (its parent's side), and `child-ipc` /
  * `child-ipc-disconnect` between a parent process and the page (its child's side).
  */
-import type { HttpRequestData, HttpResponseHead, StdioChunk, ThreadInfo, VfsDelta, VfsOp, VfsSnapshot } from '@seanhogg/builderforce-webcontainers-core';
+import type { CodeScanOrigin, CodeScanSubject, CodeScanVerdict, HttpRequestData, HttpResponseHead, ScanIncompletePolicy, StdioChunk, ThreadInfo, VfsDelta, VfsOp, VfsSnapshot } from '@seanhogg/builderforce-webcontainers-core';
 import type { TrainingPageMessage, TrainingStartOptions, TrainingWorkerMessage } from '../runtimes/python/trainingProtocol.js';
 
 /** One file-system change, either way (the core journal's op). */
@@ -134,6 +134,8 @@ export interface StartMessage {
    * them itself.
    */
   foreignCommands?: string;
+  /** Set when the page has a code scanner: `npm install` in this process asks it (a `scan` message) before writing a package. */
+  codeScan?: { onIncomplete: ScanIncompletePolicy };
 }
 
 /** A streamed response, chunk by chunk; `head: null` means nothing listens on that port (loopback only). */
@@ -179,6 +181,8 @@ export type HostToWorker =
   | { type: 'resize'; cols: number; rows: number }
   | { type: 'fs'; ops: FsOp[] }
   | { type: 'ports'; open: number[]; closed: number[] }
+  /** The page's answer to a process's `scan` request. */
+  | { type: 'scan-result'; scanId: number; verdicts: CodeScanVerdict[] }
   /** The page registered the process's `listen` (`id` echoes the listen's). */
   | { type: 'listened'; port: number; id?: number }
   /** The process's `listen` on `port` was refused (another process holds it): it does not own the port. */
@@ -209,6 +213,8 @@ export type WorkerToHost =
   | { type: 'spawn'; childId: number; command: string; args: string[]; cwd?: string; env?: Record<string, string>; terminal?: { cols: number; rows: number }; ipc?: boolean; thread?: ThreadInfo; detached?: boolean }
   | { type: 'child-stdin'; childId: number; data: StdioChunk | null }
   | { type: 'child-kill'; childId: number; signal: string }
+  /** Ask the page's code scanner about files (an install about to write a package). Answered by `scan-result`. */
+  | { type: 'scan'; scanId: number; origin: CodeScanOrigin; subjects: CodeScanSubject[] }
   | { type: 'child-resize'; childId: number; cols: number; rows: number }
   /** `tcp`: the server takes raw TCP connections (`net.Server`). `id`: echoed by the page's `listened` / `listen-failed`. */
   | { type: 'listen'; port: number; tcp?: boolean; id?: number }

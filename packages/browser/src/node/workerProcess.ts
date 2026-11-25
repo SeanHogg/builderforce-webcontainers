@@ -35,6 +35,7 @@ import { ResponseReceiver } from './responseWire.js';
 import { createServedPorts } from './servedPorts.js';
 import { createWorkerConnections, isWorkerConnectionMessage } from './workerConnections.js';
 import { forwardVfsChanges } from './vfsForwarding.js';
+import { createScanBridge } from './scanBridge.js';
 
 export interface WorkerProcessDeps {
   post(message: WorkerToHost): void;
@@ -50,6 +51,7 @@ const EPHEMERAL = 49152;
 
 export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message: HostToWorker): void } {
   const fs = new VirtualFileSystem();
+  const scanBridge = createScanBridge((message) => deps.post(message));
   const handlers = new Map<number, { handler: HttpHandler; upgrade?: UpgradeHandler; accept?: ConnectionHandler }>();
   /** Listens the page has not answered yet, by id: the entry they registered and how to settle `ready`. */
   const awaiting = new Map<number, { port: number; entry: object; settle(error?: Error): void }>();
@@ -173,6 +175,8 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
       previewUrl: message.previewUrl,
       registry: message.registry,
       packageCache: message.packageCache ? deps.packageCache?.() : undefined,
+      scanner: message.codeScan ? scanBridge.scanner : undefined,
+      onScanIncomplete: message.codeScan?.onIncomplete,
       ownsRealm: deps.ownsRealm,
       trapUncaught: deps.trapUncaught,
     };
@@ -205,7 +209,7 @@ export function createWorkerProcess(deps: WorkerProcessDeps): { receive(message:
 
   return {
     receive(message) {
-      if (served.receive(message)) return;
+      if (served.receive(message) || scanBridge.receive(message)) return;
       switch (message.type) {
         case 'prime':
           quietly(() => mountSnapshot(fs, message.snapshot));

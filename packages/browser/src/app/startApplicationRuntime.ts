@@ -132,6 +132,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
   /** The spec's ingress routes, in force on the application's preview origins while it runs (W11). */
   let unregisterIngress: (() => void) | undefined;
   const register = () => {
+    gateway?.open(); // a stop() closed the port; reopen it (same port, same env) before any service starts
     unregisterGraph ??= portPolicy.register(applicationId, spec);
     if (spec.ingress?.routes.length) unregisterIngress ??= options.runtime.registerIngress?.(applicationId, spec);
   };
@@ -140,6 +141,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
     unregisterIngress?.();
     unregisterIngress = undefined;
     for (const id of graph.stopOrder) await service(id).stop();
+    gateway?.close(); // this handle's ports only; start() reopens them on the same port numbers
     // Another handle can own this name after a rejected start or a completed stop.
     if (named && (!registeredGraph || registeredGraph !== unregisterGraph)) return;
     processes.killApplication(applicationId); // whatever outlived its service: the whole attributed set
@@ -176,7 +178,7 @@ export function startApplicationRuntime(spec: ApplicationSpec, options: Applicat
       if (disposed) return;
       disposed = true;
       await stopAll();
-      gateway?.close(); // not on stop(): env is fixed at construction, and a later start() reuses this port
+      gateway?.close(); // stop() closed it too; idempotent
       if (!named) options.runtime.forgetApplication?.(applicationId);
       // Live readers get every service's last lines before their streams end (each wait bounded by the stop timeout).
       // (Each stop already waits for its running process's output; this covers whatever exited outside a stop.)

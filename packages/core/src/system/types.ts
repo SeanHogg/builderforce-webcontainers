@@ -8,6 +8,7 @@ import type { VirtualFileSystem } from '../vfs.js';
 import type { PackageCache } from '../installer/registry.js';
 import type { IpcEndpoint } from './ipc.js';
 import type { SecurityContext } from './securityContext.js';
+import type { CodeScanner, ScanIncompletePolicy } from './codeScanner.js';
 
 export interface TerminalPort {
   cols: number;
@@ -190,6 +191,10 @@ export interface System {
   /** npm registry and cache for `npm install`. */
   registry?: string;
   packageCache?: PackageCache;
+  /** The embedder's code scanner: `npm install` asks it before a package is written. */
+  scanner?: CodeScanner;
+  /** What an install does when the scanner could not finish. Default `warn`. */
+  onScanIncomplete?: ScanIncompletePolicy;
 }
 
 export interface ProgramContext {

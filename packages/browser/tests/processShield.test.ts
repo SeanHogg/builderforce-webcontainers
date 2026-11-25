@@ -11,6 +11,7 @@ import {
   VirtualFileSystem,
   WORKSPACE_CONTEXT,
   mountSnapshot,
+  type CodeScanner,
   type SecurityContext,
   type ShieldDecision,
   type VfsSnapshot,
@@ -58,7 +59,7 @@ const FILES = {
   '.bfwc/attribution-off': '',
 };
 
-function shieldHost(options: { quota?: Parameters<typeof processQuota>[0]; real?: boolean; warm?: boolean; files?: Record<string, string> } = {}) {
+function shieldHost(options: { quota?: Parameters<typeof processQuota>[0]; real?: boolean; warm?: boolean; files?: Record<string, string>; scanner?: CodeScanner } = {}) {
   const fs = new VirtualFileSystem();
   fs.writeTree({ ...FILES, ...options.files });
   const puppets: Puppet[] = [];
@@ -76,7 +77,7 @@ function shieldHost(options: { quota?: Parameters<typeof processQuota>[0]; real?
     previewBase: '/__bfwc/p1/',
     packageCache: !options.real,
     warmWorker: !!options.warm,
-    security: { quota: processQuota(options.quota), onDecision: (context, decision) => decisions.push([context, decision]) },
+    security: { quota: processQuota(options.quota), onDecision: (context, decision) => decisions.push([context, decision]), scanner: options.scanner },
   });
   return { fs, processes, puppets, decisions };
 }
@@ -408,5 +409,54 @@ describe('workspace and real processes', () => {
     const proc = processes.run('node', ['-e', `const fs = require('fs'); console.log(fs.existsSync('/apps/b/.env'), fs.readFileSync('/apps/a/.env', 'utf8'))`], { identity: A, cwd: '/apps/a' });
     expect(await readAll(proc.combinedOutput)).toBe('false A_SECRET=1\n');
     expect(await proc.wait()).toBe(0);
+  });
+});
+
+describe('code scanner', () => {
+  /** Blocks any file whose content says EVIL; everything else is clean. */
+  const scanner: CodeScanner = {
+    scan: async (_origin, subjects) =>
+      subjects.map((s) => ({ path: s.path, action: s.content === 'EVIL' ? 'block' : 'allow', complete: true, score: 90, ruleIds: ['signature.eicar'] })),
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
+  const blocked = (decisions: Array<[SecurityContext, ShieldDecision]>) => decisions.filter(([, d]) => !d.allow && d.reason === 'code.blocked');
+
+  it('reports a written file the scanner blocks once, refuses to spawn it, and unblocks it when rewritten', async () => {
+    const { processes, puppets, decisions } = shieldHost({ scanner });
+    processes.spawnChild('node', []);
+    puppets[0]!.send({ type: 'fs', ops: [{ op: 'write', path: '/evil.js', content: 'EVIL' }] });
+    await settle();
+    expect(blocked(decisions)).toHaveLength(1);
+    expect(() => processes.spawnChild('node', ['evil.js'])).toThrow(/code\.blocked/);
+    puppets[0]!.send({ type: 'fs', ops: [{ op: 'write', path: '/evil.js', content: 'fine' }] });
+    expect(() => processes.spawnChild('node', ['evil.js'])).not.toThrow();
+    await settle();
+    // The write's verdict and the refused spawn are two decisions; the clean rewrite adds none.
+    expect(blocked(decisions)).toHaveLength(2);
+  });
+
+  it('answers a process scan request through the page scanner and reports a blocked package', async () => {
+    const { processes, puppets, decisions } = shieldHost({ scanner });
+    processes.spawnChild('node', []);
+    puppets[0]!.send({ type: 'scan', scanId: 7, origin: 'install', subjects: [{ path: 'index.js', content: 'EVIL' }] });
+    await settle();
+    const result = puppets[0]!.received.find((m) => m.type === 'scan-result');
+    expect(result).toMatchObject({ scanId: 7, verdicts: [{ path: 'index.js', action: 'block' }] });
+    expect(blocked(decisions)).toHaveLength(1);
+  });
+
+  it('answers incomplete, not clean, when the scanner throws', async () => {
+    const failing: CodeScanner = { scan: async () => { throw new Error('worker crashed'); } };
+    const { processes, puppets } = shieldHost({ scanner: failing });
+    processes.spawnChild('node', []);
+    puppets[0]!.send({ type: 'scan', scanId: 1, origin: 'install', subjects: [{ path: 'a.js', content: 'x' }] });
+    await settle();
+    expect(puppets[0]!.received.find((m) => m.type === 'scan-result')).toMatchObject({ verdicts: [{ complete: false }] });
+  });
+
+  it('does not tell a process to scan when the page has no scanner', () => {
+    const { processes, puppets } = shieldHost();
+    processes.spawnChild('node', []);
+    expect(startOf(puppets[0]!).codeScan).toBeUndefined();
   });
 });

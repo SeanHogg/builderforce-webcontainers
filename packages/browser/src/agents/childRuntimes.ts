@@ -22,6 +22,7 @@
 import { AGENTS_CAPABILITY, PERSISTED_FORMAT_VERSION, countWideningIssues, narrowChildPolicy } from '@seanhogg/builderforce-webcontainers-core';
 import type { AgentsPolicy, ManifestIssue } from '@seanhogg/builderforce-webcontainers-core/manifest';
 import { messageOf } from '../app/asyncHelpers.js';
+import { narrowHostRelay, type AiCeiling, type HostRelay } from '../app/hostRelay.js';
 import { lazyIdbStore } from '../shared/idb.js';
 import { claimRuntimeLease, type LeaseTokenStore, type LockManagerLike, type RuntimeLease } from '../shared/runtimeLease.js';
 
@@ -109,6 +110,8 @@ export interface ChildRuntimeContext extends ChildRuntimeKeys {
   /** True when restoring a child after its tab died, false for a new one. */
   recovering: boolean;
   lease: RuntimeLease;
+  /** The model relay, never wider than the parent's: absent unless the parent supplied a relay and a ceiling. */
+  hostRelay?: HostRelay;
   /** Report a failure after boot; it becomes a `child-failed` event and never reaches the parent. */
   fail(error: unknown): void;
 }
@@ -192,6 +195,10 @@ export interface ChildRuntimesDeps {
   depth: number;
   /** Start (or, with `recovering`, restore) one child. */
   boot: ChildBoot;
+  /** The parent's model relay; a child only ever gets it narrowed by `aiCeiling`. */
+  hostRelay?: HostRelay;
+  /** What a child may reach on the relay. Without it a child gets no relay (fail closed). */
+  aiCeiling?: AiCeiling;
   onEvent?: (event: ChildRuntimeEvent) => void;
   newId?: () => string;
 }
@@ -290,6 +297,7 @@ export function createChildRuntimes(deps: ChildRuntimesDeps): ChildRuntimes {
       policy,
       recovering,
       lease,
+      ...(deps.hostRelay && deps.aiCeiling ? { hostRelay: narrowHostRelay(deps.hostRelay, deps.aiCeiling) } : {}),
       fail(error) {
         if (state !== 'ready') return;
         state = 'failed';

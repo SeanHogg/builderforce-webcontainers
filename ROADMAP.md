@@ -208,6 +208,8 @@ checked against the source. Items 19–27 shipped in 2026.11.9 and item 28 in 20
    integrator's own wrapper. This launcher serves only the public .NET bundle under
    `/dotnet/`, contained to the bundle directory.
 
+- Unreleased: a `CodeScanner` port on the Security Shield — installs, process writes and spawns are checked against an embedder-supplied scanner (`security.scanner`), refusing blocked code with `code.blocked` and reporting unfinished scans as `code.scan_incomplete`.
+
 ## Principles
 
 - Ports over hard dependencies: compiler, package CDN and transport are swappable.

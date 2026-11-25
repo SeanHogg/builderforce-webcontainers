@@ -5,6 +5,7 @@ import type {
   BuildResult,
   Bundler,
   ByteChannel,
+  CodeScanner,
   ComponentCompilers,
   ConnectionHandler,
   DevServer,
@@ -17,6 +18,7 @@ import type {
   PortCookieJars,
   ProcessOptions,
   ProjectProfile,
+  ScanIncompletePolicy,
   RuntimeProcess,
   SecurityContext,
   ServerAddress,
@@ -161,7 +163,17 @@ export interface CommonRuntimeOptions {
    * `@seanhogg/builderforce-webcontainers/security`) leave the runtime. Reason
    * codes and redacted evidence only; a throwing sink is ignored.
    */
-  security?: { sink?: SecurityEventSink };
+  security?: {
+    sink?: SecurityEventSink;
+    /**
+     * Scans code before it runs: each `npm install` package (before anything is written), each file a process
+     * writes (asynchronously) and so each spawn of a blocked file. Trusted embedder config; a process cannot reach it.
+     * Without one, nothing is scanned.
+     */
+    scanner?: CodeScanner;
+    /** A scan that could not finish: `warn` (default) or `refuse` (an install is refused). */
+    onScanIncomplete?: ScanIncompletePolicy;
+  };
   /**
    * Where browsers send CSP violation reports for preview responses
    * (`report-to bfwc-csp`, with `Reporting-Endpoints`): an absolute https URL on

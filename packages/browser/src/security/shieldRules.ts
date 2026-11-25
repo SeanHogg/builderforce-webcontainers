@@ -44,4 +44,6 @@ export const SHIELD_RULES: Readonly<Record<ShieldReasonCode, ShieldRule>> = Obje
   'agent.tool_not_allowed': rule('process', 'agent.tool-allowlist', 'medium'),
   'agent.path_invalid': rule('filesystem', 'agent.workspace-path', 'high'),
   'agent.service_not_allowed': rule('network', 'agent.own-services', 'high'),
+  'code.blocked': rule('process', 'code.malicious', 'critical', 'quarantine'),
+  'code.scan_incomplete': rule('process', 'code.scan-incomplete', 'medium', 'monitor'),
 });

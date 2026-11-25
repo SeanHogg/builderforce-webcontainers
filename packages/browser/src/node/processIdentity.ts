@@ -24,6 +24,7 @@ import {
 } from '@seanhogg/builderforce-webcontainers-core';
 import { FsScopes, type FsScopeOptions, type FsView } from './fsScope.js';
 import { SpawnRefusedError, processQuota, type ProcessQuotaPolicy } from './processQuota.js';
+import type { CodeScanner, ScanIncompletePolicy } from '@seanhogg/builderforce-webcontainers-core';
 import type { ShieldTelemetry } from '../security/shieldTelemetry.js';
 
 /** A page-side start's options: a process's own options, plus who it is. */
@@ -50,6 +51,10 @@ export interface ProcessShieldOptions {
    * ingress limits are reported to it as the page-side identity. Failing open.
    */
   telemetry?: ShieldTelemetry;
+  /** The embedder's code scanner (trusted config, never reachable from a process): installs, writes and spawns are checked against it. */
+  scanner?: CodeScanner;
+  /** A scan that could not finish: `warn` (default) or `refuse` (an install is refused). */
+  onScanIncomplete?: ScanIncompletePolicy;
   /** Request-body limit on loopback and host-API HTTP. Default the service worker's (32 MiB). */
   maxBodyBytes?: number;
 }

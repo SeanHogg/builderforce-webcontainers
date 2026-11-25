@@ -20,6 +20,7 @@ import { buildLockfile, lockMatchesPackage, lockedManifests, parseLockfile, pick
 import { maxSatisfying, satisfies, validRange, valid } from './semver.js';
 import { untar } from './tar.js';
 import { linkBins } from './bins.js';
+import { refuses, type CodeScanner, type ScanIncompletePolicy } from '../system/codeScanner.js';
 
 export interface InstallProgress {
   phase: 'resolve' | 'fetch' | 'done';
@@ -50,6 +51,27 @@ export interface InstallOptions {
   concurrency?: number;
   signal?: AbortSignal;
   onProgress?(progress: InstallProgress): void;
+  /** Scans each package's files BEFORE anything is written; a block / quarantine verdict refuses the package. */
+  scanner?: CodeScanner;
+  /** A scan that could not finish: `warn` (default) installs and warns, `refuse` throws {@link InstallBlockedError}. */
+  onScanIncomplete?: ScanIncompletePolicy;
+}
+
+/** A package the code scanner refused (or, under `onScanIncomplete: 'refuse'`, could not finish scanning). Nothing of it was written. */
+export class InstallBlockedError extends Error {
+  constructor(
+    readonly packageName: string,
+    readonly version: string,
+    readonly ruleIds: readonly string[],
+    readonly reason: 'malicious' | 'scan-incomplete' = 'malicious',
+  ) {
+    super(
+      reason === 'malicious'
+        ? `Installing ${packageName}@${version} was refused: the code scanner blocked it (${ruleIds.join(', ') || 'no rule id'}).`
+        : `Installing ${packageName}@${version} was refused: the code scan could not finish.`,
+    );
+    this.name = 'InstallBlockedError';
+  }
 }
 
 export interface InstallResult {
@@ -228,7 +250,14 @@ export async function installPackages(options: InstallOptions): Promise<InstallR
   let fetched = 0;
   await pool(missing, options.concurrency ?? 8, async (node) => {
     signal?.throwIfAborted();
-    await unpack(fs, join(base, node.location), await client.tarball(node.manifest));
+    await unpack(fs, join(base, node.location), await client.tarball(node.manifest), {
+      scanner: options.scanner,
+      onScanIncomplete: options.onScanIncomplete ?? 'warn',
+      signal,
+      name: node.name,
+      version: node.manifest.version,
+      warn: (message) => warnings.push(message),
+    });
     progress({ phase: 'fetch', package: `${node.name}@${node.manifest.version}`, done: ++fetched, total: missing.length });
   });
 
@@ -244,9 +273,33 @@ export async function installPackages(options: InstallOptions): Promise<InstallR
   return { added: missing.length, removed, total: tree.size, bins, lockfile, warnings };
 }
 
-/** gunzip + untar into `dir`, stripping the archive's top folder (`package/`). */
-async function unpack(fs: VirtualFileSystem, dir: string, tgz: Uint8Array): Promise<void> {
+/** What `unpack` needs to gate a package on the code scanner. */
+interface UnpackContext {
+  scanner?: CodeScanner;
+  onScanIncomplete: ScanIncompletePolicy;
+  signal?: AbortSignal;
+  name: string;
+  version: string;
+  warn(message: string): void;
+}
+
+/** Ask the scanner about a package's text files; throw before anything is written when it must not install. */
+async function gate(files: readonly { path: string; content: string | Uint8Array }[], ctx: UnpackContext): Promise<void> {
+  const subjects = files.filter((file) => typeof file.content === 'string').map((file) => ({ ...file, packageName: ctx.name, packageVersion: ctx.version }));
+  const verdicts = await ctx.scanner!.scan('install', subjects, ctx.signal);
+  const blocked = verdicts.filter(refuses);
+  if (blocked.length) throw new InstallBlockedError(ctx.name, ctx.version, [...new Set(blocked.flatMap((v) => v.ruleIds))]);
+  // A verdict missing for a file is as incomplete as one that says so: never read as clean.
+  if (verdicts.length < subjects.length || verdicts.some((v) => !v.complete)) {
+    if (ctx.onScanIncomplete === 'refuse') throw new InstallBlockedError(ctx.name, ctx.version, [], 'scan-incomplete');
+    ctx.warn(`the code scan of ${ctx.name}@${ctx.version} could not finish`);
+  }
+}
+
+/** gunzip + untar into `dir`, stripping the archive's top folder (`package/`). With a scanner, nothing is written until it clears the package. */
+async function unpack(fs: VirtualFileSystem, dir: string, tgz: Uint8Array, ctx: UnpackContext): Promise<void> {
   const entries = untar(gunzipSync(tgz));
+  const files: { path: string; content: string | Uint8Array }[] = [];
   let manifest: Uint8Array | undefined;
   for (const entry of entries) {
     if (entry.type !== 'file') continue;
@@ -254,10 +307,13 @@ async function unpack(fs: VirtualFileSystem, dir: string, tgz: Uint8Array): Prom
     if (!relative || relative.split('/').includes('..')) continue;
     // package.json goes last: its presence is what marks the package as installed.
     if (relative === 'package.json') manifest = entry.data;
-    else fs.writeFile(join(dir, relative), decodeIfText(relative, entry.data));
+    else files.push({ path: relative, content: decodeIfText(relative, entry.data) });
   }
   if (!manifest) throw new Error(`The tarball for ${dir} has no package.json.`);
-  fs.writeFile(join(dir, 'package.json'), decodeIfText('package.json', manifest));
+  const manifestFile = { path: 'package.json', content: decodeIfText('package.json', manifest) };
+  if (ctx.scanner) await gate([...files, manifestFile], ctx);
+  for (const file of files) fs.writeFile(join(dir, file.path), file.content);
+  fs.writeFile(join(dir, manifestFile.path), manifestFile.content);
 }
 
 /** Rebuild every `.bin` directory from the tree; returns the top-level bins. */

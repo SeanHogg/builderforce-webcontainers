@@ -138,7 +138,7 @@ export async function startPreviewRuntime(options: PreviewRuntimeOptions): Promi
   // Prebuilt wasm32-wasip1 modules (and the declined cargo/rustc) run in Rust process Workers.
   const kinds = createRustProcessKind(createDotnetProcessKind(options.dotnet, php));
   // Control 1: an application gets its own preview origin, or — only with the named opt-out — shares the relay's (`origins.originOf` refuses or announces it, before the process exists).
-  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, originOf: origins.originOf, previewUrl, options: node, kinds, security: { telemetry } });
+  const processes = createProcessHost({ fs: files, cwd: root, base, origin: transport.origin, originOf: origins.originOf, previewUrl, options: node, kinds, security: { telemetry, scanner: options.security?.scanner, onScanIncomplete: options.security?.onScanIncomplete } });
   // Training checkpoints and save acknowledgements reach a process through the host.
   python.training?.connect((pid, message) => processes.notify(pid, message));
   // Databases never run where processes do in relay mode: their Workers start on this (host) origin.

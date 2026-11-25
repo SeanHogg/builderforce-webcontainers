@@ -26,6 +26,7 @@ import {
   PortRegistry,
   ServerEvents,
   PLATFORM_CONTEXT,
+  WORKSPACE_CONTEXT,
   allocatePid,
   baseToProject,
   bufferResponse,
@@ -38,6 +39,7 @@ import {
   toRuntimeProcess,
   type ByteChannel,
   type ChildHandle,
+  type CodeScanVerdict,
   type HttpRequestData,
   type HttpResponseData,
   type HttpStreamResponse,
@@ -57,6 +59,8 @@ import { ChildRelay, isChildMessage } from './childRelay.js';
 import { ConnectionRelay, isConnectionMessage } from './connectionRelay.js';
 import { WorkerSupply } from './workerSupply.js';
 import { FsSync } from './fsSync.js';
+import { decisionFor, incompleteVerdict } from './writeScan.js';
+import { SpawnRefusedError } from './processQuota.js';
 import { ProcessIdentities, type ProcessShieldOptions, type SpawnOptions, type SpawnOrigin } from './processIdentity.js';
 import { ProcessPorts } from './processPorts.js';
 import { opEvidence } from './fsScope.js';
@@ -144,7 +148,12 @@ export class ProcessHost {
     this.ingress = new IngressLimit({ telemetry, maxBodyBytes: options.security?.maxBodyBytes });
     this.identities = new ProcessIdentities(options.cwd ?? '/', options.security);
     const onRefused = (context: SecurityContext | undefined, op: unknown, decision: ShieldDecision) => context && this.identities.report(context, decision, opEvidence(op));
-    this.fsSync = new FsSync(options.fs, { send: (proc, ops) => this.post(proc, { type: 'fs', ops }), onRefused });
+    this.fsSync = new FsSync(options.fs, {
+      send: (proc, ops) => this.post(proc, { type: 'fs', ops }),
+      onRefused,
+      scanner: options.security?.scanner,
+      onScanned: (context, verdict) => this.reportVerdict(context, verdict),
+    });
     this.workers = new WorkerSupply((kind) => options.createWorker(kind), this.fsSync.snapshots, options.warmWorker !== false);
     // An application's Workers start on its own preview origin when it has one.
     this.views = new ViewSupplies(options.fs, (kind, applicationId) => options.createWorker(kind, applicationId), options.warmWorker !== false);
@@ -201,6 +210,7 @@ export class ProcessHost {
 
   private spawn(origin: SpawnOrigin, requested: string, requestedArgs: string[], options: ProcessOptions): ChildHandle {
     const cwd = options.cwd ?? this.options.cwd ?? '/';
+    this.guardEntry(origin, requested, requestedArgs, cwd);
     const admitted = this.identities.admit(origin, cwd);
     // Decided before the process exists: an application refused a preview origin (previewOriginOf throws) leaves no record behind.
     const previewOrigin = this.originOf(admitted.context.applicationId);
@@ -264,6 +274,7 @@ export class ProcessHost {
       // The shared tarball cache is off for application processes: one application must not seed another's installs.
       packageCache: this.options.packageCache !== false && !admitted.view,
       foreignCommands: this.kinds.foreignCommands,
+      codeScan: this.options.security?.scanner ? { onIncomplete: this.options.security.onScanIncomplete ?? 'warn' } : undefined,
       ...this.kinds.startOptions(kind, this.identityOf(pid) ?? admitted.context),
     });
 
@@ -315,6 +326,50 @@ export class ProcessHost {
     this.workers.dispose();
     this.views.dispose();
     this.fsSync.dispose();
+  }
+
+  /** Report a scan verdict that refused the code or could not finish, as the process it concerns (or the workspace). */
+  private reportVerdict(context: SecurityContext | undefined, verdict: CodeScanVerdict): void {
+    const found = decisionFor(verdict);
+    if (found) this.identities.report(context ?? WORKSPACE_CONTEXT, found.decision, found.evidence);
+  }
+
+  /**
+   * A process's `npm install` asks the page's scanner about a package before writing it. The process is
+   * untrusted: whatever origin it claims, the scan is an `install`, and a scanner fault answers incomplete.
+   */
+  private async scanFor(proc: Proc, message: Extract<WorkerToHost, { type: 'scan' }>): Promise<void> {
+    const scanner = this.options.security?.scanner;
+    if (!scanner || !Array.isArray(message.subjects)) return;
+    const subjects = message.subjects.filter((s) => typeof s?.path === 'string' && (typeof s.content === 'string' || s.content instanceof Uint8Array));
+    let verdicts: readonly CodeScanVerdict[];
+    try {
+      verdicts = await scanner.scan('install', subjects);
+    } catch {
+      // error-logging: a scanner fault fails to INCOMPLETE (reported below as code.scan_incomplete), never to clean
+      verdicts = subjects.map((s) => incompleteVerdict(s.path));
+    }
+    for (const verdict of verdicts) this.reportVerdict(this.identityOf(proc.pid), verdict);
+    this.post(proc, { type: 'scan-result', scanId: message.scanId, verdicts: [...verdicts] });
+  }
+
+  /**
+   * Before a process exists: refuse a command whose script (any argument that names a file) the scanner
+   * blocked at its current version. A file still being scanned is reported `code.scan_incomplete` and runs:
+   * a write is asynchronous to scan, so the window cannot be closed without making every spawn wait.
+   */
+  private guardEntry(origin: SpawnOrigin, command: string, args: readonly string[], cwd: string): void {
+    if (!this.options.security?.scanner) return;
+    const context = ('parent' in origin ? this.identityOf(origin.parent) : origin.identity) ?? WORKSPACE_CONTEXT;
+    for (const token of [command, ...args]) {
+      if (token.startsWith('-')) continue;
+      const path = normalizePath(token.startsWith('/') ? token : `${cwd}/${token}`);
+      if (this.fsSync.isBlocked(path)) {
+        this.identities.report(context, deny('code.blocked'), { path });
+        throw new SpawnRefusedError('code.blocked');
+      }
+      if (this.fsSync.isScanPending(path)) this.identities.report(context, deny('code.scan_incomplete'), { path });
+    }
   }
 
   private kill(proc: Proc, signal: string): void {
@@ -421,6 +476,8 @@ export class ProcessHost {
         return proc.loopbacks.get(message.reqId)?.();
       case 'listening':
         return this.onListening(proc, message);
+      case 'scan':
+        return void this.scanFor(proc, message);
       default:
         // A message of one process kind (python-installed): its policy decides, knowing who sent it — from the
         // page-side record of this Worker, never the message. Each application writes only its own record

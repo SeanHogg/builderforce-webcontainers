@@ -5,6 +5,24 @@ Release history for `@seanhogg/builderforce-webcontainers` and
 Upgrade steps that change your code are in the README's
 [Upgrade notes](README.md#upgrade-notes).
 
+## Unreleased
+
+- **The AI gateway follows the application's lifecycle, and a child's relay can only narrow.** `stop()` now closes the
+  gateway port and the next `start()` reopens the same port (the env computed at construction stays valid); `start()`
+  throws `AI gateway port <n> is taken.` if it was taken meanwhile and never moves. `bodyChunks(body)` yields a relay
+  response and cancels the upstream body when the consumer hangs up, so an abandoned completion stops streaming (and
+  billing); the launcher page relay uses it, and adapters should too. `narrowHostRelay(parent, ceiling)` and
+  `createChildRuntimes({ hostRelay, aiCeiling })` hand a child a relay limited to the ceiling's resources and models; a
+  child with no ceiling gets no relay.
+- **A code-scanner port for the Security Shield.** `security.scanner` (a `CodeScanner`, trusted embedder config) is asked
+  about code before it runs: each `npm install` package BEFORE anything is written (a block or quarantine verdict throws
+  `InstallBlockedError` and leaves no half-installed package), each file a process writes (debounced, batched; a refused
+  version of the file cannot be spawned, and a rewrite unblocks it) and so each spawn of a blocked file (`SpawnRefusedError`).
+  New shield reason codes: `code.blocked` (quarantine) and `code.scan_incomplete` (monitor); evidence is the path, rule ids
+  and score, never content. `security.onScanIncomplete` (`'warn'` default, or `'refuse'`) decides what an unfinished scan
+  does to an install. A scan that cannot finish is never reported as clean. Without a scanner nothing changes. The package
+  imports no scanner: the page injects one.
+
 ## What's new in 2026.11.27
 
 - **Agents' models reach the services that use them.** A backend service that

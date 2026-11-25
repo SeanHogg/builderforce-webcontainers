@@ -160,3 +160,69 @@ describe('AI gateway through startApplicationRuntime', () => {
     expect(ports.has(port)).toBe(false);
   });
 });
+
+describe('AI gateway lifecycle', () => {
+  it('closes the port on stop() and reopens the same port on start()', async () => {
+    const { runtime, fake, ports } = fixture(one, relayOf(() => chunks('x')));
+    await runtime.start();
+    const base = fake.last('api').env.AI_BASE_URL;
+    const port = portOf(fake.last('api').env);
+    await runtime.stop();
+    expect(ports.has(port)).toBe(false);
+    await runtime.start();
+    expect(ports.has(port)).toBe(true);
+    expect(ports.isExclusive(port)).toBe(true);
+    expect(fake.last('api').env.AI_BASE_URL).toBe(base);
+    await runtime.dispose();
+  });
+
+  it('refuses start() when the port was taken meanwhile, and never moves it', async () => {
+    const { runtime, fake, ports } = fixture(one, relayOf(() => chunks('x')));
+    await runtime.start();
+    const port = portOf(fake.last('api').env);
+    await runtime.stop();
+    ports.listen(port, async () => ({ status: 204, headers: {}, body: new ReadableStream({ start: (c) => c.close() }) }));
+    await expect(runtime.start()).rejects.toThrow(`AI gateway port ${port} is taken.`);
+    await runtime.dispose();
+  });
+
+  it('errors the process stream when the relay fails after its first chunk, and keeps serving', async () => {
+    let fail = true;
+    const relay = relayOf(async function* () {
+      yield encoder.encode('part');
+      if (fail) throw new Error('cut');
+    });
+    const { runtime, fake, ports, as } = fixture(one, relay);
+    await runtime.start();
+    const port = portOf(fake.last('api').env);
+    const first = await ports.request(port, post({ model: 'm' }), as('api'));
+    expect(first?.status).toBe(200);
+    await expect(read(first!)).rejects.toThrow('cut');
+    fail = false;
+    expect((await ports.request(port, post({ model: 'm' }), as('api')))?.status).toBe(200);
+    await runtime.dispose();
+  });
+
+  it('leaves only the new runtime exclusive ports after a dispose and re-run on the same registry', async () => {
+    const spec = one;
+    const policy = new ServiceGraphPolicy();
+    const ports = new PortRegistry({ policy });
+    const host: ApplicationHost = { portPolicy: policy, killApplication: () => undefined, listenHttp: (port, handler, owner) => ports.listenExclusive(port, handler, owner!) };
+    const boot = () => {
+      const fake = fakeProvider({ autoReady: spec.services.map((s) => s.id) });
+      return { fake, runtime: startApplicationRuntime(spec, { providers: [fake.provider], runtime: host, hostRelay: relayOf(() => chunks('x')), stopTimeoutMs: 20, readinessTimeoutMs: 1000 }) };
+    };
+    const old = boot();
+    await old.runtime.start();
+    const oldPort = portOf(old.fake.last('api').env);
+    await old.runtime.dispose();
+    const next = boot();
+    await next.runtime.start();
+    const live = ports.ports();
+    expect(live).toHaveLength(1);
+    expect(live.every((port) => ports.isExclusive(port))).toBe(true);
+    expect(ports.has(oldPort) ? ports.ownerOf(oldPort)?.applicationId : next.runtime.applicationId).toBe(next.runtime.applicationId);
+    await next.runtime.dispose();
+    expect(ports.ports()).toEqual([]);
+  });
+});

@@ -9,8 +9,8 @@
  */
 export { startApplicationRuntime } from './app/startApplicationRuntime.js';
 export { ApplicationStartError } from './app/types.js';
-export { connectionSecretsUnfilled } from './app/hostRelay.js';
-export type { AiForwardRequest, HostRelay } from './app/hostRelay.js';
+export { bodyChunks, connectionSecretsUnfilled, narrowHostRelay } from './app/hostRelay.js';
+export type { AiCeiling, AiForwardRequest, HostRelay } from './app/hostRelay.js';
 export type { SpawnOptions } from './node/processIdentity.js';
 export { ServiceFailure } from './app/awaitReadiness.js';
 export type { ApplicationDiagnostics, ServiceDiagnostics } from './app/types.js';

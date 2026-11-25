@@ -1,4 +1,4 @@
-export { installPackages, chooseVersion } from './install.js';
+export { installPackages, chooseVersion, InstallBlockedError } from './install.js';
 export type { InstallOptions, InstallResult, InstallProgress } from './install.js';
 export { parseNpmrc, readNpmConfig, registryFor, authHeaders, emptyNpmConfig } from './npmrc.js';
 export type { NpmConfig } from './npmrc.js';

@@ -35,7 +35,9 @@ import {
   type ShieldDecision,
   type VirtualFileSystem,
 } from '@seanhogg/builderforce-webcontainers-core';
+import { isScannableCodePath, type CodeScanner, type CodeScanVerdict } from '@seanhogg/builderforce-webcontainers-core';
 import { isJournalOp, type FsView } from './fsScope.js';
+import { WriteScanGate } from './writeScan.js';
 import type { FsOp } from './protocol.js';
 
 export interface FsSyncOptions<Peer> {
@@ -43,6 +45,10 @@ export interface FsSyncOptions<Peer> {
   send(peer: Peer, ops: FsOp[]): void;
   /** A process's op the page refused. Telemetry: what happens to the op does not depend on it. */
   onRefused?(context: SecurityContext | undefined, op: unknown, decision: ShieldDecision): void;
+  /** Scans files processes write (debounced, batched, asynchronous). A refusing verdict blocks that version of the file from running. */
+  scanner?: CodeScanner;
+  /** Every write-scan verdict that is a refusal or incomplete. Telemetry: enforcement does not depend on it. */
+  onScanned?(context: SecurityContext | undefined, verdict: CodeScanVerdict): void;
 }
 
 /** A scoped process: what it sees, and who it is (captured when it was added). */
@@ -63,10 +69,22 @@ export class FsSync<Peer> {
   private applyingFrom?: Peer;
   private flushScheduled = false;
   private readonly unwatch: () => void;
+  private readonly scanGate?: WriteScanGate;
 
   constructor(private readonly fs: VirtualFileSystem, private readonly options: FsSyncOptions<Peer>) {
     this.snapshots = new VfsSnapshots(fs);
     this.unwatch = fs.watch((change) => this.onChange(change), { promotions: true });
+    if (options.scanner) this.scanGate = new WriteScanGate(fs, options.scanner, (context, verdict) => options.onScanned?.(context, verdict));
+  }
+
+  /** Whether the file's current content was refused by the code scanner (false without one). */
+  isBlocked(path: string): boolean {
+    return this.scanGate?.isBlocked(path) ?? false;
+  }
+
+  /** Whether a write to the file is still waiting for its scan. */
+  isScanPending(path: string): boolean {
+    return this.scanGate?.isPending(path) ?? false;
   }
 
   /** Start sending changes to `peer` (a process just started from a snapshot taken now) — only those its view sees, when it has one. */
@@ -112,6 +130,7 @@ export class FsSync<Peer> {
       }
     } finally {
       this.applyingFrom = undefined;
+      this.queueScan(outbox, allowed);
       // The page's truth once the batch is applied (so a later op of the batch is not undone), once per kind and path.
       const reconciled = new Set<string>();
       for (const op of refused) {
@@ -124,9 +143,17 @@ export class FsSync<Peer> {
   }
 
   dispose(): void {
+    this.scanGate?.dispose();
     this.unwatch();
     this.outboxes.clear();
     this.snapshots.dispose();
+  }
+
+  /** Send the code files a process wrote to the scanner. */
+  private queueScan(outbox: Outbox, applied: readonly FsOp[]): void {
+    if (!this.scanGate) return;
+    const paths = applied.filter((op) => op.op === 'write' && isScannableCodePath(op.path)).map((op) => op.path);
+    if (paths.length) this.scanGate.enqueue(outbox.context, paths);
   }
 
   /** Apply the op, drop it, or refuse it and reconcile the sender's mirror (after the batch). */
