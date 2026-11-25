@@ -193,20 +193,15 @@ webview through `/preview`, after its upgrade to 2026.11.5. Each item below was
 checked against the source. Items 19–27 shipped in 2026.11.9 and item 28 in 2026.11.11 (see "Shipped").
 
 29. **`createLocalLauncher` gaps for hosts that wrap it as `/preview`.** Checked
-   against `packages/browser/src/launcher/server/` on 2026-11-21:
-   - `frameAncestors` is fixed to the launcher page's own origin
-     (`previewRoutes.ts:46`). Add an option so an embedding webview can frame it.
+   against `packages/browser/src/launcher/server/` on 2026-11-21; `assetsDir`
+   (earlier), `frameAncestors` and `ignoredDirs` (2026.11.27) are done:
    - No API ingress or same-origin `/api` proxy to a host-side service.
    - Manifest `setup[]` steps, `startPage`, and a static fallback when there is
-     no manifest are not supported.
+     no manifest are not supported. *Needs a Builderforce make.md manifest-shape revision first.*
    - No token-protected `POST /__bf/report`, and no `onReport`/`onLog`/`onError`
      callbacks. Reports are written to the manifest's diagnostics folder (`paths.diagnostics`, shipped in 2026.11.11).
-   - Manifest `egress[]` is not validated by the launcher.
+   - Manifest `egress[]` is not validated by the launcher. *Needs a Builderforce make.md manifest-shape revision first.*
    - CDN pins cannot be passed through.
-   - **Blocking:** no `assetsDir` option. Asset lookup uses `import.meta.url`
-     (`launcherAssets.ts:43`, `dotnetBundle.ts:47`), which breaks when a host
-     bundles the launcher.
-   - No `ignoredDirs` for the file API and live sync.
    - LAN access needs a decision (the launcher is 127.0.0.1-only today, which is
      the safe default).
    Not applicable here: the reported unauthenticated `/__dotnet/*` route is in the
