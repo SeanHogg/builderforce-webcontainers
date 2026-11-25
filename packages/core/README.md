@@ -6,6 +6,9 @@ It turns a project held in a `VirtualFileSystem` into browser-ready responses:
 compiled ES modules, CSS/JSON/asset wrappers and the HTML document. It never
 listens on anything; you call `handle(path, search)`.
 
+## Where this fits
+Part of BuilderForce's **Idea → Make → Run → Measure → Reach** method ([definitions](https://github.com/SeanHogg/Builderforce.ai/blob/main/docs/specs/README.md)). This package serves **Make** and **Run**: the runtime-agnostic dev server that turns a project in the virtual file system into browser-ready responses.
+
 ```ts
 import * as esbuild from 'esbuild';
 import { VirtualFileSystem, DevServer, createEsbuildTransformer } from '@seanhogg/builderforce-webcontainers-core';

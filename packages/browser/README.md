@@ -5,6 +5,9 @@ The browser runtime of
 boot an in-browser dev server and preview the project in an iframe. No COOP/COEP
 headers, no session caps, MIT licensed.
 
+## Where this fits
+Part of BuilderForce's **Idea → Make → Run → Measure → Reach** method ([definitions](https://github.com/SeanHogg/Builderforce.ai/blob/main/docs/specs/README.md)). This package serves **Make** and **Run**: the browser runtime that boots the dev server and previews the project in an iframe.
+
 1. Serve `dist/sw.js` from your site, ideally at `/__bfwc/sw.js` so the worker's
    scope stays off the rest of your app. You can resolve its path with
    `import.meta.resolve('@seanhogg/builderforce-webcontainers/sw.js')`, or copy it
