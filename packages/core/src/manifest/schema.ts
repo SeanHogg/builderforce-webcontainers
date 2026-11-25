@@ -3,7 +3,7 @@
  * external tooling. It matches `types.ts`; `validateManifest` is still the
  * authority (references between entries, cron, tiers are beyond a schema).
  */
-import { AGENT_BUDGET_SCHEMA, AGENT_ROLE_PATTERN, AGENTS_CAPABILITY, TOOL_LIST_SCHEMA } from '../capabilities/agents.js';
+import { AGENT_BUDGET_SCHEMA, AGENT_ROLE_PATTERN, BUILTIN_CAPABILITIES, TOOL_LIST_SCHEMA } from '../capabilities/agents.js';
 import { APP_MANIFEST_SCHEMA_URL, ENVIRONMENT_TIERS, HTTP_METHODS, MANIFEST_TARGETS } from './types.js';
 
 export { APP_MANIFEST_SCHEMA_URL };
@@ -46,8 +46,8 @@ export const APP_MANIFEST_SCHEMA_V1 = {
     ingress: ref('ingress'),
     environments: { type: 'object', additionalProperties: ref('environment') },
     paths: ref('paths'),
-    // Open: a third-party capability brings its own config; the built-in one is described.
-    capabilities: { type: 'object', properties: { [AGENTS_CAPABILITY.id]: AGENTS_CAPABILITY.configSchema } },
+    // Open: a third-party capability brings its own config; every built-in one is described from the registry.
+    capabilities: { type: 'object', properties: Object.fromEntries(BUILTIN_CAPABILITIES.ids().map((id) => [id, BUILTIN_CAPABILITIES.get(id)!.configSchema])) },
     agents: keyedBy('agent'),
   },
   required: ['version'],

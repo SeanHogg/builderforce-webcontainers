@@ -246,6 +246,14 @@ export interface AgentsPolicy {
   budget?: AgentBudget;
 }
 
+/** `capabilities.state`: how each kind of environment state persists. An absent key takes its default (`STATE_POLICY_DEFAULTS`). */
+export interface StatePolicy {
+  source?: 'journal' | 'snapshot';
+  transcripts?: 'durable' | 'none';
+  checkpoints?: 'durable' | 'none';
+  tempFiles?: 'ephemeral' | 'durable';
+}
+
 // ---------------------------------------------------------------------------
 // Ingress and environments
 // ---------------------------------------------------------------------------
@@ -301,7 +309,7 @@ export interface AppManifest {
    * `.builderforce/logs`, `.builderforce/diagnostics`.
    */
   paths?: import('./paths.js').ManifestPaths;
-  /** Enabled capabilities by id, each with its config (`{ agents?: AgentsPolicy }` for the built-in entry). */
+  /** Enabled capabilities by id, each with its config (`{ agents?: AgentsPolicy }`, `{ state?: StatePolicy }` for the built-in entries). */
   capabilities?: Record<string, unknown>;
   /** Autonomous agents by id; needs `capabilities.agents`. */
   agents?: Record<string, AgentDeclaration>;

@@ -7,6 +7,16 @@ Upgrade steps that change your code are in the README's
 
 ## Unreleased
 
+## What's new in 2026.11.29
+
+2026.11.28 was published before these changes were committed; 2026.11.29 is the same code, committed and tagged, plus
+the `state` capability.
+
+- **A `state` capability sets how each kind of environment state persists.** `capabilities.state` takes `source`
+  (`journal` or `snapshot`), `transcripts` and `checkpoints` (`durable` or `none`) and `tempFiles` (`ephemeral` or
+  `durable`); an absent key takes its default. Secrets are never configurable: they are always secure references and
+  never snapshotted. `BUILTIN_CAPABILITIES` now lists `agents`, `child-runtimes` and `state`, and the manifest schema
+  describes every built-in capability from that registry.
 - **The AI gateway follows the application's lifecycle, and a child's relay can only narrow.** `stop()` now closes the
   gateway port and the next `start()` reopens the same port (the env computed at construction stays valid); `start()`
   throws `AI gateway port <n> is taken.` if it was taken meanwhile and never moves. `bodyChunks(body)` yields a relay

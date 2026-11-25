@@ -10,7 +10,7 @@ describe('capability registry', () => {
 
   it('never matches a prototype key', () => {
     expect(BUILTIN_CAPABILITIES.has('constructor')).toBe(false);
-    expect(BUILTIN_CAPABILITIES.ids()).toEqual(['agents', 'child-runtimes']);
+    expect(BUILTIN_CAPABILITIES.ids()).toEqual(['agents', 'child-runtimes', 'state']);
   });
 
   it('orders dependencies first and ignores ids it does not know', () => {

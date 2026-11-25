@@ -78,6 +78,13 @@ ships on its own.
   models at a token-gated `/__bf/ai`, and takes `frameAncestors` and
   `ignoredDirs`. See the [release notes](CHANGELOG.md#whats-new-in-20261127).
 
+- 2026.11.29 — **Code-scanner port, AI gateway lifecycle and state policy.** `security.scanner`
+  (`CodeScanner`) vets installs, written files and spawns, with the shield reasons
+  `code.blocked` and `code.scan_incomplete`. The AI gateway closes on `stop()`, and a
+  child's relay can only narrow (`narrowHostRelay`, `aiCeiling`). `capabilities.state`
+  sets how each kind of environment state persists. See the
+  [release notes](CHANGELOG.md#whats-new-in-20261129).
+
 ## Shipped in 2026.10.3
 
 - **Process isolation in relay mode.** Process workers (node, npm, the shell) start inside the relay frame, on the preview origin, from `process-worker.js`, so the code a project runs never shares the host's storage or session.
