@@ -20,6 +20,9 @@ importers:
 
   packages/browser:
     dependencies:
+      '@seanhogg/builderforce-memory':
+        specifier: ^2026.10.89
+        version: 2026.10.89(@seanhogg/builderforce-memory-engine@2026.10.65)
       '@seanhogg/builderforce-webcontainers-core':
         specifier: workspace:^
         version: link:../core
@@ -814,6 +817,16 @@ packages:
     resolution: {integrity: sha512-nl+CTWIgOGszQmUz/kanfgrfFZ4qiwxKIfT/ryl3N3Ewk5tqizmYtNXiqb7Bu/fDtNgu1kyxdFiAUJNur3iysg==}
     cpu: [x64]
     os: [win32]
+
+  '@seanhogg/builderforce-memory-engine@2026.10.65':
+    resolution: {integrity: sha512-lzZJmvS80wE4SuM4mUfxncWKPBeCFn/HU2xNMhkfTxOG6YHxe4RexaN7YJWMgWGT/9BGSyJpSRhnjOSJ0itz8Q==}
+    engines: {node: '>=18.0.0'}
+
+  '@seanhogg/builderforce-memory@2026.10.89':
+    resolution: {integrity: sha512-QL0SzZrAjI1CSbyTZeL7Z4CM8gKrUOOIiSASIzT0MthMzAmhixJw0qwJqnKuzWKv4iD5xXbBr8oP1V2QDi0oLA==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      '@seanhogg/builderforce-memory-engine': ^2026.10.65
 
   '@sveltejs/acorn-typescript@1.0.13':
     resolution: {integrity: sha512-wgKggnhZVL9Bfx1OaKKTrYY9BFRk6C8UAkQNUcIv1+llzYrIqy+RZm5HPKzn0NpEBvTVhTqB4kQyllZywsRBRQ==}
@@ -2330,6 +2343,12 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.64.0':
     optional: true
+
+  '@seanhogg/builderforce-memory-engine@2026.10.65': {}
+
+  '@seanhogg/builderforce-memory@2026.10.89(@seanhogg/builderforce-memory-engine@2026.10.65)':
+    dependencies:
+      '@seanhogg/builderforce-memory-engine': 2026.10.65
 
   '@sveltejs/acorn-typescript@1.0.13(acorn@8.18.0)':
     dependencies:

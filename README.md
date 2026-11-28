@@ -63,7 +63,8 @@ next to the code, processes and services they work on.
   (`env.fs.read|write|list`, `env.run`, `env.preview.fetch`,
   `env.services.status`) through one `EnvironmentToolPort`. Paths stay inside the
   project, and a fetch reaches only the environment's own services. Every
-  refusal is typed and reported to the Shield.
+  policy refusal returns a typed result and is reported to the Shield. The
+  Builderforce web host calls the bound environment port through in-process MCP.
 - **Hosted through one port.** `AgentHostPort` (`start`, `steer`, `cancel`,
   `events`) connects the runtime to the agent loop you run. The
   `runtime.agents.*` tools (`createRuntimeAgents`) list, start, steer and cancel

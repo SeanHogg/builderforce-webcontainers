@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createKnowledgeMemory } from '../src/memoryIntegration/knowledgeMemory.js';
 import { createMemoryKnowledgePersistence } from '../src/memoryIntegration/persistence.js';
 import type { TextEmbedder } from '../src/memoryIntegration/types.js';
-import { tokenize } from '../src/memoryIntegration/text.js';
+import { chunkText, tokenize } from '../src/memoryIntegration/text.js';
 
 /** Deterministic hashed bag-of-words embedder (same scheme as memory-integration.test.ts). */
 function fakeEmbedder(dims = 64): TextEmbedder & { calls: string[] } {
@@ -25,6 +25,17 @@ function fakeEmbedder(dims = 64): TextEmbedder & { calls: string[] } {
 }
 
 describe('createKnowledgeMemory (knowledgeMemory.ts)', () => {
+  it('preserves citation offsets when overlapping chunks hard-split a word', () => {
+    const chunks = chunkText('abcdefghijklmnop', { chunkSize: 6, chunkOverlap: 2 });
+
+    expect(chunks.map((chunk) => [chunk.text, chunk.start])).toEqual([
+      ['abcdef', 0],
+      ['efghij', 4],
+      ['ijkl', 8],
+      ['klmnop', 10],
+    ]);
+  });
+
   it('ingests, retrieves and reports stats', async () => {
     const mem = createKnowledgeMemory({ embedder: fakeEmbedder() });
     const r = await mem.ingest({ id: 'd1', text: 'the quick brown fox jumps over the lazy dog', title: 'Fox' });

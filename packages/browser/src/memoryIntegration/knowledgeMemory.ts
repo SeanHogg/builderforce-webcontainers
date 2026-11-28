@@ -11,6 +11,11 @@
  */
 
 import {
+  applyTemporalDecayToScore,
+  reciprocalRankFusion,
+  RRF_DEFAULT_K,
+} from '@seanhogg/builderforce-memory/retrieval';
+import {
   LexicalIndex,
   chunkText,
   compareHits,
@@ -193,7 +198,7 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
   async function retrieve(query: string, opts: RetrieveOptions = {}): Promise<KnowledgeHit[]> {
     const topK = opts.topK ?? 5;
     const pool = opts.candidatePool ?? 100;
-    const rrfK = opts.rrfK ?? 60;
+    const rrfK = opts.rrfK ?? RRF_DEFAULT_K;
     if (chunks.size === 0 || topK <= 0) return [];
 
     const sparse: string[] = [];
@@ -214,21 +219,20 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
     }
     dense.sort(compareHits);
 
-    const fused = new Map<string, number>();
-    const add = (ids: string[], w: number) =>
-      ids.forEach((id, rank) => fused.set(id, (fused.get(id) ?? 0) + w / (rrfK + rank + 1)));
-    add(dense.slice(0, pool).map((d) => d.id), opts.denseWeight ?? 1);
-    add(sparse, opts.sparseWeight ?? 1);
-
+    const fused = reciprocalRankFusion([
+      { ids: dense.slice(0, pool).map((hit) => hit.id), weight: opts.denseWeight ?? 1 },
+      { ids: sparse, weight: opts.sparseWeight ?? 1 },
+    ], rrfK);
     const now = opts.now ?? clock();
-    const halfLife = opts.recencyHalfLifeDays ?? 0;
-    const ranked = [...fused].map(([id, score]) => {
-      if (halfLife > 0) {
-        const age = Math.max(0, (now - chunks.get(id)!.doc.updatedAt) / DAY_MS);
-        score *= Math.exp((-Math.LN2 / halfLife) * age);
-      }
-      return { id, score };
-    });
+    const halfLifeDays = opts.recencyHalfLifeDays ?? 0;
+    const ranked = fused.map(({ id, score }) => ({
+      id,
+      score: applyTemporalDecayToScore({
+        score,
+        ageInDays: (now - chunks.get(id)!.doc.updatedAt) / DAY_MS,
+        halfLifeDays,
+      }),
+    }));
     ranked.sort(compareHits);
 
     let hits: KnowledgeHit[] = ranked.slice(0, opts.rerank ? Math.max(topK * 4, topK) : topK).map(({ id, score }) => {

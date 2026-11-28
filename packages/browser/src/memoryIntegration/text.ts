@@ -1,12 +1,13 @@
-/**
- * Phase 6 — text primitives: normalisation, chunking, tokenising, hashing, token
- * estimation, BM25 scoring.
- *
- * Chunking, tokenising and the Okapi BM25 core mirror the memory layer's
- * `retrieval/chunk.ts`, `similarity/index.ts` and `retrieval/bm25.ts` +
- * `knowledge-index/lexical.ts` (same defaults, same formula), restated here only
- * because this package must stay dependency-free.
- */
+import {
+  bm25Idf,
+  bm25LengthNorm,
+  bm25TermScore,
+  chunkText as splitText,
+  compareHits,
+  tokenize,
+} from '@seanhogg/builderforce-memory/retrieval';
+
+export { compareHits, tokenize };
 
 export interface TextChunk {
   text: string;
@@ -21,8 +22,6 @@ export interface ChunkOptions {
   chunkOverlap?: number;
 }
 
-const SEPARATORS = ['\n\n', '\n', '. ', ' ', ''];
-
 /** Capture normalisation: unify newlines, collapse runs of spaces/blank lines, trim. */
 export function normalizeText(text: string): string {
   return text
@@ -33,62 +32,13 @@ export function normalizeText(text: string): string {
     .trim();
 }
 
-/** Recursive character splitter with overlap — memory `chunkText` semantics. */
+/** Retain the browser citation offsets for hard-split chunks. */
 export function chunkText(text: string, opts: ChunkOptions = {}): TextChunk[] {
-  const chunkSize = Math.max(1, opts.chunkSize ?? 1000);
-  const overlap = Math.min(Math.max(0, opts.chunkOverlap ?? 200), chunkSize - 1);
   const trimmed = text.trim();
-  if (trimmed.length === 0) return [];
-  if (trimmed.length <= chunkSize) return [{ text: trimmed, index: 0, start: 0 }];
-
-  const pieces = splitRecursive(trimmed, chunkSize, SEPARATORS);
-  const chunks: TextChunk[] = [];
-  let buf = '';
-  const flush = () => {
-    const t = buf.trim();
-    if (t.length > 0) chunks.push({ text: t, index: chunks.length, start: Math.max(0, trimmed.indexOf(t)) });
-    buf = '';
-  };
-  for (const piece of pieces) {
-    if (buf.length + piece.length <= chunkSize) {
-      buf += piece;
-    } else {
-      flush();
-      const prev = chunks[chunks.length - 1]?.text ?? '';
-      buf = (overlap > 0 ? prev.slice(-overlap) : '') + piece;
-      while (buf.length > chunkSize) {
-        const head = buf.slice(0, chunkSize);
-        chunks.push({ text: head.trim(), index: chunks.length, start: Math.max(0, trimmed.indexOf(head.trim())) });
-        buf = (overlap > 0 ? head.slice(-overlap) : '') + buf.slice(chunkSize);
-      }
-    }
-  }
-  flush();
-  return chunks.map((c, i) => ({ ...c, index: i }));
-}
-
-function splitRecursive(text: string, chunkSize: number, separators: string[]): string[] {
-  if (text.length <= chunkSize) return [text];
-  const [sep, ...rest] = separators;
-  if (sep === undefined) return [text];
-  if (sep === '') {
-    const out: string[] = [];
-    for (let i = 0; i < text.length; i += chunkSize) out.push(text.slice(i, i + chunkSize));
-    return out;
-  }
-  const parts = text.split(sep);
-  const out: string[] = [];
-  for (let i = 0; i < parts.length; i++) {
-    const part = i < parts.length - 1 ? parts[i]! + sep : parts[i]!;
-    if (part.length > chunkSize) out.push(...splitRecursive(part, chunkSize, rest));
-    else out.push(part);
-  }
-  return out;
-}
-
-/** Lowercase word tokens — memory `tokenize`. */
-export function tokenize(text: string): string[] {
-  return text.toLowerCase().split(/[\s\W]+/).filter(Boolean);
+  return splitText(trimmed, opts).map((chunk) => ({
+    ...chunk,
+    start: chunk.start || Math.max(0, trimmed.indexOf(chunk.text)),
+  }));
 }
 
 /** Estimated prompt tokens (~4 chars/token) — the shared heuristic, re-exported for this module's API. */
@@ -119,10 +69,7 @@ export function toUnit(v: ArrayLike<number>): Float32Array {
   return out;
 }
 
-const K1 = 1.5;
-const B = 0.75;
-
-/** Incremental BM25 inverted index (memory `LexicalIndex` semantics). */
+/** Incremental postings over the browser document store, using shared BM25 scoring. */
 export class LexicalIndex {
   private readonly postings = new Map<string, Map<string, number>>();
   private readonly docs = new Map<string, { terms: string[]; len: number }>();
@@ -163,23 +110,14 @@ export class LexicalIndex {
     for (const term of [...new Set(tokenize(query))].sort()) {
       const p = this.postings.get(term);
       if (!p) continue;
-      const df = p.size;
-      const idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
+      const idf = bm25Idf(n, p.size);
       for (const [id, f] of p) {
-        const norm = 1 - B + B * (this.docs.get(id)!.len / avgdl);
-        scores.set(id, (scores.get(id) ?? 0) + (idf * f * (K1 + 1)) / (f + K1 * norm));
+        const norm = bm25LengthNorm(this.docs.get(id)!.len, avgdl);
+        scores.set(id, (scores.get(id) ?? 0) + bm25TermScore(f, idf, norm));
       }
     }
     const hits: Array<{ id: string; score: number }> = [];
     for (const [id, score] of scores) if (score > 0) hits.push({ id, score });
     return hits.sort(compareHits);
   }
-}
-
-/** Score descending, then id ascending (memory `compareHits` order). */
-export function compareHits(a: { id: string; score: number }, b: { id: string; score: number }): number {
-  const qa = Math.round(a.score / 1e-6);
-  const qb = Math.round(b.score / 1e-6);
-  if (qa !== qb) return qb - qa;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
