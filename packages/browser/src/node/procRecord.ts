@@ -7,6 +7,7 @@ import type { WorkerKind } from './protocol.js';
 import type { ResponseReceiver } from './responseWire.js';
 
 export interface Proc {
+  readonly ancestors: readonly number[];
   pid: number;
   /** The Worker kind running it: what it may send is judged by this, never by its own claims. */
   kind: WorkerKind;

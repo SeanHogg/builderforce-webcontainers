@@ -155,6 +155,8 @@ export interface RuntimeProcess {
   wait(): Promise<number>;
   /** Default `SIGTERM`; `SIGKILL` cannot be caught. */
   kill(signal?: string): void;
+  /** Stop the entire host-tracked tree, including detached descendants. */
+  killTree?(): void;
   /** Resize the attached terminal. A no-op for a process started without one. */
   resizeTerminal(cols: number, rows: number): void;
 }
@@ -199,6 +201,7 @@ export function toRuntimeProcess(child: ChildHandle, terminal: boolean): Runtime
     stdin,
     wait: () => child.exit,
     kill: (signal) => child.kill(signal),
+    ...(child.killTree ? { killTree: () => child.killTree?.() } : {}),
     resizeTerminal: (cols, rows) => child.resize?.(cols, rows),
   };
 }
