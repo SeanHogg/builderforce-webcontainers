@@ -90,6 +90,9 @@ describe('ProcessHost (worker per process)', () => {
     expect(await proc.wait()).toBe(0);
     await new Promise((r) => setTimeout(r, 20));
     expect(processes.ports.has(3000)).toBe(true);
+    proc.killTree?.();
+    expect(processes.ports.has(3000)).toBe(false);
+    expect(processes.list()).toEqual([]);
     processes.dispose();
   });
 });

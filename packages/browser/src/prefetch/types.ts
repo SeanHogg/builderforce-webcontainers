@@ -6,7 +6,7 @@
  * decoupled from every other phase:
  *   - `src/inference/` only knows how to run; it never asks to prefetch.
  *   - `src/adaptive/` decides where/how to run; it never triggers a prefetch.
- *   - `src/memory/` owns residency; the prefetcher only *reads* a pressure
+ *   - `src/residency/` owns residency; the prefetcher only *reads* a pressure
  *     signal from it (or an injected `shouldThrottle()`).
  *
  * Prefetching is an OPTIMIZATION, never a decision: a missed prediction must

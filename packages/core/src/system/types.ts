@@ -59,6 +59,8 @@ export interface ChildHandle {
   write(data: StdioChunk): void;
   closeStdin(): void;
   kill(signal?: string): void;
+  /** Stop this process and its descendants, including detached children. */
+  killTree?(): void;
   resize?(cols: number, rows: number): void;
   readonly exit: Promise<number>;
   /** The parent's end of the message channel, when spawned with `ipc`. */

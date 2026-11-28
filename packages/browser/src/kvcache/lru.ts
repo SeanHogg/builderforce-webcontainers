@@ -1,7 +1,7 @@
 /**
  * Phase 5 — byte-bounded LRU container for KV pages. Pure TypeScript.
  *
- * Why this is not `src/memory/eviction.ts` `lruStrategy()`: that strategy is a
+ * Why this is not `src/residency/eviction.ts` `lruStrategy()`: that strategy is a
  * ranking POLICY — it sorts a snapshot of `TrackedEntry` records (group,
  * reload cost, reuse probability, admission sequence) that the residency
  * manager owns, O(n log n) per eviction. The paged KV cache needs a keyed

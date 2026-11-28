@@ -208,7 +208,7 @@ export class ProcessHost {
     if (serviceId === undefined) this.views.release(applicationId);
   }
 
-  private spawn(origin: SpawnOrigin, requested: string, requestedArgs: string[], options: ProcessOptions): ChildHandle {
+  private spawn(origin: SpawnOrigin, requested: string, requestedArgs: string[], options: ProcessOptions, ancestors: readonly number[] = []): ChildHandle {
     const cwd = options.cwd ?? this.options.cwd ?? '/';
     this.guardEntry(origin, requested, requestedArgs, cwd);
     const admitted = this.identities.admit(origin, cwd);
@@ -224,6 +224,7 @@ export class ProcessHost {
     let resolveExit!: (code: number) => void;
     const exit = new Promise<number>((resolve) => (resolveExit = resolve));
     const proc: Proc = {
+      ancestors,
       pid,
       kind,
       info: { pid, command, args: [...args], cwd, startedAt: Date.now() },
@@ -240,7 +241,7 @@ export class ProcessHost {
       registrations: new Map(),
       children: new ChildRelay((childCommand, childArgs, childOptions) => {
         this.fsSync.flush(); // the child must see every write made so far
-        return this.spawn({ parent: pid }, childCommand, childArgs, childOptions); // its parent's identity, whatever the Worker asked
+        return this.spawn({ parent: pid }, childCommand, childArgs, childOptions, [...ancestors, pid]); // its parent's identity, whatever the Worker asked
       }, (message) => this.post(proc, message)),
       responses: new ResponseReceiver(),
       loopbacks: new Map(),
@@ -285,10 +286,17 @@ export class ProcessHost {
       write: (data) => this.post(proc, { type: 'stdin', data }),
       closeStdin: () => this.post(proc, { type: 'stdin', data: null }),
       kill: (signal = 'SIGTERM') => this.kill(proc, signal),
+      killTree: () => this.killTree(pid),
       resize: (cols, rows) => this.post(proc, { type: 'resize', cols, rows }),
       exit,
       ipc: proc.ipc?.endpoint,
     };
+  }
+
+  private killTree(pid: number): void {
+    for (const proc of [...this.procs].reverse()) {
+      if (proc.pid === pid || proc.ancestors.includes(pid)) this.terminate(proc, signalExitCode('SIGKILL'));
+    }
   }
 
   /** Post a process-kind message (a training checkpoint, a save acknowledgement) to process `pid`; false when it is gone. */

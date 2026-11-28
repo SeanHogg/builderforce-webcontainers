@@ -33,6 +33,6 @@ A self-contained adaptive controller under `packages/browser/src/adaptive/`:
 ## 2. What Phase 3 must know
 
 - **The controller routes; it does not execute.** It drives an injected `executor` with the same shape as the Phase 1 `InferenceClient` (`load`/`generate`). To integrate, pass `createInferenceClient(...)` as the executor and the controller will pick backend + strategy from the probe.
-- **Memory residency is NOT handled here.** Model cache/eviction lives in Phase 3 (`src/memory/`); the controller only reads a `residentBytes` hint from the workload profile.
+- **Memory residency is NOT handled here.** Model cache/eviction lives in Phase 3 (`src/residency/`); the controller only reads a `residentBytes` hint from the workload profile.
 - **Decisions are deterministic given the same inputs** — same workload + hardware profile ⇒ same plan. Phase 7 (online learning) can layer on top by adjusting `ControllerConfig` heuristics from measured `ExecutionOutcome`s.
 - **No new dependency was added.** Keep it that way.

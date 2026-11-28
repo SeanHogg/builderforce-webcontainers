@@ -72,6 +72,9 @@ const DAY_MS = 86_400_000;
 
 export function createKnowledgeMemory(options: KnowledgeMemoryOptions): KnowledgeMemory {
   const { embedder, persistence } = options;
+  const { fingerprint, dimensions } = embedder;
+  const inSpace = () => embedder.fingerprint === fingerprint && embedder.dimensions === dimensions;
+  const validVector = (vector: Float32Array) => vector.length === dimensions && vector.every(Number.isFinite);
   const clock = options.now ?? Date.now;
   const docs = new Map<string, StoredKnowledgeDoc>();
   const chunks = new Map<string, { doc: StoredKnowledgeDoc; chunk: StoredChunk }>();
@@ -146,13 +149,13 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
       prior.title === input.title &&
       prior.uri === input.uri &&
       JSON.stringify(prior.metadata) === JSON.stringify(input.metadata ?? {});
-    if (prior && prior.contentHash === hash && prior.fingerprint === embedder.fingerprint && metaSame) {
+    if (prior && prior.contentHash === hash && prior.fingerprint === fingerprint && metaSame) {
       return { id: input.id, status: 'unchanged', version: prior.version, chunks: prior.chunks.length, embedded: 0 };
     }
 
     // Reuse vectors of chunks whose text is unchanged (same fingerprint only).
     const reusable = new Map<string, Float32Array>();
-    if (prior && prior.fingerprint === embedder.fingerprint) for (const c of prior.chunks) reusable.set(c.hash, c.vector);
+    if (prior && prior.fingerprint === fingerprint) for (const c of prior.chunks) reusable.set(c.hash, c.vector);
 
     const seen = new Set<string>();
     const stored: StoredChunk[] = [];
@@ -163,7 +166,9 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
       seen.add(h);
       let vector = reusable.get(h);
       if (!vector) {
-        vector = toUnit(await embedder.embed(piece.text));
+        const candidate = await embedder.embed(piece.text);
+        if (!inSpace() || !validVector(candidate)) throw new Error('Knowledge embedder returned a vector outside the store embedding space');
+        vector = toUnit(candidate);
         embedded++;
       }
       stored.push({
@@ -186,7 +191,7 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
       updatedAt: input.updatedAt ?? clock(),
       version: prior && prior.contentHash === hash ? prior.version : (prior?.version ?? 0) + 1,
       contentHash: hash,
-      fingerprint: embedder.fingerprint,
+      fingerprint,
       chunks: stored,
     };
     unindexDoc(input.id);
@@ -207,15 +212,16 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
       if (passes(chunks.get(h.id)!.doc, opts)) sparse.push(h.id);
     }
 
-    const qv = toUnit(await embedder.embed(query));
+    const queryVector = inSpace() ? await embedder.embed(query) : undefined;
     const dense: Array<{ id: string; score: number }> = [];
-    for (const [id, { doc, chunk }] of chunks) {
-      if (!passes(doc, opts)) continue;
-      const v = chunk.vector;
-      const n = Math.min(v.length, qv.length);
-      let dot = 0;
-      for (let i = 0; i < n; i++) dot += v[i]! * qv[i]!;
-      dense.push({ id, score: dot });
+    if (queryVector && inSpace() && validVector(queryVector)) {
+      const qv = toUnit(queryVector);
+      for (const [id, { doc, chunk }] of chunks) {
+        if (chunk.vector.length !== dimensions || !passes(doc, opts)) continue;
+        let dot = 0;
+        for (let i = 0; i < dimensions; i++) dot += chunk.vector[i]! * qv[i]!;
+        dense.push({ id, score: dot });
+      }
     }
     dense.sort(compareHits);
 
@@ -294,7 +300,7 @@ export function createKnowledgeMemory(options: KnowledgeMemoryOptions): Knowledg
       const stale: string[] = [];
       let restored = 0;
       for (const d of persistence ? await persistence.load() : []) {
-        if (d.fingerprint !== embedder.fingerprint) {
+        if (d.fingerprint !== fingerprint || d.chunks.some((chunk) => !validVector(chunk.vector))) {
           stale.push(d.id);
           continue;
         }

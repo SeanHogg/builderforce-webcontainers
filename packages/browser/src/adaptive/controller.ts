@@ -21,7 +21,7 @@ import type {
   WorkloadProfile,
 } from './types.js';
 import { planExecution } from './planner.js';
-import { estimateWeightBytes } from '../memory/estimates.js';
+import { estimateWeightBytes } from '../residency/estimates.js';
 import { now as nowMs } from '../shared/clock.js';
 import { estimateTokens } from '../shared/tokens.js';
 import {

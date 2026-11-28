@@ -18,7 +18,7 @@ A self-contained KV-cache and quantization-aware runtime under `packages/browser
 | `src/kvcache/types.ts` | Compatibility parts, flags, quant plan, generate request/result, injectable quality scorer, A/B runtime options. |
 | `src/kvcache/compatibility.ts` | Canonical compatibility key (model weights, tokenizer, positional config, attention config) + exact token-prefix length. Semantic retrieval is **not** a match criterion. |
 | `src/kvcache/radix.ts` | Token radix tree: longest **exact** prefix only. |
-| `src/kvcache/lru.ts` | Small byte-bounded LRU. Phase 3 `src/memory/` eviction is residency-tier shaped (model weights), so KV pages keep a dedicated LRU rather than reusing that API. |
+| `src/kvcache/lru.ts` | Small byte-bounded LRU. Phase 3 `src/residency/` eviction is residency-tier shaped (model weights), so KV pages keep a dedicated LRU rather than reusing that API. |
 | `src/kvcache/paged.ts` | Paged KV store: pages + per-compat-key radix index + LRU eviction. Compatible sessions share pages (session id is not in the key). |
 | `src/kvcache/quant.ts` | Quantization-aware plan from `q4`/`q5`/`q8`/`fp16`. No conversion unless `preconvertQuant` is on **and** the target is a strictly smaller supported format. Bandwidth + default quality model. |
 | `src/kvcache/advanced.ts` | Speculative decoding, continuous batching, activation sparsity — each gated by an explicit flag **and** a capability/architecture check. Incompatible families degrade to the plain path. |

@@ -7,7 +7,7 @@
  *
  *   - It never decides WHEN to run a workload (that is `src/adaptive/`).
  *   - It never calls an inference backend (that is `src/inference/`).
- *   - It never owns residency (that is `src/memory/`) — it only READS a
+ *   - It never owns residency (that is `src/residency/`) — it only READS a
  *     pressure signal (the Phase 3 residency manager's `pressure().pressured`,
  *     or any injected `shouldThrottle()`).
  *

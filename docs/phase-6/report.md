@@ -1,6 +1,6 @@
 # Phase 6 — BuilderForce Memory Integration
 
-**Ticket:** #6743 · **Module:** `packages/browser/src/memoryIntegration/` (separate from Phase 3 `src/memory/`)
+**Ticket:** #6743 · **Module:** `packages/browser/src/memoryIntegration/` (separate from Phase 3 `src/residency/`)
 
 ## What was built
 | File | Role |

@@ -48,15 +48,15 @@ export type {
   LayerNode,
   WorkloadProfile,
 } from './adaptive/types.js';
-export { createMemoryManager, probeRamBytes, probeStorageQuotaBytes } from './memory/manager.js';
-export type { AdmitResult, MemoryManager, MemoryManagerOptions } from './memory/manager.js';
-export { arcStrategy, costAwareStrategy, lfuStrategy, lruStrategy, retentionValue, strategyByName } from './memory/eviction.js';
-export { bytesPerParam, estimateReloadCostMs, estimateReuseProbability, estimateWeightBytes } from './memory/estimates.js';
-export type { ReloadCostInput, ReuseObservation } from './memory/estimates.js';
-export { detectPressure, planWorkspace } from './memory/pressure.js';
-export type { PressureInput, WorkspaceBounds, WorkspaceDecision } from './memory/pressure.js';
-export { createMemorySink, createModelCacheSink } from './memory/storageSink.js';
-export type { SpilledRecord, StorageSink, StorageSinkOptions } from './memory/storageSink.js';
+export { createMemoryManager, probeRamBytes, probeStorageQuotaBytes } from './residency/manager.js';
+export type { AdmitResult, MemoryManager, MemoryManagerOptions } from './residency/manager.js';
+export { arcStrategy, costAwareStrategy, lfuStrategy, lruStrategy, retentionValue, strategyByName } from './residency/eviction.js';
+export { bytesPerParam, estimateReloadCostMs, estimateReuseProbability, estimateWeightBytes } from './residency/estimates.js';
+export type { ReloadCostInput, ReuseObservation } from './residency/estimates.js';
+export { detectPressure, planWorkspace } from './residency/pressure.js';
+export type { PressureInput, WorkspaceBounds, WorkspaceDecision } from './residency/pressure.js';
+export { createMemorySink, createModelCacheSink } from './residency/storageSink.js';
+export type { SpilledRecord, StorageSink, StorageSinkOptions } from './residency/storageSink.js';
 export type {
   AdmitOptions,
   EvictionStrategy,
@@ -70,7 +70,7 @@ export type {
   ResidencyTier,
   ResidentEntry,
   TrackedEntry,
-} from './memory/types.js';
+} from './residency/types.js';
 export {
   createKnowledgeMemory,
   createIndexedDbKnowledgePersistence,

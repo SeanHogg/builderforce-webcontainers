@@ -5,7 +5,7 @@
 **Date:** 2026-11-16
 **Status:** Phase 4 implemented — typecheck, test and build gates green (154/154 tests pass)
 
-> **Scope honored:** Everything here is browser-compatible only — pure TypeScript, no native code, no new runtime dependency. The prefetcher is deliberately decoupled from every other phase: `src/inference/` only knows *how* to run and never asks to prefetch, `src/adaptive/` decides *where/how* to run and never triggers a prefetch, and `src/memory/` owns residency — the prefetcher only **reads** a pressure signal from it. No existing public API was changed — only additive exports in `packages/browser/src/index.ts`.
+> **Scope honored:** Everything here is browser-compatible only — pure TypeScript, no native code, no new runtime dependency. The prefetcher is deliberately decoupled from every other phase: `src/inference/` only knows *how* to run and never asks to prefetch, `src/adaptive/` decides *where/how* to run and never triggers a prefetch, and `src/residency/` owns residency — the prefetcher only **reads** a pressure signal from it. No existing public API was changed — only additive exports in `packages/browser/src/index.ts`.
 
 ---
 

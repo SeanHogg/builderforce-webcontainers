@@ -7,12 +7,12 @@ import {
   lfuStrategy,
   lruStrategy,
   retentionValue,
-} from '../src/memory/eviction.js';
-import { estimateReloadCostMs, estimateReuseProbability, estimateWeightBytes } from '../src/memory/estimates.js';
-import { createMemoryManager, probeRamBytes, probeStorageQuotaBytes } from '../src/memory/manager.js';
-import { detectPressure, planWorkspace } from '../src/memory/pressure.js';
-import { createMemorySink, createModelCacheSink } from '../src/memory/storageSink.js';
-import type { ResidentEntry, TrackedEntry } from '../src/memory/types.js';
+} from '../src/residency/eviction.js';
+import { estimateReloadCostMs, estimateReuseProbability, estimateWeightBytes } from '../src/residency/estimates.js';
+import { createMemoryManager, probeRamBytes, probeStorageQuotaBytes } from '../src/residency/manager.js';
+import { detectPressure, planWorkspace } from '../src/residency/pressure.js';
+import { createMemorySink, createModelCacheSink } from '../src/residency/storageSink.js';
+import type { ResidentEntry, TrackedEntry } from '../src/residency/types.js';
 
 function entry(id: string, bytes: number, extra: Partial<ResidentEntry> = {}): ResidentEntry {
   return {

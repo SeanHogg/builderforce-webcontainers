@@ -147,6 +147,23 @@ describe('createKnowledgeMemory (knowledgeMemory.ts)', () => {
     expect(await other.load()).toEqual({ restored: 0, stale: ['keep'] });
   });
 
+  it('falls back to lexical recall when the query vector has the wrong width', async () => {
+    const embedder = {
+      dimensions: 2,
+      fingerprint: 'test-space',
+      async embed(text: string) {
+        return text === 'deploy' ? new Float32Array([1]) : new Float32Array([1, 0]);
+      },
+    };
+    const memory = createKnowledgeMemory({ embedder });
+    await memory.ingest({ id: 'keyword', text: 'deploy checklist' });
+    await memory.ingest({ id: 'unrelated', text: 'unrelated topic' });
+
+    expect((await memory.retrieve('deploy')).map((hit) => hit.source.sourceId)).toEqual(['keyword']);
+    await expect(memory.ingest({ id: 'wrong-width', text: 'deploy' })).rejects.toThrow('embedding space');
+    expect(memory.get('wrong-width')).toBeUndefined();
+  });
+
   it('compact() evicts by max age while keeping protected kinds', async () => {
     const DAY = 86_400_000;
     const mem = createKnowledgeMemory({ embedder: fakeEmbedder(), now: () => 10 * DAY });

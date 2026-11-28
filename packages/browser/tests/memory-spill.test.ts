@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { createMemoryModelCache, createModelCache } from '../src/inference/modelCache.js';
-import { lruStrategy } from '../src/memory/eviction.js';
-import { createMemoryManager } from '../src/memory/manager.js';
-import { createMemorySink, createModelCacheSink, type StorageSink } from '../src/memory/storageSink.js';
-import type { ResidentEntry } from '../src/memory/types.js';
+import { lruStrategy } from '../src/residency/eviction.js';
+import { createMemoryManager } from '../src/residency/manager.js';
+import { createMemorySink, createModelCacheSink, type StorageSink } from '../src/residency/storageSink.js';
+import type { ResidentEntry } from '../src/residency/types.js';
 
 function entry(id: string, bytes: number, payload: unknown = { id }): ResidentEntry {
   return { id, group: 'model', bytes, reloadCostMs: 10, reuseProbability: 0.1, tier: 'ram', payload };

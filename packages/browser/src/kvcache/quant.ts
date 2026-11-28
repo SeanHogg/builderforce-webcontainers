@@ -6,7 +6,7 @@
  * never implicit: the native format is used unless a flag + target justify it.
  */
 
-import { bytesPerParam } from '../memory/estimates.js';
+import { bytesPerParam } from '../residency/estimates.js';
 import type { KvBackendKind, KvQuantization, QuantPlan } from './types.js';
 
 /** Relative quality vs fp16, used by the default scorer. */
